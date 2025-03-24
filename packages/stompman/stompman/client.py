@@ -175,4 +175,4 @@ class Client:
     def is_alive(self) -> bool:
         return (
             self._connection_manager._active_connection_state or False  # noqa: SLF001
-        ) and self._connection_manager._active_connection_state.is_alive()  # noqa: SLF001
+        ) and self._connection_manager._active_connection_state.is_alive(self.check_server_alive_interval_factor)  # noqa: SLF001

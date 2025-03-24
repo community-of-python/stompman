@@ -17,5 +17,5 @@ async def test_connection_alive(is_alive: bool) -> None:  # noqa: FBT001
     )
     client = await EnrichedClient(connection_class=connection_class).__aenter__()
     assert client._connection_manager._active_connection_state
-    client._connection_manager._active_connection_state.connection.last_read_time = time.time() - 1 + is_alive
+    client._connection_manager._active_connection_state.connection.last_read_time = time.time() if is_alive else 10
     assert client.is_alive() == is_alive
