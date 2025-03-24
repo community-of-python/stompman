@@ -2,6 +2,9 @@
 name = "stompman-workspace"
 requires-python = ">=3.11"
 version = "0"
+dependencies = [
+    "pydantic>=2.10.6",
+]
 
 [dependency-groups]
 dev = [

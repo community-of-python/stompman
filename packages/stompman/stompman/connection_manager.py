@@ -80,6 +80,7 @@ class ConnectionManager:
     def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
         self._check_server_heartbeat_task.cancel()
+        print("server", server_heartbeat)
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
         )
@@ -90,6 +91,7 @@ class ConnectionManager:
     async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
         send_heartbeat_interval_seconds = send_heartbeat_interval_ms / 1000
         while True:
+
             await self.write_heartbeat_reconnecting()
             await asyncio.sleep(send_heartbeat_interval_seconds)
 
@@ -178,7 +180,9 @@ class ConnectionManager:
         for _ in range(self.write_retry_attempts):
             connection_state = await self._get_active_connection_state()
             try:
-                return connection_state.connection.write_heartbeat()
+                await connection_state.connection.write_heartbeat()
+                print("write heartbeat")
+                return
             except ConnectionLostError:
                 self._clear_active_connection_state()
 

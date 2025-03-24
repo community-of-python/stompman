@@ -2,11 +2,11 @@ import asyncio
 
 import stompman
 
-server = stompman.ConnectionParameters(host="127.0.0.1", port=9000, login="admin", passcode=":=123")
+server = stompman.ConnectionParameters(host="127.0.0.1", port=9001, login="admin", passcode=":=123")
 
 
 async def main() -> None:
-    async with stompman.Client([server]) as client:
+    async with stompman.Client([server], on_error_frame=print) as client:
         await client.send(b"Hi!", "DLQ")
         print("Said hi")  # noqa: T201
 

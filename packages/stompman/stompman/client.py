@@ -77,6 +77,7 @@ class Client:
         )
 
     async def __aenter__(self) -> Self:
+        print("client", self.heartbeat)
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
         await self._exit_stack.enter_async_context(self._connection_manager)
         self._listen_task = self._task_group.create_task(self._listen_to_frames())
