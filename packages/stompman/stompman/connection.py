@@ -81,14 +81,16 @@ class Connection(AbstractConnection):
     async def write_heartbeat(self) -> None:
         with _reraise_connection_lost(RuntimeError):
             self.writer.write(NEWLINE)
-        with _reraise_connection_lost(ConnectionError):
-            await self.writer.drain()
+            print("write newline")
+
 
     async def write_frame(self, frame: AnyClientFrame) -> None:
         with _reraise_connection_lost(RuntimeError):
             self.writer.write(dump_frame(frame))
+            print("write frame")
         with _reraise_connection_lost(ConnectionError):
             await self.writer.drain()
+            print("drain after frame")
 
     async def _read_non_empty_bytes(self, max_chunk_size: int) -> bytes:
         while (  # noqa: ASYNC110

@@ -28,10 +28,23 @@ class ActiveConnectionState:
     lifespan: "AbstractConnectionLifespan"
     server_heartbeat: Heartbeat
 
-    def is_alive(self) -> bool:
+    def is_alive(self, check_server_alive_interval_factor: int) -> bool:
         if not (last_read_time := self.connection.last_read_time):
+            print("no last read time")
             return True
-        return (self.server_heartbeat.will_send_interval_ms / 1000) > (time.time() - last_read_time)
+
+        is_alive = (self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor) > (
+            time.time() - last_read_time
+        )
+        if not is_alive:
+            print(
+                "server said it would send each",
+                self.server_heartbeat.will_send_interval_ms / 1000,
+                "seconds",
+                "already",
+                (time.time() - last_read_time),
+            )
+        return is_alive
 
 
 @dataclass(kw_only=True, slots=True)
@@ -91,7 +104,6 @@ class ConnectionManager:
     async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
         send_heartbeat_interval_seconds = send_heartbeat_interval_ms / 1000
         while True:
-
             await self.write_heartbeat_reconnecting()
             await asyncio.sleep(send_heartbeat_interval_seconds)
 
@@ -101,7 +113,8 @@ class ConnectionManager:
             await asyncio.sleep(receive_heartbeat_interval_seconds * self.check_server_alive_interval_factor)
             if not self._active_connection_state:
                 continue
-            if not self._active_connection_state.is_alive():
+            if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
+                print("resetting connection")
                 self._active_connection_state = None
 
     async def _create_connection_to_one_server(
@@ -181,7 +194,6 @@ class ConnectionManager:
             connection_state = await self._get_active_connection_state()
             try:
                 await connection_state.connection.write_heartbeat()
-                print("write heartbeat")
                 return
             except ConnectionLostError:
                 self._clear_active_connection_state()
