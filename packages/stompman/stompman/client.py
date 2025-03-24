@@ -79,6 +79,7 @@ class Client:
             read_timeout=self.read_timeout,
             read_max_chunk_size=self.read_max_chunk_size,
             write_retry_attempts=self.write_retry_attempts,
+            check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             ssl=self.ssl,
         )
         self._on_heartbeat_is_async = inspect.iscoroutinefunction(self.on_heartbeat) if self.on_heartbeat else False
@@ -130,7 +131,7 @@ class Client:
             if not last_read_time_ms:
                 print("No last_Read_time_ms")
                 continue
-            if (t:=time.time() - last_read_time_ms) > server_heartbeat_interval_seconds:
+            if (t := time.time() - last_read_time_ms) > server_heartbeat_interval_seconds:
                 print("reset time", t)
                 self._connection_manager._active_connection_state = None
             else:

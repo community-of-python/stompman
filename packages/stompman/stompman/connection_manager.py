@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from ssl import SSLContext
@@ -39,6 +40,7 @@ class ConnectionManager:
     read_timeout: int
     read_max_chunk_size: int
     write_retry_attempts: int
+    check_server_alive_interval_factor: int
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -117,6 +119,15 @@ class ConnectionManager:
 
     def _clear_active_connection_state(self) -> None:
         self._active_connection_state = None
+
+    def is_alive(self) -> bool:
+        if not self._connection_manager._active_connection_state:
+            return False
+        if not (last_read_time_ms := self._connection_manager._active_connection_state.connection.last_read_time_ms):
+            return True
+        if (time.time() - last_read_time_ms) > server_heartbeat_interval_seconds:
+            ...
+        return None
 
     async def write_heartbeat_reconnecting(self) -> None:
         for _ in range(self.write_retry_attempts):
