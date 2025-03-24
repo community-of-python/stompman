@@ -129,13 +129,13 @@ class ConnectionManager:
         self._active_connection_state = None
 
     def is_alive(self) -> bool:
-        if not self._connection_manager._active_connection_state:
+        if not self._active_connection_state:
             return False
-        if not (last_read_time_ms := self._connection_manager._active_connection_state.connection.last_read_time_ms):
+        if not (last_read_time_ms := self._active_connection_state.connection.last_read_time_ms):
             return True
-        if (time.time() - last_read_time_ms) > server_heartbeat_interval_seconds:
-            ...
-        return None
+        return self._active_connection_state.server_heartbeat.will_send_interval_ms / 1000 > (
+            time.time() - last_read_time_ms
+        )
 
     async def write_heartbeat_reconnecting(self) -> None:
         for _ in range(self.write_retry_attempts):
