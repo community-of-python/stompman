@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Literal, Self
 
 from stompman.config import ConnectionParameters, Heartbeat
 from stompman.connection import AbstractConnection
-from stompman.connection_lifespan import EstablishedConnectionResult
 from stompman.errors import (
     AllServersUnavailable,
     AnyConnectionIssue,
@@ -85,6 +84,8 @@ class ConnectionManager:
         return None
 
     async def _connect_to_any_server(self) -> ActiveConnectionState | AnyConnectionIssue:
+        from stompman.connection_lifespan import EstablishedConnectionResult  # noqa: PLC0415
+
         if not (connection_and_server := await self._create_connection_to_any_server()):
             return AllServersUnavailable(servers=self.servers, timeout=self.connect_timeout)
         connection, connection_parameters = connection_and_server

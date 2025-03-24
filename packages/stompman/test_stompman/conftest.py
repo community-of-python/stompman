@@ -125,7 +125,9 @@ CONNECT_FRAME = stompman.ConnectFrame(
         "passcode": "passcode",
     },
 )
-CONNECTED_FRAME = stompman.ConnectedFrame(headers={"version": stompman.Client.PROTOCOL_VERSION, "heart-beat": "1,1"})
+CONNECTED_FRAME = stompman.ConnectedFrame(
+    headers={"version": stompman.Client.PROTOCOL_VERSION, "heart-beat": "1000,1000"}
+)
 
 
 @pytest.fixture(autouse=True)

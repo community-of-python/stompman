@@ -152,7 +152,7 @@ async def test_client_heartbeats_ok(monkeypatch: pytest.MonkeyPatch) -> None:
         await real_sleep(0)
         await real_sleep(0)
 
-    assert sleep_calls == [0, 1, 1]
+    assert sleep_calls == [0, 0, 1, 3, 1, 3]
     assert write_heartbeat_mock.mock_calls == [mock.call(), mock.call(), mock.call()]
 
 

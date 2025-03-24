@@ -109,6 +109,7 @@ class Client:
     def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
         self._check_server_heartbeat_task.cancel()
+        print(server_heartbeat)
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
         )
