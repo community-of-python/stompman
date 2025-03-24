@@ -29,9 +29,9 @@ class ActiveConnectionState:
     server_heartbeat: Heartbeat
 
     def is_alive(self) -> bool:
-        if not (last_read_time_ms := self.connection.last_read_time_ms):
+        if not (last_read_time := self.connection.last_read_time):
             return True
-        return (self.server_heartbeat.will_send_interval_ms / 1000) > (time.time() - last_read_time_ms)
+        return (self.server_heartbeat.will_send_interval_ms / 1000) > (time.time() - last_read_time)
 
 
 @dataclass(kw_only=True, slots=True)
