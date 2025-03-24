@@ -171,3 +171,8 @@ class Client:
         )
         await subscription._subscribe()  # noqa: SLF001
         return subscription
+
+    def is_alive(self) -> bool:
+        return (
+            self._connection_manager._active_connection_state or False  # noqa: SLF001
+        ) and self._connection_manager._active_connection_state.is_alive()  # noqa: SLF001
