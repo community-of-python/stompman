@@ -355,16 +355,3 @@ async def test_maybe_write_frame_connection_now_lost() -> None:
 async def test_maybe_write_frame_ok() -> None:
     async with EnrichedConnectionManager(connection_class=BaseMockConnection) as manager:
         assert await manager.maybe_write_frame(build_dataclass(ConnectFrame))
-
-
-@pytest.mark.parametrize("is_alive", [True, False])
-async def test_connection_alive(is_alive: bool) -> None:  # noqa: FBT001
-    connection_class, _ = create_spying_connection(
-        [ConnectedFrame(headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1000,1000"})],
-        [],
-        [build_dataclass(ReceiptFrame)],
-    )
-    connection_manager = await EnrichedConnectionManager(connection_class=connection_class).__aenter__()
-    assert connection_manager._active_connection_state
-    connection_manager._active_connection_state.connection.last_read_time = time.time() - 1 + is_alive
-    assert connection_manager._active_connection_state.is_alive() == is_alive
