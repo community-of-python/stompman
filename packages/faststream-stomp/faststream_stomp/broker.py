@@ -114,7 +114,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
                 if cancel_scope.cancel_called:
                     return False
 
-                if self._connection._connection_manager._active_connection_state:  # noqa: SLF001
+                if self._connection.is_alive():
                     return True
 
                 await anyio.sleep(sleep_time)  # pragma: no cover

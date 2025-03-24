@@ -24,12 +24,12 @@ async with stompman.Client(
         stompman.ConnectionParameters(host="172.0.0.1", port=61616, login="user2", passcode="passcode2"),
     ],
 
-    # Handlers:
-    on_error_frame=lambda error_frame: print(error_frame.body),
-    on_heartbeat=lambda: print("Server sent a heartbeat"),  # also can be async
 
     # SSL — can be either `None` (default), `True`, or `ssl.SSLContext'
     ssl=None,
+
+    # Error frame handler:
+    on_error_frame=lambda error_frame: print(error_frame.body),
 
     # Optional parameters with sensible defaults:
     heartbeat=stompman.Heartbeat(will_send_interval_ms=1000, want_to_receive_interval_ms=1000),
@@ -40,6 +40,7 @@ async with stompman.Client(
     disconnect_confirmation_timeout=2,
     read_timeout=2,
     write_retry_attempts=3,
+    check_server_alive_interval_factor=3,
 ) as client:
     ...
 ```
@@ -131,6 +132,7 @@ stompman takes care of cleaning up resources automatically. When you leave the c
 - If multiple servers were provided, stompman will attempt to connect to each one simultaneously and will use the first that succeeds. If all servers fail to connect, an `stompman.FailedAllConnectAttemptsError` will be raised. In normal situation it doesn't need to be handled: tune retry and timeout parameters in `stompman.Client()` to your needs.
 
 - When connection is lost, stompman will attempt to handle it automatically. `stompman.FailedAllConnectAttemptsError` will be raised if all connection attempts fail. `stompman.FailedAllWriteAttemptsError` will be raised if connection succeeds but sending a frame or heartbeat lead to losing connection.
+- To implement health checks, use `stompman.Client.is_alive()` — it will return `True` if everything is OK and `False` if server is not responding.
 
 ### ...and caveats
 

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from ssl import SSLContext
 from typing import Any, Literal, Self, TypeVar
@@ -7,8 +7,9 @@ from typing import Any, Literal, Self, TypeVar
 import pytest
 import stompman
 from polyfactory.factories.dataclass_factory import DataclassFactory
+from stompman.config import Heartbeat
 from stompman.connection import AbstractConnection
-from stompman.connection_lifespan import AbstractConnectionLifespan
+from stompman.connection_lifespan import AbstractConnectionLifespan, EstablishedConnectionResult
 from stompman.connection_manager import ConnectionManager
 
 
@@ -58,8 +59,11 @@ class EnrichedClient(stompman.Client):
 class NoopLifespan(AbstractConnectionLifespan):
     connection: AbstractConnection
     connection_parameters: stompman.ConnectionParameters
+    set_heartbeat_interval: Callable[[Heartbeat], Any]
 
-    async def enter(self) -> stompman.StompProtocolConnectionIssue | None: ...
+    async def enter(self) -> EstablishedConnectionResult | stompman.StompProtocolConnectionIssue:
+        return EstablishedConnectionResult(server_heartbeat=stompman.Heartbeat(1000, 1000))
+
     async def exit(self) -> None: ...
 
 
@@ -76,6 +80,7 @@ class EnrichedConnectionManager(ConnectionManager):
     read_max_chunk_size: int = 5
     write_retry_attempts: int = 3
     ssl: Literal[True] | SSLContext | None = None
+    check_server_alive_interval_factor: int = 3
 
 
 DataclassType = TypeVar("DataclassType")
@@ -122,7 +127,9 @@ CONNECT_FRAME = stompman.ConnectFrame(
         "passcode": "passcode",
     },
 )
-CONNECTED_FRAME = stompman.ConnectedFrame(headers={"version": stompman.Client.PROTOCOL_VERSION, "heart-beat": "1,1"})
+CONNECTED_FRAME = stompman.ConnectedFrame(
+    headers={"version": stompman.Client.PROTOCOL_VERSION, "heart-beat": "1000,1000"}
+)
 
 
 @pytest.fixture(autouse=True)

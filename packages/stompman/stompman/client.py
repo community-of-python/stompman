@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -31,7 +30,6 @@ class Client:
 
     servers: list[ConnectionParameters] = field(kw_only=False)
     on_error_frame: Callable[[ErrorFrame], Any] | None = None
-    on_heartbeat: Callable[[], Any] | Callable[[], Awaitable[Any]] | None = None
 
     heartbeat: Heartbeat = field(default=Heartbeat(1000, 1000))
     ssl: Literal[True] | SSLContext | None = None
@@ -43,6 +41,8 @@ class Client:
     write_retry_attempts: int = 3
     connection_confirmation_timeout: int = 2
     disconnect_confirmation_timeout: int = 2
+    check_server_alive_interval_factor: int = 3
+    """Client will check if server alive `server heartbeat interval` times `interval factor`"""
 
     connection_class: type[AbstractConnection] = Connection
 
@@ -50,10 +50,8 @@ class Client:
     _active_subscriptions: ActiveSubscriptions = field(default_factory=dict, init=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
-    _heartbeat_task: asyncio.Task[None] = field(init=False)
     _listen_task: asyncio.Task[None] = field(init=False)
     _task_group: asyncio.TaskGroup = field(init=False)
-    _on_heartbeat_is_async: bool = field(init=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
@@ -66,7 +64,6 @@ class Client:
                 disconnect_confirmation_timeout=self.disconnect_confirmation_timeout,
                 active_subscriptions=self._active_subscriptions,
                 active_transactions=self._active_transactions,
-                set_heartbeat_interval=self._restart_heartbeat_task,
             ),
             connection_class=self.connection_class,
             connect_retry_attempts=self.connect_retry_attempts,
@@ -75,13 +72,12 @@ class Client:
             read_timeout=self.read_timeout,
             read_max_chunk_size=self.read_max_chunk_size,
             write_retry_attempts=self.write_retry_attempts,
+            check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             ssl=self.ssl,
         )
-        self._on_heartbeat_is_async = inspect.iscoroutinefunction(self.on_heartbeat) if self.on_heartbeat else False
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
-        self._heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         await self._exit_stack.enter_async_context(self._connection_manager)
         self._listen_task = self._task_group.create_task(self._listen_to_frames())
         return self
@@ -94,18 +90,8 @@ class Client:
                 await asyncio.Future()
         finally:
             self._listen_task.cancel()
-            self._heartbeat_task.cancel()
-            await asyncio.wait([self._listen_task, self._heartbeat_task])
+            await asyncio.wait([self._listen_task])
             await self._exit_stack.aclose()
-
-    def _restart_heartbeat_task(self, interval: float) -> None:
-        self._heartbeat_task.cancel()
-        self._heartbeat_task = self._task_group.create_task(self._send_heartbeats_forever(interval))
-
-    async def _send_heartbeats_forever(self, interval: float) -> None:
-        while True:
-            await self._connection_manager.write_heartbeat_reconnecting()
-            await asyncio.sleep(interval)
 
     async def _listen_to_frames(self) -> None:
         async with asyncio.TaskGroup() as task_group:
@@ -125,14 +111,7 @@ class Client:
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)
-                    case HeartbeatFrame():
-                        if self.on_heartbeat is None:
-                            pass
-                        elif self._on_heartbeat_is_async:
-                            task_group.create_task(self.on_heartbeat())  # type: ignore[arg-type]
-                        else:
-                            self.on_heartbeat()
-                    case ConnectedFrame() | ReceiptFrame():
+                    case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
                         pass
 
     async def send(
@@ -192,3 +171,8 @@ class Client:
         )
         await subscription._subscribe()  # noqa: SLF001
         return subscription
+
+    def is_alive(self) -> bool:
+        return (
+            self._connection_manager._active_connection_state or False  # noqa: SLF001
+        ) and self._connection_manager._active_connection_state.is_alive()  # noqa: SLF001

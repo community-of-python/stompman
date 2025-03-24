@@ -165,9 +165,7 @@ async def test_client_listen_routing_ok(monkeypatch: pytest.MonkeyPatch, faker: 
     second_message_handler, second_error_handler = mock.AsyncMock(side_effect=SomeError), mock.Mock()
 
     async with EnrichedClient(
-        connection_class=connection_class,
-        on_error_frame=(on_error_frame := mock.Mock()),
-        on_heartbeat=(on_heartbeat := mock.Mock()),
+        connection_class=connection_class, on_error_frame=(on_error_frame := mock.Mock())
     ) as client:
         first_subscription = await client.subscribe(
             faker.pystr(), handler=first_message_handler, on_suppressed_exception=first_error_handler
@@ -187,7 +185,6 @@ async def test_client_listen_routing_ok(monkeypatch: pytest.MonkeyPatch, faker: 
     second_error_handler.assert_called_once_with(SomeError(), third_message_frame)
 
     on_error_frame.assert_called_once_with(error_frame)
-    on_heartbeat.assert_called_once_with()
 
 
 @pytest.mark.parametrize("side_effect", [None, SomeError])
@@ -328,7 +325,11 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
     assert isinstance(inner_group, ExceptionGroup)
     assert len(inner_group.exceptions) == 1
 
-    assert isinstance(inner_group.exceptions[0], FailedAllConnectAttemptsError)
+    inner_inner_group = inner_group.exceptions[0]
+    assert isinstance(inner_inner_group, ExceptionGroup)
+    assert len(inner_inner_group.exceptions) == 1
+
+    assert isinstance(inner_inner_group.exceptions[0], FailedAllConnectAttemptsError)
 
 
 def test_make_subscription_id() -> None:

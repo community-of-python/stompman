@@ -1,11 +1,12 @@
 import asyncio
+import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from ssl import SSLContext
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Self
 
-from stompman.config import ConnectionParameters
+from stompman.config import ConnectionParameters, Heartbeat
 from stompman.connection import AbstractConnection
 from stompman.errors import (
     AllServersUnavailable,
@@ -25,6 +26,12 @@ if TYPE_CHECKING:
 class ActiveConnectionState:
     connection: AbstractConnection
     lifespan: "AbstractConnectionLifespan"
+    server_heartbeat: Heartbeat
+
+    def is_alive(self) -> bool:
+        if not (last_read_time := self.connection.last_read_time):
+            return True
+        return (self.server_heartbeat.will_send_interval_ms / 1000) > (time.time() - last_read_time)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -39,17 +46,29 @@ class ConnectionManager:
     read_timeout: int
     read_max_chunk_size: int
     write_retry_attempts: int
+    check_server_alive_interval_factor: int
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
-    _reconnect_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
+    _task_group: asyncio.TaskGroup = field(init=False, default_factory=asyncio.TaskGroup)
+    _send_heartbeat_task: asyncio.Task[None] = field(init=False, repr=False)
+    _check_server_heartbeat_task: asyncio.Task[None] = field(init=False, repr=False)
 
     async def __aenter__(self) -> Self:
+        await self._task_group.__aenter__()
+        self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
+        self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         self._active_connection_state = await self._get_active_connection_state()
         return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
     ) -> None:
+        self._send_heartbeat_task.cancel()
+        self._check_server_heartbeat_task.cancel()
+        await asyncio.wait([self._send_heartbeat_task, self._check_server_heartbeat_task])
+        await self._task_group.__aexit__(exc_type, exc_value, traceback)
+
         if not self._active_connection_state:
             return
         try:
@@ -58,7 +77,34 @@ class ConnectionManager:
             return
         await self._active_connection_state.connection.close()
 
-    async def _create_connection_to_one_server(self, server: ConnectionParameters) -> ActiveConnectionState | None:
+    def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
+        self._send_heartbeat_task.cancel()
+        self._check_server_heartbeat_task.cancel()
+        self._send_heartbeat_task = self._task_group.create_task(
+            self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
+        )
+        self._check_server_heartbeat_task = self._task_group.create_task(
+            self._check_server_heartbeat_forever(server_heartbeat.will_send_interval_ms)
+        )
+
+    async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
+        send_heartbeat_interval_seconds = send_heartbeat_interval_ms / 1000
+        while True:
+            await self.write_heartbeat_reconnecting()
+            await asyncio.sleep(send_heartbeat_interval_seconds)
+
+    async def _check_server_heartbeat_forever(self, receive_heartbeat_interval_ms: int) -> None:
+        receive_heartbeat_interval_seconds = receive_heartbeat_interval_ms / 1000
+        while True:
+            await asyncio.sleep(receive_heartbeat_interval_seconds * self.check_server_alive_interval_factor)
+            if not self._active_connection_state:
+                continue
+            if not self._active_connection_state.is_alive():
+                self._active_connection_state = None
+
+    async def _create_connection_to_one_server(
+        self, server: ConnectionParameters
+    ) -> tuple[AbstractConnection, ConnectionParameters] | None:
         if connection := await self.connection_class.connect(
             host=server.host,
             port=server.port,
@@ -67,31 +113,41 @@ class ConnectionManager:
             read_timeout=self.read_timeout,
             ssl=self.ssl,
         ):
-            return ActiveConnectionState(
-                connection=connection,
-                lifespan=self.lifespan_factory(connection=connection, connection_parameters=server),
-            )
+            return (connection, server)
         return None
 
-    async def _create_connection_to_any_server(self) -> ActiveConnectionState | None:
+    async def _create_connection_to_any_server(self) -> tuple[AbstractConnection, ConnectionParameters] | None:
         for maybe_connection_future in asyncio.as_completed(
             [self._create_connection_to_one_server(server) for server in self.servers]
         ):
-            if connection_state := await maybe_connection_future:
-                return connection_state
+            if connection_and_server := await maybe_connection_future:
+                return connection_and_server
         return None
 
     async def _connect_to_any_server(self) -> ActiveConnectionState | AnyConnectionIssue:
-        if not (active_connection_state := await self._create_connection_to_any_server()):
+        from stompman.connection_lifespan import EstablishedConnectionResult  # noqa: PLC0415
+
+        if not (connection_and_server := await self._create_connection_to_any_server()):
             return AllServersUnavailable(servers=self.servers, timeout=self.connect_timeout)
+        connection, connection_parameters = connection_and_server
+        lifespan = self.lifespan_factory(
+            connection=connection,
+            connection_parameters=connection_parameters,
+            set_heartbeat_interval=self._restart_heartbeat_tasks,
+        )
 
         try:
-            if connection_issue := await active_connection_state.lifespan.enter():
-                return connection_issue
+            connection_result = await lifespan.enter()
         except ConnectionLostError:
             return ConnectionLost()
 
-        return active_connection_state
+        return (
+            ActiveConnectionState(
+                connection=connection, lifespan=lifespan, server_heartbeat=connection_result.server_heartbeat
+            )
+            if isinstance(connection_result, EstablishedConnectionResult)
+            else connection_result
+        )
 
     async def _get_active_connection_state(self) -> ActiveConnectionState:
         if self._active_connection_state:

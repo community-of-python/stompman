@@ -22,8 +22,13 @@ from stompman.subscription import (
 from stompman.transaction import ActiveTransactions, commit_pending_transactions
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class EstablishedConnectionResult:
+    server_heartbeat: Heartbeat
+
+
 class AbstractConnectionLifespan(Protocol):
-    async def enter(self) -> StompProtocolConnectionIssue | None: ...
+    async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue: ...
     async def exit(self) -> None: ...
 
 
@@ -37,9 +42,9 @@ class ConnectionLifespan(AbstractConnectionLifespan):
     disconnect_confirmation_timeout: int
     active_subscriptions: ActiveSubscriptions
     active_transactions: ActiveTransactions
-    set_heartbeat_interval: Callable[[float], Any]
+    set_heartbeat_interval: Callable[[Heartbeat], Any]
 
-    async def _establish_connection(self) -> StompProtocolConnectionIssue | None:
+    async def _establish_connection(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
         await self.connection.write_frame(
             ConnectFrame(
                 headers={
@@ -74,19 +79,17 @@ class ConnectionLifespan(AbstractConnectionLifespan):
             )
 
         server_heartbeat = Heartbeat.from_header(connected_frame.headers["heart-beat"])
-        self.set_heartbeat_interval(
-            max(self.client_heartbeat.will_send_interval_ms, server_heartbeat.want_to_receive_interval_ms) / 1000
-        )
-        return None
+        self.set_heartbeat_interval(server_heartbeat)
+        return EstablishedConnectionResult(server_heartbeat=server_heartbeat)
 
-    async def enter(self) -> StompProtocolConnectionIssue | None:
-        if connection_issue := await self._establish_connection():
-            return connection_issue
-        await resubscribe_to_active_subscriptions(
-            connection=self.connection, active_subscriptions=self.active_subscriptions
-        )
-        await commit_pending_transactions(connection=self.connection, active_transactions=self.active_transactions)
-        return None
+    async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
+        connection_result = await self._establish_connection()
+        if isinstance(connection_result, EstablishedConnectionResult):
+            await resubscribe_to_active_subscriptions(
+                connection=self.connection, active_subscriptions=self.active_subscriptions
+            )
+            await commit_pending_transactions(connection=self.connection, active_transactions=self.active_transactions)
+        return connection_result
 
     async def _take_receipt_frame(self) -> None:
         async for frame in self.connection.read_frames():
@@ -107,5 +110,9 @@ def _make_receipt_id() -> str:
 
 class ConnectionLifespanFactory(Protocol):
     def __call__(
-        self, *, connection: AbstractConnection, connection_parameters: ConnectionParameters
+        self,
+        *,
+        connection: AbstractConnection,
+        connection_parameters: ConnectionParameters,
+        set_heartbeat_interval: Callable[[Heartbeat], Any],
     ) -> AbstractConnectionLifespan: ...
