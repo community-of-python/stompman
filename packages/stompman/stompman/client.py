@@ -43,6 +43,8 @@ class Client:
     write_retry_attempts: int = 3
     connection_confirmation_timeout: int = 2
     disconnect_confirmation_timeout: int = 2
+    check_server_alive_interval_factor: int = 3
+    """Client will check if server alive `server heartbeat interval` times `interval factor`"""
 
     connection_class: type[AbstractConnection] = Connection
 

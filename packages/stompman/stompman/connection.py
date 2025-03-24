@@ -1,8 +1,9 @@
 import asyncio
 import socket
+import time
 from collections.abc import AsyncGenerator, Generator, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from ssl import SSLContext
 from typing import Literal, Protocol, Self, cast
 
@@ -13,6 +14,8 @@ from stompman.serde import NEWLINE, FrameParser, dump_frame
 
 @dataclass(kw_only=True)
 class AbstractConnection(Protocol):
+    last_read_time: float | None = field(init=False, default=None)
+
     @classmethod
     async def connect(
         cls,
@@ -100,6 +103,7 @@ class Connection(AbstractConnection):
                 raw_frames = await asyncio.wait_for(
                     self._read_non_empty_bytes(self.read_max_chunk_size), timeout=self.read_timeout
                 )
+            self.last_read_time = time.time()
 
             for frame in cast("Iterator[AnyServerFrame]", parser.parse_frames_from_chunk(raw_frames)):
                 yield frame
