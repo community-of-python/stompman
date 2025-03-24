@@ -1,6 +1,4 @@
 import asyncio
-import inspect
-import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -123,18 +121,10 @@ class Client:
         server_heartbeat_interval_seconds = server_heartbeat_interval_ms / 1000
         while True:
             await asyncio.sleep(server_heartbeat_interval_seconds * self.check_server_alive_interval_factor)
-            last_read_time_ms = (
-                self._connection_manager._active_connection_state
-                and self._connection_manager._active_connection_state.connection.last_read_time_ms
-            )
-            if not last_read_time_ms:
-                print("No last_Read_time_ms")
+            if not self._connection_manager._active_connection_state:
                 continue
-            if (t := time.time() - last_read_time_ms) > server_heartbeat_interval_seconds:
-                print("reset time", t)
+            if not self._connection_manager._active_connection_state.is_alive():
                 self._connection_manager._active_connection_state = None
-            else:
-                print("no reset")
 
     async def _listen_to_frames(self) -> None:
         async with asyncio.TaskGroup() as task_group:

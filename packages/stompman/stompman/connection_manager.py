@@ -28,6 +28,11 @@ class ActiveConnectionState:
     lifespan: "AbstractConnectionLifespan"
     server_heartbeat: Heartbeat
 
+    def is_alive(self) -> bool:
+        if not (last_read_time_ms := self.connection.last_read_time_ms):
+            return True
+        return (self.server_heartbeat.will_send_interval_ms / 1000) > (time.time() - last_read_time_ms)
+
 
 @dataclass(kw_only=True, slots=True)
 class ConnectionManager:
@@ -128,15 +133,6 @@ class ConnectionManager:
 
     def _clear_active_connection_state(self) -> None:
         self._active_connection_state = None
-
-    def is_alive(self) -> bool:
-        if not self._active_connection_state:
-            return False
-        if not (last_read_time_ms := self._active_connection_state.connection.last_read_time_ms):
-            return True
-        return self._active_connection_state.server_heartbeat.will_send_interval_ms / 1000 > (
-            time.time() - last_read_time_ms
-        )
 
     async def write_heartbeat_reconnecting(self) -> None:
         for _ in range(self.write_retry_attempts):
