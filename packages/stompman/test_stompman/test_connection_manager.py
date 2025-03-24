@@ -14,11 +14,13 @@ from stompman import (
     ErrorFrame,
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
+    Heartbeat,
     MessageFrame,
 )
+from stompman.connection_lifespan import EstablishedConnectionResult
 from stompman.connection_manager import ActiveConnectionState
 
-from test_stompman.conftest import BaseMockConnection, EnrichedConnectionManager, NoopLifespan, build_dataclass
+from test_stompman.conftest import BaseMockConnection, EnrichedConnectionManager, build_dataclass
 
 pytestmark = [pytest.mark.anyio, pytest.mark.usefixtures("mock_sleep")]
 
@@ -110,8 +112,7 @@ async def test_connect_to_any_server_ok() -> None:
     )
     active_connection_state = await manager._create_connection_to_any_server()
     assert active_connection_state
-    assert isinstance(active_connection_state.lifespan, NoopLifespan)
-    assert active_connection_state.lifespan.connection_parameters == successful_server
+    assert active_connection_state[1] == successful_server
 
 
 async def test_connect_to_any_server_fails() -> None:
@@ -169,7 +170,8 @@ async def test_get_active_connection_state_fails_to_connect() -> None:
 
 
 async def test_get_active_connection_state_ok_concurrent() -> None:
-    enter = mock.AsyncMock(return_value=None)
+    server_heartbeat = build_dataclass(Heartbeat)
+    enter = mock.AsyncMock(return_value=EstablishedConnectionResult(server_heartbeat=server_heartbeat))
     lifespan_factory = mock.Mock(return_value=mock.Mock(enter=enter))
     manager = EnrichedConnectionManager(lifespan_factory=lifespan_factory, connection_class=BaseMockConnection)
 
@@ -185,7 +187,9 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
         == second_state
         == third_state
         == fourth_state
-        == ActiveConnectionState(connection=BaseMockConnection(), lifespan=lifespan_factory.return_value)
+        == ActiveConnectionState(
+            connection=BaseMockConnection(), lifespan=lifespan_factory.return_value, server_heartbeat=server_heartbeat
+        )
     )
     assert first_state is second_state is third_state is fourth_state
 

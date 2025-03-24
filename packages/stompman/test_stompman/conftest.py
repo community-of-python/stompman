@@ -8,7 +8,7 @@ import pytest
 import stompman
 from polyfactory.factories.dataclass_factory import DataclassFactory
 from stompman.connection import AbstractConnection
-from stompman.connection_lifespan import AbstractConnectionLifespan
+from stompman.connection_lifespan import AbstractConnectionLifespan, EstablishedConnectionResult
 from stompman.connection_manager import ConnectionManager
 
 
@@ -59,7 +59,9 @@ class NoopLifespan(AbstractConnectionLifespan):
     connection: AbstractConnection
     connection_parameters: stompman.ConnectionParameters
 
-    async def enter(self) -> stompman.StompProtocolConnectionIssue | None: ...
+    async def enter(self) -> EstablishedConnectionResult | stompman.StompProtocolConnectionIssue:
+        return EstablishedConnectionResult(server_heartbeat=stompman.Heartbeat(1000, 1000))
+
     async def exit(self) -> None: ...
 
 
@@ -76,6 +78,7 @@ class EnrichedConnectionManager(ConnectionManager):
     read_max_chunk_size: int = 5
     write_retry_attempts: int = 3
     ssl: Literal[True] | SSLContext | None = None
+    check_server_alive_interval_factor: int = 3
 
 
 DataclassType = TypeVar("DataclassType")
