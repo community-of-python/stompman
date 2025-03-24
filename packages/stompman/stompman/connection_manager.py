@@ -6,8 +6,9 @@ from ssl import SSLContext
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Self
 
-from stompman.config import ConnectionParameters
+from stompman.config import ConnectionParameters, Heartbeat
 from stompman.connection import AbstractConnection
+from stompman.connection_lifespan import EstablishedConnectionResult
 from stompman.errors import (
     AllServersUnavailable,
     AnyConnectionIssue,
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 class ActiveConnectionState:
     connection: AbstractConnection
     lifespan: "AbstractConnectionLifespan"
+    server_heartbeat: Heartbeat
 
 
 @dataclass(kw_only=True, slots=True)
@@ -60,7 +62,9 @@ class ConnectionManager:
             return
         await self._active_connection_state.connection.close()
 
-    async def _create_connection_to_one_server(self, server: ConnectionParameters) -> ActiveConnectionState | None:
+    async def _create_connection_to_one_server(
+        self, server: ConnectionParameters
+    ) -> tuple[AbstractConnection, ConnectionParameters] | None:
         if connection := await self.connection_class.connect(
             host=server.host,
             port=server.port,
@@ -69,31 +73,35 @@ class ConnectionManager:
             read_timeout=self.read_timeout,
             ssl=self.ssl,
         ):
-            return ActiveConnectionState(
-                connection=connection,
-                lifespan=self.lifespan_factory(connection=connection, connection_parameters=server),
-            )
+            return (connection, server)
         return None
 
-    async def _create_connection_to_any_server(self) -> ActiveConnectionState | None:
+    async def _create_connection_to_any_server(self) -> tuple[AbstractConnection, ConnectionParameters] | None:
         for maybe_connection_future in asyncio.as_completed(
             [self._create_connection_to_one_server(server) for server in self.servers]
         ):
-            if connection_state := await maybe_connection_future:
-                return connection_state
+            if connection_and_server := await maybe_connection_future:
+                return connection_and_server
         return None
 
     async def _connect_to_any_server(self) -> ActiveConnectionState | AnyConnectionIssue:
-        if not (active_connection_state := await self._create_connection_to_any_server()):
+        if not (connection_and_server := await self._create_connection_to_any_server()):
             return AllServersUnavailable(servers=self.servers, timeout=self.connect_timeout)
+        connection, connection_parameters = connection_and_server
+        lifespan = self.lifespan_factory(connection=connection, connection_parameters=connection_parameters)
 
         try:
-            if connection_issue := await active_connection_state.lifespan.enter():
-                return connection_issue
+            connection_result = await lifespan.enter()
         except ConnectionLostError:
             return ConnectionLost()
 
-        return active_connection_state
+        return (
+            ActiveConnectionState(
+                connection=connection, lifespan=lifespan, server_heartbeat=connection_result.server_heartbeat
+            )
+            if isinstance(connection_result, EstablishedConnectionResult)
+            else connection_result
+        )
 
     async def _get_active_connection_state(self) -> ActiveConnectionState:
         if self._active_connection_state:
