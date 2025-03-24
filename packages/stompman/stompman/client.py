@@ -86,6 +86,7 @@ class Client:
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
+        # TODO: move this tasks to lifespan
         self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         await self._exit_stack.enter_async_context(self._connection_manager)
