@@ -25,7 +25,7 @@ test *args:
 run-artemis:
     #!/bin/bash
     trap 'echo; docker compose down --remove-orphans' EXIT
-    docker compose run --service-ports activemq-classic
+    docker compose run --service-ports activemq-artemis
 
 run-consumer:
     uv run examples/consumer.py

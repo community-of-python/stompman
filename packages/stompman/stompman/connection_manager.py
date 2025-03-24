@@ -30,21 +30,11 @@ class ActiveConnectionState:
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
         if not (last_read_time := self.connection.last_read_time):
-            print("no last read time")
             return True
 
-        is_alive = (self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor) > (
+        return (self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor) > (
             time.time() - last_read_time
         )
-        if not is_alive:
-            print(
-                "server said it would send each",
-                self.server_heartbeat.will_send_interval_ms / 1000,
-                "seconds",
-                "already",
-                (time.time() - last_read_time),
-            )
-        return is_alive
 
 
 @dataclass(kw_only=True, slots=True)
@@ -93,7 +83,6 @@ class ConnectionManager:
     def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
         self._check_server_heartbeat_task.cancel()
-        print("server", server_heartbeat)
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
         )
@@ -114,7 +103,6 @@ class ConnectionManager:
             if not self._active_connection_state:
                 continue
             if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
-                print("resetting connection")
                 self._active_connection_state = None
 
     async def _create_connection_to_one_server(
@@ -193,8 +181,7 @@ class ConnectionManager:
         for _ in range(self.write_retry_attempts):
             connection_state = await self._get_active_connection_state()
             try:
-                await connection_state.connection.write_heartbeat()
-                return
+                return connection_state.connection.write_heartbeat()
             except ConnectionLostError:
                 self._clear_active_connection_state()
 

@@ -77,7 +77,6 @@ class Client:
         )
 
     async def __aenter__(self) -> Self:
-        print("client", self.heartbeat)
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
         await self._exit_stack.enter_async_context(self._connection_manager)
         self._listen_task = self._task_group.create_task(self._listen_to_frames())
@@ -112,9 +111,7 @@ class Client:
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)
-                    case HeartbeatFrame():
-                        print("received heartbeat")
-                    case ConnectedFrame() | ReceiptFrame():
+                    case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
                         pass
 
     async def send(
@@ -178,4 +175,4 @@ class Client:
     def is_alive(self) -> bool:
         return (
             self._connection_manager._active_connection_state or False  # noqa: SLF001
-        ) and self._connection_manager._active_connection_state.is_alive(self.check_server_alive_interval_factor)  # noqa: SLF001
+        ) and self._connection_manager._active_connection_state.is_alive()  # noqa: SLF001

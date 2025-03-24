@@ -28,7 +28,7 @@ class AbstractConnection(Protocol):
         ssl: Literal[True] | SSLContext | None,
     ) -> Self | None: ...
     async def close(self) -> None: ...
-    async def write_heartbeat(self) -> None: ...
+    def write_heartbeat(self) -> None: ...
     async def write_frame(self, frame: AnyClientFrame) -> None: ...
     def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]: ...
 
@@ -78,19 +78,15 @@ class Connection(AbstractConnection):
         with suppress(ConnectionError):
             await self.writer.wait_closed()
 
-    async def write_heartbeat(self) -> None:
+    def write_heartbeat(self) -> None:
         with _reraise_connection_lost(RuntimeError):
-            self.writer.write(NEWLINE)
-            print("write newline")
-
+            return self.writer.write(NEWLINE)
 
     async def write_frame(self, frame: AnyClientFrame) -> None:
         with _reraise_connection_lost(RuntimeError):
             self.writer.write(dump_frame(frame))
-            print("write frame")
         with _reraise_connection_lost(ConnectionError):
             await self.writer.drain()
-            print("drain after frame")
 
     async def _read_non_empty_bytes(self, max_chunk_size: int) -> bytes:
         while (  # noqa: ASYNC110
