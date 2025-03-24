@@ -28,10 +28,13 @@ class ActiveConnectionState:
     lifespan: "AbstractConnectionLifespan"
     server_heartbeat: Heartbeat
 
-    def is_alive(self) -> bool:
+    def is_alive(self, check_server_alive_interval_factor: int) -> bool:
         if not (last_read_time := self.connection.last_read_time):
             return True
-        return (self.server_heartbeat.will_send_interval_ms / 1000) > (time.time() - last_read_time)
+
+        return (self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor) > (
+            time.time() - last_read_time
+        )
 
 
 @dataclass(kw_only=True, slots=True)
@@ -99,7 +102,7 @@ class ConnectionManager:
             await asyncio.sleep(receive_heartbeat_interval_seconds * self.check_server_alive_interval_factor)
             if not self._active_connection_state:
                 continue
-            if not self._active_connection_state.is_alive():
+            if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
                 self._active_connection_state = None
 
     async def _create_connection_to_one_server(
