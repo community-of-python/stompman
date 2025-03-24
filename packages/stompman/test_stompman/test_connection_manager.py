@@ -202,7 +202,9 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
     assert first_state is second_state is third_state is fourth_state
 
     enter.assert_called_once_with()
-    lifespan_factory.assert_called_once_with(connection=BaseMockConnection(), connection_parameters=manager.servers[0])
+    lifespan_factory.assert_called_once_with(
+        connection=BaseMockConnection(), connection_parameters=manager.servers[0], set_heartbeat_interval=mock.ANY
+    )
 
 
 async def test_connection_manager_context_connection_lost() -> None:
