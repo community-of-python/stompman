@@ -2,7 +2,7 @@
 name = "faststream-stomp"
 description = "FastStream STOMP broker"
 authors = [{ name = "Lev Vereshchagin", email = "mail@vrslev.com" }]
-dependencies = ["faststream~=0.5", "stompman>=2.0.0"]
+dependencies = ["faststream~=0.5", "stompman>=2.0.1"]
 requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
