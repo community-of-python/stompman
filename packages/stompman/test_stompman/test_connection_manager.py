@@ -1,5 +1,4 @@
 import asyncio
-import time
 from collections.abc import AsyncGenerator, AsyncIterable
 from ssl import SSLContext
 from typing import Literal, Self
@@ -8,7 +7,6 @@ from unittest import mock
 import pytest
 from stompman import (
     AnyServerFrame,
-    Client,
     ConnectedFrame,
     ConnectFrame,
     ConnectionLostError,
@@ -18,7 +16,6 @@ from stompman import (
     FailedAllWriteAttemptsError,
     Heartbeat,
     MessageFrame,
-    ReceiptFrame,
 )
 from stompman.connection_lifespan import EstablishedConnectionResult
 from stompman.connection_manager import ActiveConnectionState
@@ -27,7 +24,6 @@ from test_stompman.conftest import (
     BaseMockConnection,
     EnrichedConnectionManager,
     build_dataclass,
-    create_spying_connection,
 )
 
 pytestmark = [pytest.mark.anyio, pytest.mark.usefixtures("mock_sleep")]
