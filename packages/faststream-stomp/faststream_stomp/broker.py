@@ -82,6 +82,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
                 name="stomp", default_context={"channel": ""}, message_id_ln=self.__max_msg_id_ln
             ),
         )
+        self._attempted_to_connect = False
 
     async def start(self) -> None:
         await super().start()
@@ -91,6 +92,9 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             await handler.start()
 
     async def _connect(self, client: stompman.Client) -> stompman.Client:  # type: ignore[override]
+        if self._attempted_to_connect:
+            return client
+        self._attempted_to_connect = True
         self._producer = StompProducer(client)
         return await client.__aenter__()
 

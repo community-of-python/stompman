@@ -8,7 +8,9 @@ import faker
 import faststream_stomp
 import pytest
 import stompman
+from asgi_lifespan import LifespanManager
 from faststream import BaseMiddleware, Context, FastStream
+from faststream.asgi import AsgiFastStream
 from faststream.broker.message import gen_cor_id
 from faststream.broker.middlewares.logging import CriticalLogMiddleware
 from faststream.exceptions import AckMessage, NackMessage, RejectMessage
@@ -217,3 +219,9 @@ class TestLogging:
             mock.call(logging.ERROR, "MyError: ", extra=extra, exc_info=MyError()),
             mock.call(logging.INFO, "Processed", extra=extra),
         ]
+
+
+async def test_broker_connect_twice(broker: faststream_stomp.StompBroker) -> None:
+    app = AsgiFastStream(broker, on_startup=[broker.connect])
+    async with LifespanManager(app):
+        pass
