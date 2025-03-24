@@ -32,7 +32,6 @@ class Client:
 
     servers: list[ConnectionParameters] = field(kw_only=False)
     on_error_frame: Callable[[ErrorFrame], Any] | None = None
-    on_heartbeat: Callable[[], Any] | Callable[[], Awaitable[Any]] | None = None
 
     heartbeat: Heartbeat = field(default=Heartbeat(1000, 1000))
     ssl: Literal[True] | SSLContext | None = None
@@ -57,7 +56,6 @@ class Client:
     _check_server_heartbeat_task: asyncio.Task[None] = field(init=False)
     _listen_task: asyncio.Task[None] = field(init=False)
     _task_group: asyncio.TaskGroup = field(init=False)
-    _on_heartbeat_is_async: bool = field(init=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
@@ -82,7 +80,6 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             ssl=self.ssl,
         )
-        self._on_heartbeat_is_async = inspect.iscoroutinefunction(self.on_heartbeat) if self.on_heartbeat else False
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
@@ -157,14 +154,7 @@ class Client:
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)
-                    case HeartbeatFrame():
-                        if self.on_heartbeat is None:
-                            pass
-                        elif self._on_heartbeat_is_async:
-                            task_group.create_task(self.on_heartbeat())  # type: ignore[arg-type]
-                        else:
-                            self.on_heartbeat()
-                    case ConnectedFrame() | ReceiptFrame():
+                    case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
                         pass
 
     async def send(

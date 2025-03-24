@@ -1,6 +1,5 @@
 import asyncio
 from collections.abc import AsyncGenerator, Coroutine
-from functools import partial
 from typing import Any
 from unittest import mock
 
@@ -17,7 +16,6 @@ from stompman import (
     DisconnectFrame,
     ErrorFrame,
     FailedAllConnectAttemptsError,
-    HeartbeatFrame,
     ReceiptFrame,
     UnsupportedProtocolVersion,
 )
@@ -154,58 +152,6 @@ async def test_client_heartbeats_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert sleep_calls == [0, 0, 1, 3, 1, 3]
     assert write_heartbeat_mock.mock_calls == [mock.call(), mock.call(), mock.call()]
-
-
-async def test_client_on_heartbeat_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", partial(asyncio.sleep, 0))
-    connection_class, _ = create_spying_connection(
-        *get_read_frames_with_lifespan(
-            [build_dataclass(HeartbeatFrame), build_dataclass(HeartbeatFrame), build_dataclass(HeartbeatFrame)]
-        )
-    )
-
-    async with EnrichedClient(connection_class=connection_class, on_heartbeat=None):
-        await real_sleep(0)
-        await real_sleep(0)
-        await real_sleep(0)
-
-
-async def test_client_on_heartbeat_sync(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", partial(asyncio.sleep, 0))
-    connection_class, _ = create_spying_connection(
-        *get_read_frames_with_lifespan(
-            [build_dataclass(HeartbeatFrame), build_dataclass(HeartbeatFrame), build_dataclass(HeartbeatFrame)]
-        )
-    )
-    on_heartbeat_mock = mock.Mock()
-
-    async with EnrichedClient(connection_class=connection_class, on_heartbeat=on_heartbeat_mock):
-        await real_sleep(0)
-        await real_sleep(0)
-        await real_sleep(0)
-
-    assert on_heartbeat_mock.mock_calls == [mock.call(), mock.call(), mock.call()]
-
-
-async def test_client_on_heartbeat_async(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", partial(asyncio.sleep, 0))
-    connection_class, _ = create_spying_connection(
-        *get_read_frames_with_lifespan(
-            [build_dataclass(HeartbeatFrame), build_dataclass(HeartbeatFrame), build_dataclass(HeartbeatFrame)]
-        )
-    )
-    on_heartbeat_mock = mock.AsyncMock()
-
-    async with EnrichedClient(connection_class=connection_class, on_heartbeat=on_heartbeat_mock):
-        await real_sleep(0)
-        await real_sleep(0)
-        await real_sleep(0)
-
-    assert on_heartbeat_mock.await_count == 3  # noqa: PLR2004
-    assert on_heartbeat_mock.mock_calls == [mock.call.__bool__(), mock.call(), mock.call(), mock.call()]
 
 
 def test_make_receipt_id(monkeypatch: pytest.MonkeyPatch) -> None:
