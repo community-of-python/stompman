@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from ssl import SSLContext
 from typing import Any, Literal, Self, TypeVar
@@ -7,6 +7,7 @@ from typing import Any, Literal, Self, TypeVar
 import pytest
 import stompman
 from polyfactory.factories.dataclass_factory import DataclassFactory
+from stompman.config import Heartbeat
 from stompman.connection import AbstractConnection
 from stompman.connection_lifespan import AbstractConnectionLifespan, EstablishedConnectionResult
 from stompman.connection_manager import ConnectionManager
@@ -58,6 +59,7 @@ class EnrichedClient(stompman.Client):
 class NoopLifespan(AbstractConnectionLifespan):
     connection: AbstractConnection
     connection_parameters: stompman.ConnectionParameters
+    set_heartbeat_interval: Callable[[Heartbeat], Any]
 
     async def enter(self) -> EstablishedConnectionResult | stompman.StompProtocolConnectionIssue:
         return EstablishedConnectionResult(server_heartbeat=stompman.Heartbeat(1000, 1000))

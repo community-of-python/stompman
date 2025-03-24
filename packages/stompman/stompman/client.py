@@ -50,8 +50,6 @@ class Client:
     _active_subscriptions: ActiveSubscriptions = field(default_factory=dict, init=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
-    _send_heartbeat_task: asyncio.Task[None] = field(init=False)
-    _check_server_heartbeat_task: asyncio.Task[None] = field(init=False)
     _listen_task: asyncio.Task[None] = field(init=False)
     _task_group: asyncio.TaskGroup = field(init=False)
 
@@ -66,7 +64,6 @@ class Client:
                 disconnect_confirmation_timeout=self.disconnect_confirmation_timeout,
                 active_subscriptions=self._active_subscriptions,
                 active_transactions=self._active_transactions,
-                set_heartbeat_interval=self._restart_heartbeat_tasks,
             ),
             connection_class=self.connection_class,
             connect_retry_attempts=self.connect_retry_attempts,
@@ -81,9 +78,6 @@ class Client:
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
-        # TODO: move this tasks to lifespan
-        self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
-        self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         await self._exit_stack.enter_async_context(self._connection_manager)
         self._listen_task = self._task_group.create_task(self._listen_to_frames())
         return self
@@ -96,35 +90,8 @@ class Client:
                 await asyncio.Future()
         finally:
             self._listen_task.cancel()
-            self._send_heartbeat_task.cancel()
-            self._check_server_heartbeat_task.cancel()
-            await asyncio.wait([self._listen_task, self._send_heartbeat_task, self._check_server_heartbeat_task])
+            await asyncio.wait([self._listen_task])
             await self._exit_stack.aclose()
-
-    def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
-        self._send_heartbeat_task.cancel()
-        self._check_server_heartbeat_task.cancel()
-        print(server_heartbeat)
-        self._send_heartbeat_task = self._task_group.create_task(
-            self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
-        )
-        self._check_server_heartbeat_task = self._task_group.create_task(
-            self._monitor_server_aliveness(server_heartbeat.will_send_interval_ms)
-        )
-
-    async def _send_heartbeats_forever(self, client_heartbeat_interval_ms: int) -> None:
-        while True:
-            await self._connection_manager.write_heartbeat_reconnecting()
-            await asyncio.sleep(client_heartbeat_interval_ms / 1000)
-
-    async def _monitor_server_aliveness(self, server_heartbeat_interval_ms: int) -> None:
-        server_heartbeat_interval_seconds = server_heartbeat_interval_ms / 1000
-        while True:
-            await asyncio.sleep(server_heartbeat_interval_seconds * self.check_server_alive_interval_factor)
-            if not self._connection_manager._active_connection_state:
-                continue
-            if not self._connection_manager._active_connection_state.is_alive():
-                self._connection_manager._active_connection_state = None
 
     async def _listen_to_frames(self) -> None:
         async with asyncio.TaskGroup() as task_group:

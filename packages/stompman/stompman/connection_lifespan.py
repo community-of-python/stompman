@@ -110,5 +110,9 @@ def _make_receipt_id() -> str:
 
 class ConnectionLifespanFactory(Protocol):
     def __call__(
-        self, *, connection: AbstractConnection, connection_parameters: ConnectionParameters
+        self,
+        *,
+        connection: AbstractConnection,
+        connection_parameters: ConnectionParameters,
+        set_heartbeat_interval: Callable[[Heartbeat], Any],
     ) -> AbstractConnectionLifespan: ...

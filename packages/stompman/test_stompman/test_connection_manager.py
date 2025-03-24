@@ -140,8 +140,16 @@ async def test_get_active_connection_state_lifespan_flaky_ok() -> None:
 
     assert enter.mock_calls == [mock.call(), mock.call()]
     assert lifespan_factory.mock_calls == [
-        mock.call(connection=BaseMockConnection(), connection_parameters=manager.servers[0]),
-        mock.call(connection=BaseMockConnection(), connection_parameters=manager.servers[0]),
+        mock.call(
+            connection=BaseMockConnection(),
+            connection_parameters=manager.servers[0],
+            set_heartbeat_interval=manager._restart_heartbeat_tasks,
+        ),
+        mock.call(
+            connection=BaseMockConnection(),
+            connection_parameters=manager.servers[0],
+            set_heartbeat_interval=manager._restart_heartbeat_tasks,
+        ),
     ]
 
 
