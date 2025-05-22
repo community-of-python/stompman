@@ -169,7 +169,7 @@ class TestLogging:
         monkeypatch.delenv("PYTEST_CURRENT_TEST")
         broker: StompBroker = request.getfixturevalue("broker")
         assert broker.logger
-        broker.logger = mock.Mock(log=(log_mock := mock.Mock()))
+        broker.logger = mock.Mock(log=(log_mock := mock.Mock()), handlers=[])
 
         @broker.subscriber(destination := faker.pystr())
         def some_handler() -> None: ...
