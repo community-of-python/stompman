@@ -71,7 +71,6 @@ COMMANDS_TO_FRAMES: Final[dict[bytes, type[AnyClientFrame | AnyServerFrame]]] = 
 }
 FRAMES_TO_COMMANDS: Final = {value: key for key, value in COMMANDS_TO_FRAMES.items()}
 FRAMES_WITH_BODY: Final = (SendFrame, MessageFrame, ErrorFrame)
-COMMANDS_BYTES_LISTS: Final = [list(iter_bytes(command)) for command in COMMANDS_TO_FRAMES]
 
 
 def dump_header(key: str, value: str) -> bytes:
