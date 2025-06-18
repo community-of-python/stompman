@@ -31,8 +31,12 @@ class StompSecurity(BaseSecurity):
         return {"user-password": {"type": "userPassword"}}
 
 
-def _handle_listen_task_done(_task: asyncio.Task[None]) -> None:
-    raise SystemExit(1)
+def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
+    task_exception = listen_task.exception()
+    if isinstance(task_exception, ExceptionGroup) and isinstance(
+        task_exception.exceptions[0], stompman.FailedAllConnectAttemptsError
+    ):
+        raise SystemExit(1)
 
 
 class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client]):
