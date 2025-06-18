@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import types
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -28,6 +29,15 @@ class StompSecurity(BaseSecurity):
 
     def get_schema(self) -> dict[str, dict[str, str]]:  # noqa: PLR6301
         return {"user-password": {"type": "userPassword"}}
+
+
+def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
+    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
+    task_exception = listen_task.exception()
+    if isinstance(task_exception, ExceptionGroup) and isinstance(
+        task_exception.exceptions[0], stompman.FailedAllConnectAttemptsError
+    ):
+        raise SystemExit(1)
 
 
 class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client]):
@@ -96,7 +106,9 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             return client
         self._attempted_to_connect = True
         self._producer = StompProducer(client)
-        return await client.__aenter__()
+        await client.__aenter__()
+        client._listen_task.add_done_callback(_handle_listen_task_done)  # noqa: SLF001
+        return client
 
     async def _close(
         self,
