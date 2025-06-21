@@ -115,11 +115,22 @@ class Client:
                         pass
 
     async def send(
-        self, body: bytes, destination: str, *, content_type: str | None = None, headers: dict[str, str] | None = None
+        self,
+        body: bytes,
+        destination: str,
+        *,
+        content_type: str | None = None,
+        add_content_length: bool = True,
+        headers: dict[str, str] | None = None,
     ) -> None:
         await self._connection_manager.write_frame_reconnecting(
             SendFrame.build(
-                body=body, destination=destination, transaction=None, content_type=content_type, headers=headers
+                body=body,
+                destination=destination,
+                transaction=None,
+                content_type=content_type,
+                add_content_length=add_content_length,
+                headers=headers,
             )
         )
 

@@ -3,3 +3,5 @@
 .venv
 dist
 uv.lock
+.vscode
+__pycache__
