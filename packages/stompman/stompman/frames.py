@@ -149,11 +149,13 @@ class SendFrame:
         destination: str,
         transaction: str | None,
         content_type: str | None,
+        add_content_length: bool,
         headers: dict[str, str] | None,
     ) -> Self:
         all_headers: SendHeaders = headers or {}  # type: ignore[assignment]
         all_headers["destination"] = destination
-        all_headers["content-length"] = str(len(body))
+        if add_content_length:
+            all_headers["content-length"] = str(len(body))
         if content_type is not None:
             all_headers["content-type"] = content_type
         if transaction is not None:
