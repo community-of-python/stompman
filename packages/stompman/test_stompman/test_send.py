@@ -1,7 +1,6 @@
 import asyncio
 from typing import Any
 
-import faker
 import pytest
 from stompman import (
     SendFrame,

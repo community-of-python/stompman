@@ -334,3 +334,43 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
 
 def test_make_subscription_id() -> None:
     stompman.subscription._make_subscription_id()
+
+
+async def wait_and_unsubscribe(*subscriptions: stompman.subscription.BaseSubscription, wait_in_seconds: float) -> None:
+    await asyncio.sleep(wait_in_seconds)
+    for subscription in subscriptions:
+        await subscription.unsubscribe()
+
+
+async def test_client_exits_when_subscriptions_are_unsubscribed(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker
+) -> None:
+    monkeypatch.setattr(
+        stompman.subscription,
+        "_make_subscription_id",
+        mock.Mock(side_effect=[(first_id := faker.pystr()), (second_id := faker.pystr())]),
+    )
+    first_destination, second_destination = faker.pystr(), faker.pystr()
+    connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([]))
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        first_subscription = await client.subscribe(
+            first_destination, handler=noop_message_handler, on_suppressed_exception=noop_error_handler
+        )
+        second_subscription = await client.subscribe(
+            second_destination, handler=noop_message_handler, on_suppressed_exception=noop_error_handler
+        )
+        await asyncio.sleep(0)
+        unsubscribe_task = asyncio.create_task(
+            wait_and_unsubscribe(first_subscription, second_subscription, wait_in_seconds=0.5)
+        )
+
+    if not unsubscribe_task.done():
+        pytest.fail("Client should exit context manager only when subscriptions are unsubscribed")
+
+    assert collected_frames == enrich_expected_frames(
+        SubscribeFrame(headers={"id": first_id, "destination": first_destination, "ack": "client-individual"}),
+        SubscribeFrame(headers={"id": second_id, "destination": second_destination, "ack": "client-individual"}),
+        UnsubscribeFrame(headers={"id": first_id}),
+        UnsubscribeFrame(headers={"id": second_id}),
+    )
