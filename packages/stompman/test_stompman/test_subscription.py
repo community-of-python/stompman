@@ -365,8 +365,7 @@ async def test_client_exits_when_subscriptions_are_unsubscribed(
             wait_and_unsubscribe(first_subscription, second_subscription, wait_in_seconds=0.5)
         )
 
-    if not unsubscribe_task.done():
-        pytest.fail("Client should exit context manager only when subscriptions are unsubscribed")
+    assert unsubscribe_task.done(), "Client should exit context manager only when subscriptions are unsubscribed"
 
     assert collected_frames == enrich_expected_frames(
         SubscribeFrame(headers={"id": first_id, "destination": first_destination, "ack": "client-individual"}),
