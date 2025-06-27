@@ -47,7 +47,7 @@ class Client:
     connection_class: type[AbstractConnection] = Connection
 
     _connection_manager: ConnectionManager = field(init=False)
-    _active_subscriptions: ActiveSubscriptions = field(default_factory=dict, init=False)
+    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
     _listen_task: asyncio.Task[None] = field(init=False)
@@ -86,8 +86,8 @@ class Client:
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
     ) -> None:
         try:
-            if self._active_subscriptions and not exc_value:
-                await asyncio.Future()
+            if not exc_value:
+                await self._active_subscriptions.wait_until_empty()
         finally:
             self._listen_task.cancel()
             await asyncio.wait([self._listen_task])
@@ -98,7 +98,7 @@ class Client:
             async for frame in self._connection_manager.read_frames_reconnecting():
                 match frame:
                     case MessageFrame():
-                        if subscription := self._active_subscriptions.get(frame.headers["subscription"]):
+                        if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
                             task_group.create_task(
                                 subscription._run_handler(frame=frame)  # noqa: SLF001
                                 if isinstance(subscription, AutoAckSubscription)

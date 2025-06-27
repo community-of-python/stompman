@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
@@ -14,7 +15,35 @@ from stompman.frames import (
     UnsubscribeFrame,
 )
 
-ActiveSubscriptions = dict[str, "AutoAckSubscription | ManualAckSubscription"]
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class ActiveSubscriptions:
+    subscriptions: dict[str, "AutoAckSubscription | ManualAckSubscription"] = field(default_factory=dict, init=False)
+    event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
+
+    def __post_init__(self) -> None:
+        self.event.set()
+
+    def get_by_id(self, subscription_id: str) -> "AutoAckSubscription | ManualAckSubscription | None":
+        return self.subscriptions.get(subscription_id)
+
+    def get_all(self) -> list["AutoAckSubscription | ManualAckSubscription"]:
+        return list(self.subscriptions.values())
+
+    def delete_by_id(self, subscription_id: str) -> None:
+        del self.subscriptions[subscription_id]
+        if not self.subscriptions:
+            self.event.set()
+
+    def add(self, subscription: "AutoAckSubscription | ManualAckSubscription") -> None:
+        self.subscriptions[subscription.id] = subscription
+        self.event.clear()
+
+    def contains_by_id(self, subscription_id: str) -> bool:
+        return subscription_id in self.subscriptions
+
+    async def wait_until_empty(self) -> bool:
+        return await self.event.wait()
 
 
 @dataclass(kw_only=True, slots=True)
@@ -32,20 +61,20 @@ class BaseSubscription:
                 subscription_id=self.id, destination=self.destination, ack=self.ack, headers=self.headers
             )
         )
-        self._active_subscriptions[self.id] = self  # type: ignore[assignment]
+        self._active_subscriptions.add(self)  # type: ignore[arg-type]
 
     async def unsubscribe(self) -> None:
-        del self._active_subscriptions[self.id]
+        self._active_subscriptions.delete_by_id(self.id)
         await self._connection_manager.maybe_write_frame(UnsubscribeFrame(headers={"id": self.id}))
 
     async def _nack(self, frame: MessageFrame) -> None:
-        if self.id in self._active_subscriptions and (ack_id := frame.headers.get("ack")):
+        if self._active_subscriptions.contains_by_id(self.id) and (ack_id := frame.headers.get("ack")):
             await self._connection_manager.maybe_write_frame(
                 NackFrame(headers={"id": ack_id, "subscription": frame.headers["subscription"]})
             )
 
     async def _ack(self, frame: MessageFrame) -> None:
-        if self.id in self._active_subscriptions and (ack_id := frame.headers["ack"]):
+        if self._active_subscriptions.contains_by_id(self.id) and (ack_id := frame.headers["ack"]):
             await self._connection_manager.maybe_write_frame(
                 AckFrame(headers={"id": ack_id, "subscription": frame.headers["subscription"]})
             )
@@ -96,7 +125,7 @@ def _make_subscription_id() -> str:
 async def resubscribe_to_active_subscriptions(
     *, connection: AbstractConnection, active_subscriptions: ActiveSubscriptions
 ) -> None:
-    for subscription in active_subscriptions.values():
+    for subscription in active_subscriptions.get_all():
         await connection.write_frame(
             SubscribeFrame.build(
                 subscription_id=subscription.id,
@@ -108,5 +137,5 @@ async def resubscribe_to_active_subscriptions(
 
 
 async def unsubscribe_from_all_active_subscriptions(*, active_subscriptions: ActiveSubscriptions) -> None:
-    for subscription in active_subscriptions.copy().values():
+    for subscription in active_subscriptions.get_all():
         await subscription.unsubscribe()
