@@ -16,34 +16,34 @@ from stompman.frames import (
 )
 
 
-@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
+@dataclass(kw_only=True, slots=True, frozen=True)
 class ActiveSubscriptions:
-    subscriptions: dict[str, AutoAckSubscription | ManualAckSubscription] = dataclasses.field(default_factory=dict, init=False)
-    event: Event = dataclasses.field(default_factory=Event, init=False)
+    subscriptions: dict[str, "AutoAckSubscription | ManualAckSubscription"] = field(default_factory=dict, init=False)
+    event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
     def __post_init__(self) -> None:
         self.event.set()
 
     def get_by_id(self, subscription_id: str) -> "AutoAckSubscription | ManualAckSubscription | None":
-        return self._subscriptions.get(subscription_id)
+        return self.subscriptions.get(subscription_id)
 
     def get_all(self) -> list["AutoAckSubscription | ManualAckSubscription"]:
-        return list(self._subscriptions.values())
+        return list(self.subscriptions.values())
 
     def delete_by_id(self, subscription_id: str) -> None:
-        del self._subscriptions[subscription_id]
-        if not self._subscriptions:
-            self._event.set()
+        del self.subscriptions[subscription_id]
+        if not self.subscriptions:
+            self.event.set()
 
     def add(self, subscription: "AutoAckSubscription | ManualAckSubscription") -> None:
-        self._subscriptions[subscription.id] = subscription
-        self._event.clear()
+        self.subscriptions[subscription.id] = subscription
+        self.event.clear()
 
     def contains_by_id(self, subscription_id: str) -> bool:
-        return subscription_id in self._subscriptions
+        return subscription_id in self.subscriptions
 
     async def wait_until_empty(self) -> bool:
-        return await self._event.wait()
+        return await self.event.wait()
 
 
 @dataclass(kw_only=True, slots=True)
