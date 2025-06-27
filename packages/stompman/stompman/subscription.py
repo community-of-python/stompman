@@ -1,4 +1,4 @@
-from asyncio import Event
+import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
