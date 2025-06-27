@@ -16,11 +16,13 @@ from stompman.frames import (
 )
 
 
+@dataclasses.dataclass(kw_only=True, slots=True, frozen=True)
 class ActiveSubscriptions:
-    def __init__(self) -> None:
-        self._subscriptions: dict[str, AutoAckSubscription | ManualAckSubscription] = {}
-        self._event = Event()
-        self._event.set()
+    subscriptions: dict[str, AutoAckSubscription | ManualAckSubscription] = dataclasses.field(default_factory=dict, init=False)
+    event: Event = dataclasses.field(default_factory=Event, init=False)
+
+    def __post_init__(self) -> None:
+        self.event.set()
 
     def get_by_id(self, subscription_id: str) -> "AutoAckSubscription | ManualAckSubscription | None":
         return self._subscriptions.get(subscription_id)
