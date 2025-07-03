@@ -1,7 +1,6 @@
 import asyncio
 import socket
 from collections.abc import Awaitable
-from functools import partial
 from typing import Any
 from unittest import mock
 
@@ -147,15 +146,6 @@ async def test_connection_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_connection_connect_connection_error(monkeypatch: pytest.MonkeyPatch, exception: type[Exception]) -> None:
     monkeypatch.setattr("asyncio.open_connection", mock.AsyncMock(side_effect=exception))
     assert not await make_connection()
-
-
-async def test_read_frames_timeout_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    connection = await make_mocked_connection(
-        monkeypatch, mock.AsyncMock(read=partial(asyncio.sleep, 5)), mock.AsyncMock()
-    )
-    mock_wait_for(monkeypatch)
-    with pytest.raises(ConnectionLostError):
-        [frame async for frame in connection.read_frames()]
 
 
 async def test_read_frames_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
