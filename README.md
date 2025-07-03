@@ -38,7 +38,6 @@ async with stompman.Client(
     connect_timeout=2,
     connection_confirmation_timeout=2,
     disconnect_confirmation_timeout=2,
-    read_timeout=2,
     write_retry_attempts=3,
     check_server_alive_interval_factor=3,
 ) as client:
@@ -144,7 +143,7 @@ Also, I want to pointed out that:
 
 - Protocol parsing is inspired by [aiostomp](https://github.com/pedrokiefer/aiostomp/blob/3449dcb53f43e5956ccc7662bb5b7d76bc6ef36b/aiostomp/protocol.py) (meaning: consumed by me and refactored from).
 - stompman is tested and used with [ActiveMQ Artemis](https://activemq.apache.org/components/artemis/) and [ActiveMQ Classic](https://activemq.apache.org/components/classic/).
-    - Caveat: a message sent by a Stomp client is converted into a JMS `TextMessage`/`BytesMessage` based on the `content-length` header (see the docs [here](https://activemq.apache.org/components/classic/documentation/stomp)). In order to send a `TextMessage`, `Client.send` needs to be invoked with `add_content_length` header set to `False` 
+    - Caveat: a message sent by a Stomp client is converted into a JMS `TextMessage`/`BytesMessage` based on the `content-length` header (see the docs [here](https://activemq.apache.org/components/classic/documentation/stomp)). In order to send a `TextMessage`, `Client.send` needs to be invoked with `add_content_length` header set to `False`
 - Specification says that headers in CONNECT and CONNECTED frames shouldn't be escaped for backwards compatibility. stompman escapes headers in CONNECT frame (outcoming), but does not unescape headers in CONNECTED (outcoming).
 
 ### FastStream STOMP broker

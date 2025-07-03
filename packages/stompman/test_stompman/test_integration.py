@@ -24,9 +24,7 @@ DESTINATION: Final = "DLQ"
 
 @asynccontextmanager
 async def create_client(connection_parameters: stompman.ConnectionParameters) -> AsyncGenerator[stompman.Client, None]:
-    async with stompman.Client(
-        servers=[connection_parameters], read_timeout=10, connection_confirmation_timeout=10
-    ) as client:
+    async with stompman.Client(servers=[connection_parameters], connection_confirmation_timeout=10) as client:
         yield client
 
 

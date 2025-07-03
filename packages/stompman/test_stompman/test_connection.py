@@ -21,9 +21,7 @@ pytestmark = pytest.mark.anyio
 
 
 async def make_connection() -> Connection | None:
-    return await Connection.connect(
-        host="localhost", port=12345, timeout=2, read_max_chunk_size=1024 * 1024, read_timeout=2, ssl=None
-    )
+    return await Connection.connect(host="localhost", port=12345, timeout=2, read_max_chunk_size=1024 * 1024, ssl=None)
 
 
 async def make_mocked_connection(monkeypatch: pytest.MonkeyPatch, reader: object, writer: object) -> Connection:

@@ -36,7 +36,6 @@ class Client:
     connect_retry_attempts: int = 3
     connect_retry_interval: int = 1
     connect_timeout: int = 2
-    read_timeout: int = 2
     read_max_chunk_size: int = 1024 * 1024
     write_retry_attempts: int = 3
     connection_confirmation_timeout: int = 2
@@ -69,7 +68,6 @@ class Client:
             connect_retry_attempts=self.connect_retry_attempts,
             connect_retry_interval=self.connect_retry_interval,
             connect_timeout=self.connect_timeout,
-            read_timeout=self.read_timeout,
             read_max_chunk_size=self.read_max_chunk_size,
             write_retry_attempts=self.write_retry_attempts,
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,

@@ -24,7 +24,6 @@ class AbstractConnection(Protocol):
         port: int,
         timeout: int,
         read_max_chunk_size: int,
-        read_timeout: int,
         ssl: Literal[True] | SSLContext | None,
     ) -> Self | None: ...
     async def close(self) -> None: ...
@@ -46,7 +45,6 @@ class Connection(AbstractConnection):
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     read_max_chunk_size: int
-    read_timeout: int
     ssl: Literal[True] | SSLContext | None
 
     @classmethod
@@ -57,7 +55,6 @@ class Connection(AbstractConnection):
         port: int,
         timeout: int,
         read_max_chunk_size: int,
-        read_timeout: int,
         ssl: Literal[True] | SSLContext | None,
     ) -> Self | None:
         try:
@@ -69,7 +66,6 @@ class Connection(AbstractConnection):
                 reader=reader,
                 writer=writer,
                 read_max_chunk_size=read_max_chunk_size,
-                read_timeout=read_timeout,
                 ssl=ssl,
             )
 
@@ -99,10 +95,8 @@ class Connection(AbstractConnection):
         parser = FrameParser()
 
         while True:
-            with _reraise_connection_lost(ConnectionError, TimeoutError):
-                raw_frames = await asyncio.wait_for(
-                    self._read_non_empty_bytes(self.read_max_chunk_size), timeout=self.read_timeout
-                )
+            with _reraise_connection_lost(ConnectionError):
+                raw_frames = await self._read_non_empty_bytes(self.read_max_chunk_size)
             self.last_read_time = time.time()
 
             for frame in cast("Iterator[AnyServerFrame]", parser.parse_frames_from_chunk(raw_frames)):
