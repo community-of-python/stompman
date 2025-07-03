@@ -34,7 +34,6 @@ class BaseMockConnection(AbstractConnection):
         port: int,
         timeout: int,
         read_max_chunk_size: int,
-        read_timeout: int,
         ssl: Literal[True] | SSLContext | None,
     ) -> Self | None:
         return cls()
@@ -76,7 +75,6 @@ class EnrichedConnectionManager(ConnectionManager):
     connect_retry_attempts: int = 3
     connect_retry_interval: int = 1
     connect_timeout: int = 3
-    read_timeout: int = 4
     read_max_chunk_size: int = 5
     write_retry_attempts: int = 3
     ssl: Literal[True] | SSLContext | None = None

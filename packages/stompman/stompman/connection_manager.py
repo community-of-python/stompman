@@ -46,7 +46,6 @@ class ConnectionManager:
     connect_retry_interval: int
     connect_timeout: int
     ssl: Literal[True] | SSLContext | None
-    read_timeout: int
     read_max_chunk_size: int
     write_retry_attempts: int
     check_server_alive_interval_factor: int
@@ -113,7 +112,6 @@ class ConnectionManager:
             port=server.port,
             timeout=self.connect_timeout,
             read_max_chunk_size=self.read_max_chunk_size,
-            read_timeout=self.read_timeout,
             ssl=self.ssl,
         ):
             return (connection, server)

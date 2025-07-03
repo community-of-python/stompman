@@ -42,7 +42,6 @@ async def test_connect_attempts_ok(ok_on_attempt: int, monkeypatch: pytest.Monke
             port: int,
             timeout: int,
             read_max_chunk_size: int,
-            read_timeout: int,
             ssl: Literal[True] | SSLContext | None,
         ) -> Self | None:
             assert (host, port) == (manager.servers[0].host, manager.servers[0].port)
@@ -55,7 +54,6 @@ async def test_connect_attempts_ok(ok_on_attempt: int, monkeypatch: pytest.Monke
                     port=port,
                     timeout=timeout,
                     read_max_chunk_size=read_max_chunk_size,
-                    read_timeout=read_timeout,
                     ssl=ssl,
                 )
                 if attempts == ok_on_attempt
@@ -88,7 +86,6 @@ async def test_connect_to_any_server_ok() -> None:
             port: int,
             timeout: int,
             read_max_chunk_size: int,
-            read_timeout: int,
             ssl: Literal[True] | SSLContext | None,
         ) -> Self | None:
             return (
@@ -97,7 +94,6 @@ async def test_connect_to_any_server_ok() -> None:
                     port=port,
                     timeout=timeout,
                     read_max_chunk_size=read_max_chunk_size,
-                    read_timeout=read_timeout,
                     ssl=ssl,
                 )
                 if port == successful_server.port

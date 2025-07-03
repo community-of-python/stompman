@@ -1,3 +1,4 @@
+import platform
 from typing import cast
 
 import pytest
@@ -24,6 +25,10 @@ def first_server_connection_parameters() -> stompman.ConnectionParameters:
         stompman.ConnectionParameters(host="127.0.0.1", port=9000, login="admin", passcode=":=123"),
         stompman.ConnectionParameters(host="127.0.0.1", port=9001, login="admin", passcode=":=123"),
     ]
+    if platform.platform() == "Linux"  # TODO: fix tests with ActiveMQ Classic on Mac  # noqa: FIX002, TD002, TD003
+    else [
+        stompman.ConnectionParameters(host="127.0.0.1", port=9000, login="admin", passcode=":=123"),
+    ],
 )
 def connection_parameters(request: pytest.FixtureRequest) -> stompman.ConnectionParameters:
     return cast("stompman.ConnectionParameters", request.param)
