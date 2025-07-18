@@ -1,25 +1,39 @@
 import asyncio
+import logging
 import types
 import typing
-from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Annotated
+from collections.abc import Iterable, Sequence
+from typing import (
+    TYPE_CHECKING,
+    cast,
+)
 
 import anyio
 import stompman
-from faststream._internal.basic_types import AnyDict, SendableMessage
+from fast_depends.dependencies import Dependant
+from faststream._internal.basic_types import AnyDict, LoggerProto, SendableMessage
+from faststream._internal.broker import BrokerUsecase
 from faststream._internal.broker.broker import BrokerUsecase
 from faststream._internal.broker.registrator import Registrator
+from faststream._internal.configs import (
+    BrokerConfig,
+)
+from faststream._internal.constants import EMPTY
+from faststream._internal.di import FastDependsConfig
+from faststream._internal.types import (
+    BrokerMiddleware,
+    CustomCallable,
+)
 from faststream.response.publish_type import PublishType
 from faststream.security import BaseSecurity
 from faststream.specification.schema import BrokerSpec
-from typing_extensions import Doc
+from faststream.specification.schema.extra import Tag, TagDict
 
 from faststream_stomp.configs import StompBrokerConfig
 from faststream_stomp.publisher import StompPublishCommand, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     from faststream_stomp.subscriber import StompSubscriber
 
 
@@ -35,31 +49,48 @@ class StompSecurity(BaseSecurity):
         return {"user-password": {"type": "userPassword"}}
 
 
-@dataclass(kw_only=True)
-class StompBrokerSpec(BrokerSpec):
-    url: Annotated[list[str], Doc("URLs of servers will be inferred from client if not specified")] = field(
-        default_factory=list
-    )
-    protocol: str | None = "STOMP"
-    protocol_version: str | None = "1.2"
-    security: BaseSecurity | None = field(default_factory=StompSecurity)
-
-
-class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, StompBrokerConfig]):
+class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, BrokerConfig]):
     _subscribers: list["StompSubscriber"]  # type: ignore[assignment]
     _publishers: list["StompPublisher"]  # type: ignore[assignment]
 
     def __init__(
         self,
+        client: stompman.Client,
         *,
-        config: StompBrokerConfig,
-        specification: StompBrokerSpec,
-        routers: Sequence[Registrator[stompman.MessageFrame]],
+        decoder: CustomCallable | None = None,
+        parser: CustomCallable | None = None,
+        dependencies: Iterable[Dependant] = (),
+        middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame, StompPublishCommand]] = (),
+        graceful_timeout: float | None = None,
+        routers: Sequence[Registrator[stompman.MessageFrame]] = (),
+        logger: LoggerProto | None = EMPTY,
+        log_level: int = logging.INFO,
+        apply_types: bool = True,
+        # AsyncAPI args
+        description: str | None = None,
+        tags: Iterable[Tag | TagDict] = (),
     ) -> None:
-        specification.url = specification.url or [
-            f"{one_server.host}:{one_server.port}" for one_server in config.client.servers
-        ]
-        super().__init__(config=config, specification=specification, routers=routers)
+        broker_config = StompBrokerConfig(
+            broker_middlewares=cast("Sequence[BrokerMiddleware]", middlewares),
+            broker_parser=parser,
+            broker_decoder=decoder,
+            logger=logger,  # TODO
+            fd_config=FastDependsConfig(use_fastdepends=apply_types),
+            broker_dependencies=dependencies,
+            graceful_timeout=graceful_timeout,
+            extra_context={"broker": self},
+            client=client,
+        )
+        specification = BrokerSpec(
+            url=[f"{one_server.host}:{one_server.port}" for one_server in broker_config.client.servers],
+            protocol="STOMP",
+            protocol_version="1.2",
+            description=description,
+            tags=tags,
+            security=StompSecurity(),
+        )
+
+        super().__init__(config=broker_config, specification=specification, routers=routers)
         self._attempted_to_connect = False
 
     async def _connect(self, client: stompman.Client) -> stompman.Client:  # type: ignore[override]
