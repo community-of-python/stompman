@@ -4,16 +4,16 @@ from typing import Any, cast
 import stompman
 from fast_depends.dependencies import Depends
 from faststream._internal.broker.registrator import Registrator
-from faststream._internal.types import CustomCallable, PublisherMiddleware, SubscriberMiddleware
-
-from faststream.broker.utils import default_filter
+from faststream._internal.endpoint.subscriber.call_item import CallsCollection
+from faststream._internal.types import CustomCallable, PublisherMiddleware
 from typing_extensions import override
 
+from faststream_stomp.configs import StompBrokerConfig, StompSubscriberSpecificationConfig, StompSubscriberUsecaseConfig
 from faststream_stomp.publisher import StompPublisher
-from faststream_stomp.subscriber import StompSubscriber
+from faststream_stomp.subscriber import StompSubscriber, StompSubscriberSpecification
 
 
-class StompRegistrator(Registrator[stompman.MessageFrame]):
+class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
     @override
     def subscriber(  # type: ignore[override]
         self,
@@ -23,38 +23,36 @@ class StompRegistrator(Registrator[stompman.MessageFrame]):
         headers: dict[str, str] | None = None,
         # other args
         dependencies: Iterable[Depends] = (),
-        no_ack: bool = False,
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
-        middlewares: Sequence[SubscriberMiddleware[stompman.MessageFrame]] = (),
-        retry: bool = False,
         title: str | None = None,
         description: str | None = None,
         include_in_schema: bool = True,
     ) -> StompSubscriber:
-        subscriber = cast(
-            "StompSubscriber",
-            super().subscriber(
-                StompSubscriber(
-                    destination=destination,
-                    ack_mode=ack_mode,
-                    headers=headers,
-                    retry=retry,
-                    no_ack=no_ack,
-                    broker_middlewares=self._middlewares,
-                    broker_dependencies=self._dependencies,
-                    title_=title,
-                    description_=description,
-                    include_in_schema=self._solve_include_in_schema(include_in_schema),
-                )
+        calls = CallsCollection[stompman.MessageFrame]()
+        specification = StompSubscriberSpecification(
+            _outer_config=self.config.broker_config,
+            specification_config=StompSubscriberSpecificationConfig(
+                title_=title,
+                description_=description,
+                include_in_schema=include_in_schema,
+                destination=destination,
+                ack_mode=ack_mode,
+                headers=headers,
             ),
+            calls=calls,
         )
+        usecase_config = StompSubscriberUsecaseConfig(
+            _outer_config=self.config.broker_config, destination=destination, ack_mode=ack_mode, headers=headers
+        )
+        subscriber = StompSubscriber(config=usecase_config, specification=specification, calls=calls)
+
+        super().subscriber(subscriber)
         return subscriber.add_call(
-            filter_=default_filter,
             parser_=parser or self._parser,
             decoder_=decoder or self._decoder,
+            middlewares_=(),
             dependencies_=dependencies,
-            middlewares_=middlewares,
         )
 
     @override

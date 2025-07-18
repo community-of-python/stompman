@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Sequence
+from typing import cast
 
 import stompman
 from faststream._internal.endpoint.publisher.fake import FakePublisher
@@ -12,8 +13,25 @@ from faststream.specification.schema import (
     SubscriberSpec,
 )
 
-from faststream_stomp.broker import StompBrokerConfig
-from faststream_stomp.configs import StompSubscriberSpecificationConfig, StompSubscriberUsecaseConfig
+from faststream_stomp.configs import StompBrokerConfig, StompSubscriberSpecificationConfig, StompSubscriberUsecaseConfig
+
+
+class StompSubscriberSpecification(SubscriberSpecification[StompBrokerConfig, StompSubscriberSpecificationConfig]):
+    @property
+    def name(self) -> str:
+        return f"{self._outer_config.prefix}{self.config.destination}:{self.call_name}"
+
+    def get_schema(self) -> dict[str, SubscriberSpec]:
+        return {
+            self.name: SubscriberSpec(
+                description=self.description,
+                operation=Operation(
+                    message=Message(title=f"{self.name}:Message", payload=resolve_payloads(self.get_payloads())),
+                    bindings=None,
+                ),
+                bindings=None,
+            )
+        }
 
 
 class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
@@ -21,12 +39,12 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         self,
         *,
         config: StompSubscriberUsecaseConfig,
-        specification: "SubscriberSpecification",
+        specification: StompSubscriberSpecification,
         calls: CallsCollection[stompman.MessageFrame],
     ) -> None:
         self.config = config
         self._subscription: stompman.ManualAckSubscription | None = None
-        super().__init__(config=config, specification=specification, calls=calls)
+        super().__init__(config=config, specification=cast("SubscriberSpecification", specification), calls=calls)
 
     async def start(self) -> None:
         await super().start()
@@ -59,22 +77,4 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
             if message
             else self.config._outer_config.prefix + self.config.destination,
             "message_id": message.message_id if message else "",
-        }
-
-
-class StompSubscriberSpecification(SubscriberSpecification[StompBrokerConfig, StompSubscriberSpecificationConfig]):
-    @property
-    def name(self) -> str:
-        return f"{self._outer_config.prefix}{self.config.destination}:{self.call_name}"
-
-    def get_schema(self) -> dict[str, SubscriberSpec]:
-        return {
-            self.name: SubscriberSpec(
-                description=self.description,
-                operation=Operation(
-                    message=Message(title=f"{self.name}:Message", payload=resolve_payloads(self.get_payloads())),
-                    bindings=None,
-                ),
-                bindings=None,
-            )
         }
