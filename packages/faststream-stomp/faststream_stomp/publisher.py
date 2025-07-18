@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from functools import partial
 from itertools import chain
-from typing import Any, TypedDict, Unpack
+from typing import Any, NoReturn
 
 import stompman
 from faststream._internal.basic_types import SendableMessage
@@ -10,35 +10,37 @@ from faststream._internal.producer import ProducerProto
 from faststream._internal.types import AsyncCallable, BrokerMiddleware, PublisherMiddleware
 from faststream.exceptions import NOT_CONNECTED_YET
 from faststream.message import encode_message
+from faststream.response.response import PublishCommand
 from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.asyncapi.v3_0_0.schema import Channel, CorrelationId, Message, Operation
 
 
-class StompProducerPublishKwargs(TypedDict):
-    destination: str
-    correlation_id: str | None
-    headers: dict[str, str] | None
+class StompPublishCommand(PublishCommand):
+    @classmethod
+    def from_cmd(cls, cmd: PublishCommand) -> PublishCommand:
+        return cmd
 
 
-class StompProducer(ProducerProto):
+class StompProducer(ProducerProto[StompPublishCommand]):
     _parser: AsyncCallable
     _decoder: AsyncCallable
 
     def __init__(self, client: stompman.Client) -> None:
         self.client = client
 
-    async def publish(self, message: SendableMessage, **kwargs: Unpack[StompProducerPublishKwargs]) -> None:  # type: ignore[override]
-        body, content_type = encode_message(message)
-        all_headers = kwargs["headers"].copy() if kwargs["headers"] else {}
-        if kwargs["correlation_id"]:
-            all_headers["correlation-id"] = kwargs["correlation_id"]
-        await self.client.send(body, kwargs["destination"], content_type=content_type, headers=all_headers)
+    async def publish(self, cmd: StompPublishCommand) -> None:
+        body, content_type = encode_message(cmd.body, serializer=None)
+        all_headers = cmd.headers.copy() if cmd.headers else {}
+        if cmd.correlation_id:
+            all_headers["correlation-id"] = cmd.correlation_id
+        await self.client.send(body, cmd.destination, content_type=content_type, headers=all_headers)
 
-    async def request(  # type: ignore[override]
-        self, message: SendableMessage, *, correlation_id: str | None, headers: dict[str, str] | None
-    ) -> Any:  # noqa: ANN401
+    async def request(self, cmd: StompPublishCommand) -> NoReturn:
         msg = "`StompProducer` can be used only to publish a response for `reply-to` or `RPC` messages."
         raise NotImplementedError(msg)
+
+    async def publish_batch(self, cmd: StompPublishCommand) -> NoReturn:
+        raise NotImplementedError
 
 
 class StompPublisher(BrokerPublishMixin[stompman.MessageFrame]):
