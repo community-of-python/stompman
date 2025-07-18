@@ -4,9 +4,9 @@ from unittest import mock
 from unittest.mock import AsyncMock
 
 import stompman
-from faststream.broker.message import encode_message
-from faststream.testing.broker import TestBroker
-from faststream.types import SendableMessage
+from faststream._internal.basic_types import SendableMessage
+from faststream._internal.testing.broker import TestBroker
+from faststream.message import encode_message
 
 from faststream_stomp.broker import StompBroker
 from faststream_stomp.publisher import StompProducer, StompPublisher

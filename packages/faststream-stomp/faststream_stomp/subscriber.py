@@ -2,16 +2,16 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Any, TypedDict, cast
 
 import stompman
-from fast_depends.dependencies import Depends
-from faststream.asyncapi.schema import Channel, CorrelationId, Message, Operation
-from faststream.asyncapi.utils import resolve_payloads
-from faststream.broker.message import StreamMessage, decode_message
-from faststream.broker.publisher.fake import FakePublisher
-from faststream.broker.publisher.proto import ProducerProto
-from faststream.broker.subscriber.usecase import SubscriberUsecase
-from faststream.broker.types import AsyncCallable, BrokerMiddleware, CustomCallable
-from faststream.types import AnyDict, Decorator, LoggerProto
-from faststream.utils.functions import to_async
+from fast_depends.dependencies import Dependant
+from faststream._internal.basic_types import AnyDict, Decorator, LoggerProto
+from faststream._internal.endpoint.publisher.fake import FakePublisher
+from faststream._internal.endpoint.subscriber import SubscriberUsecase
+from faststream._internal.producer import ProducerProto
+from faststream._internal.types import AsyncCallable, BrokerMiddleware, CustomCallable
+from faststream._internal.utils.functions import to_async
+from faststream.message import StreamMessage, decode_message
+from faststream.specification.asyncapi.utils import resolve_payloads
+from faststream.specification.asyncapi.v3_0_0.schema import Channel, CorrelationId, Message, Operation
 
 from faststream_stomp.message import StompStreamMessage
 
@@ -30,7 +30,7 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         headers: dict[str, str] | None,
         retry: bool | int,
         no_ack: bool,
-        broker_dependencies: Iterable[Depends],
+        broker_dependencies: Iterable[Dependant],
         broker_middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]],
         default_parser: AsyncCallable = StompStreamMessage.from_frame,
         default_decoder: AsyncCallable = to_async(decode_message),  # noqa: B008

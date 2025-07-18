@@ -3,8 +3,9 @@ from typing import Any, cast
 
 import stompman
 from fast_depends.dependencies import Depends
-from faststream.broker.core.abc import ABCBroker
-from faststream.broker.types import CustomCallable, PublisherMiddleware, SubscriberMiddleware
+from faststream._internal.broker.registrator import Registrator
+from faststream._internal.types import CustomCallable, PublisherMiddleware, SubscriberMiddleware
+
 from faststream.broker.utils import default_filter
 from typing_extensions import override
 
@@ -12,7 +13,7 @@ from faststream_stomp.publisher import StompPublisher
 from faststream_stomp.subscriber import StompSubscriber
 
 
-class StompRegistrator(ABCBroker[stompman.MessageFrame]):
+class StompRegistrator(Registrator[stompman.MessageFrame]):
     @override
     def subscriber(  # type: ignore[override]
         self,

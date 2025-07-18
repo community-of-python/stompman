@@ -4,9 +4,10 @@ from itertools import chain
 from typing import Any, TypedDict, Unpack
 
 import stompman
-from faststream._internal.basic_types import AsyncCallable, BrokerMiddleware, PublisherMiddleware, SendableMessage
+from faststream._internal.basic_types import SendableMessage
 from faststream._internal.broker.pub_base import BrokerPublishMixin
 from faststream._internal.producer import ProducerProto
+from faststream._internal.types import AsyncCallable, BrokerMiddleware, PublisherMiddleware
 from faststream.exceptions import NOT_CONNECTED_YET
 from faststream.message import encode_message
 from faststream.specification.asyncapi.utils import resolve_payloads

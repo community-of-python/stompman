@@ -5,8 +5,8 @@ import faststream_stomp
 import pytest
 import stompman
 from faststream import FastStream
-from faststream.asyncapi import get_app_schema
-from faststream.broker.message import gen_cor_id
+from faststream.message import gen_cor_id
+from faststream.specification.asyncapi.v3_0_0 import get_app_schema
 from faststream_stomp.opentelemetry import StompTelemetryMiddleware
 from faststream_stomp.prometheus import StompPrometheusMiddleware
 from opentelemetry.sdk.metrics import MeterProvider

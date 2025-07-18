@@ -11,9 +11,9 @@ import stompman
 from asgi_lifespan import LifespanManager
 from faststream import BaseMiddleware, Context, FastStream
 from faststream.asgi import AsgiFastStream
-from faststream.broker.message import gen_cor_id
-from faststream.broker.middlewares.logging import CriticalLogMiddleware
 from faststream.exceptions import AckMessage, NackMessage, RejectMessage
+from faststream.message import gen_cor_id
+from faststream.middlewares.logging import CriticalLogMiddleware
 from faststream_stomp.message import StompStreamMessage
 
 if TYPE_CHECKING:

@@ -5,12 +5,11 @@ from typing import TYPE_CHECKING
 import stompman
 from faststream.prometheus import ConsumeAttrs, MetricsSettingsProvider
 from faststream.prometheus.middleware import BasePrometheusMiddleware
-from faststream.types import EMPTY
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from faststream.broker.message import StreamMessage
+    from faststream.message import StreamMessage
     from prometheus_client import CollectorRegistry
 
     from faststream_stomp.publisher import StompProducerPublishKwargs
