@@ -1,11 +1,13 @@
 import uuid
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 from unittest import mock
 from unittest.mock import AsyncMock
 
 import stompman
 from faststream._internal.basic_types import SendableMessage
-from faststream._internal.testing.broker import TestBroker
+from faststream._internal.testing.broker import TestBroker, change_producer
 from faststream.message import encode_message
 
 from faststream_stomp.broker import StompBroker
@@ -16,33 +18,39 @@ if TYPE_CHECKING:
     from stompman.frames import MessageHeaders
 
 
-class TestStompBroker(TestBroker[StompBroker]):
+class TestStompBroker(TestBroker[StompBroker]):  # type: ignore[type-var]
     @staticmethod
     def create_publisher_fake_subscriber(
         broker: StompBroker, publisher: StompPublisher
     ) -> tuple[StompSubscriber, bool]:
+        publisher_full_destination = publisher.config._outer_config.prefix + publisher.config.destination  # noqa: SLF001
         subscriber: StompSubscriber | None = None
-        for handler in broker._subscribers.values():  # noqa: SLF001
-            if handler.destination == publisher.destination:
+
+        for handler in broker._subscribers:  # noqa: SLF001
+            if handler.config._outer_config.prefix + handler.config.destination == publisher_full_destination:  # noqa: SLF001
                 subscriber = handler
                 break
 
         if subscriber is None:
             is_real = False
-            subscriber = broker.subscriber(publisher.destination)
+            subscriber = broker.subscriber(publisher_full_destination)
         else:
             is_real = True
 
         return subscriber, is_real
 
+    @contextmanager
+    def _patch_producer(self, broker: StompBroker) -> Iterator[None]:  # noqa: PLR6301
+        with change_producer(broker.config.broker_config, FakeStompProducer(broker)):
+            yield
+
+    @contextmanager
+    def _patch_broker(self, broker: StompBroker) -> Generator[None, None, None]:
+        with mock.patch.object(broker.config, "client", new_callable=AsyncMock), super()._patch_broker(broker):
+            yield
+
     @staticmethod
-    async def _fake_connect(
-        broker: StompBroker,
-        *args: Any,  # noqa: ANN401, ARG004
-        **kwargs: Any,  # noqa: ANN401, ARG004
-    ) -> None:
-        broker._connection = AsyncMock()  # noqa: SLF001
-        broker._producer = FakeStompProducer(broker)  # noqa: SLF001
+    async def _fake_connect(broker: StompBroker, *args: Any, **kwargs: Any) -> None: ...  # noqa: ANN401
 
 
 class FakeAckableMessageFrame(stompman.AckableMessageFrame):
@@ -63,7 +71,7 @@ class FakeStompProducer(StompProducer):
         correlation_id: str | None,
         headers: dict[str, str] | None,
     ) -> None:
-        body, content_type = encode_message(message)
+        body, content_type = encode_message(message, serializer=None)
         all_headers: MessageHeaders = (headers.copy() if headers else {}) | {  # type: ignore[assignment]
             "destination": destination,
             "message-id": str(uuid.uuid4()),
@@ -75,6 +83,6 @@ class FakeStompProducer(StompProducer):
             all_headers["content-type"] = content_type
         frame = FakeAckableMessageFrame(headers=all_headers, body=body, _subscription=mock.AsyncMock())
 
-        for handler in self.broker._subscribers.values():  # noqa: SLF001
-            if handler.destination == destination:
+        for handler in self.broker._subscribers:  # noqa: SLF001
+            if handler.config._outer_config.prefix + handler.config.destination == destination:  # noqa: SLF001
                 await handler.process_message(frame)

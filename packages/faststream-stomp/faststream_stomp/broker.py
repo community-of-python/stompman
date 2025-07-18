@@ -16,8 +16,11 @@ from faststream.specification.schema import BrokerSpec
 from typing_extensions import Doc
 
 from faststream_stomp.configs import StompBrokerConfig
-from faststream_stomp.publisher import StompPublishCommand
+from faststream_stomp.publisher import StompPublishCommand, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
+
+if typing.TYPE_CHECKING:
+    from faststream_stomp.subscriber import StompSubscriber
 
 
 class StompSecurity(BaseSecurity):
@@ -43,6 +46,9 @@ class StompBrokerSpec(BrokerSpec):
 
 
 class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, StompBrokerConfig]):
+    _subscribers: list["StompSubscriber"]  # type: ignore[assignment]
+    _publishers: list["StompPublisher"]  # type: ignore[assignment]
+
     def __init__(
         self,
         *,
