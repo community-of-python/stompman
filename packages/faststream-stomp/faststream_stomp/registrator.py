@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any, cast
 
 import stompman
@@ -6,15 +6,14 @@ from fast_depends.dependencies import Depends
 from faststream.broker.core.abc import ABCBroker
 from faststream.broker.types import CustomCallable, PublisherMiddleware, SubscriberMiddleware
 from faststream.broker.utils import default_filter
+from typing_extensions import override
 
 from faststream_stomp.publisher import StompPublisher
 from faststream_stomp.subscriber import StompSubscriber
 
 
 class StompRegistrator(ABCBroker[stompman.MessageFrame]):
-    _subscribers: Mapping[int, StompSubscriber]
-    _publishers: Mapping[int, StompPublisher]
-
+    @override
     def subscriber(  # type: ignore[override]
         self,
         destination: str,
@@ -57,12 +56,13 @@ class StompRegistrator(ABCBroker[stompman.MessageFrame]):
             middlewares_=middlewares,
         )
 
+    @override
     def publisher(  # type: ignore[override]
         self,
         destination: str,
         *,
         middlewares: Sequence[PublisherMiddleware] = (),
-        schema_: Any | None = None,  # noqa: ANN401
+        schema_: Any | None = None,
         title_: str | None = None,
         description_: str | None = None,
         include_in_schema: bool = True,

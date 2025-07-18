@@ -74,7 +74,7 @@ class BaseSubscription:
             )
 
     async def _ack(self, frame: MessageFrame) -> None:
-        if self._active_subscriptions.contains_by_id(self.id) and (ack_id := frame.headers["ack"]):
+        if self._active_subscriptions.contains_by_id(self.id) and (ack_id := frame.headers.get("ack")):
             await self._connection_manager.maybe_write_frame(
                 AckFrame(headers={"id": ack_id, "subscription": frame.headers["subscription"]})
             )

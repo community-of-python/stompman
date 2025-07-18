@@ -36,7 +36,7 @@ class ConnectionParameters:
         return unquote(self.passcode)
 
     @classmethod
-    def from_pydantic_multihost_hosts(cls, hosts: list[MultiHostHostLike]) -> list[Self]:  # noqa: C901
+    def from_pydantic_multihost_hosts(cls, hosts: list[MultiHostHostLike]) -> list[Self]:
         """Create connection parameters from `pydantic_code.MultiHostUrl.hosts()`.
 
         .. code-block:: python
@@ -76,9 +76,8 @@ class ConnectionParameters:
                     msg = "password is set, username must be set"
                     raise ValueError(msg)
             elif password is None:
-                if username is not None:
-                    msg = "username is set, password must be set"
-                    raise ValueError(msg)
+                msg = "username is set, password must be set"
+                raise ValueError(msg)
             else:
                 all_credentials.append((username, password))
 
