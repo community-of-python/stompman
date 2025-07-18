@@ -1,9 +1,9 @@
 import stompman
-from faststream.broker.message import StreamMessage
+from faststream._internal.basic_types import AnyDict
+from faststream.message import StreamMessage
 from faststream.opentelemetry import TelemetrySettingsProvider
 from faststream.opentelemetry.consts import MESSAGING_DESTINATION_PUBLISH_NAME
 from faststream.opentelemetry.middleware import TelemetryMiddleware
-from faststream.types import AnyDict
 from opentelemetry.metrics import Meter, MeterProvider
 from opentelemetry.semconv._incubating.attributes import messaging_attributes  # noqa: PLC2701
 from opentelemetry.semconv.trace import SpanAttributes

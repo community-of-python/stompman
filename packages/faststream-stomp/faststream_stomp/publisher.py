@@ -4,14 +4,13 @@ from itertools import chain
 from typing import Any, TypedDict, Unpack
 
 import stompman
-from faststream.asyncapi.schema import Channel, CorrelationId, Message, Operation
-from faststream.asyncapi.utils import resolve_payloads
-from faststream.broker.message import encode_message
-from faststream.broker.publisher.proto import ProducerProto
-from faststream.broker.publisher.usecase import PublisherUsecase
-from faststream.broker.types import AsyncCallable, BrokerMiddleware, PublisherMiddleware
+from faststream._internal.basic_types import AsyncCallable, BrokerMiddleware, PublisherMiddleware, SendableMessage
+from faststream._internal.broker.pub_base import BrokerPublishMixin
+from faststream._internal.producer import ProducerProto
 from faststream.exceptions import NOT_CONNECTED_YET
-from faststream.types import SendableMessage
+from faststream.message import encode_message
+from faststream.specification.asyncapi.utils import resolve_payloads
+from faststream.specification.asyncapi.v3_0_0.schema import Channel, CorrelationId, Message, Operation
 
 
 class StompProducerPublishKwargs(TypedDict):
@@ -41,7 +40,7 @@ class StompProducer(ProducerProto):
         raise NotImplementedError(msg)
 
 
-class StompPublisher(PublisherUsecase[stompman.MessageFrame]):
+class StompPublisher(BrokerPublishMixin[stompman.MessageFrame]):
     _producer: StompProducer | None
 
     def __init__(
