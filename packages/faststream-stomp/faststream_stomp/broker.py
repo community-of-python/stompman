@@ -1,22 +1,28 @@
 import asyncio
-import logging
 import types
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Unpack
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Annotated, Any, Unpack
 
 import anyio
 import stompman
-from fast_depends.dependencies import Depends
-from faststream.asyncapi.schema import Tag, TagDict
-from faststream.broker.core.usecase import BrokerUsecase
-from faststream.broker.types import BrokerMiddleware, CustomCallable
-from faststream.log.logging import get_broker_logger
+
+# from faststream._internal.basic_types import EMPTY, AnyDict, Decorator, LoggerProto, SendableMessage
+from faststream._internal.basic_types import AnyDict, SendableMessage
+from faststream._internal.broker.broker import BrokerUsecase
+from faststream._internal.broker.registrator import Registrator
+from faststream._internal.configs import BrokerConfig
 from faststream.security import BaseSecurity
-from faststream.types import EMPTY, AnyDict, Decorator, LoggerProto, SendableMessage
+from faststream.specification.schema import BrokerSpec
+from typing_extensions import Doc
 
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
 from faststream_stomp.subscriber import StompLogContext, StompSubscriber
+
+
+@dataclass(kw_only=True)
+class StompBrokerConfig(BrokerConfig): ...
 
 
 class StompSecurity(BaseSecurity):
@@ -31,16 +37,17 @@ class StompSecurity(BaseSecurity):
         return {"user-password": {"type": "userPassword"}}
 
 
-def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
-    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
-    task_exception = listen_task.exception()
-    if isinstance(task_exception, ExceptionGroup) and isinstance(
-        task_exception.exceptions[0], stompman.FailedAllConnectAttemptsError
-    ):
-        raise SystemExit(1)
+@dataclass(kw_only=True)
+class StompBrokerSpec(BrokerSpec):
+    url: Annotated[list[str], Doc("URLs of servers will be inferred from client if not specified")] = field(
+        default_factory=list
+    )
+    protocol: str | None = "STOMP"
+    protocol_version: str | None = "1.2"
+    security: BaseSecurity | None = field(default_factory=StompSecurity)
 
 
-class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client]):
+class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, StompBrokerConfig]):
     _subscribers: Mapping[int, StompSubscriber]
     _publishers: Mapping[int, StompPublisher]
     __max_msg_id_ln = 10
@@ -50,45 +57,18 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         self,
         client: stompman.Client,
         *,
-        decoder: CustomCallable | None = None,
-        parser: CustomCallable | None = None,
-        dependencies: Iterable[Depends] = (),
-        middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]] = (),
-        graceful_timeout: float | None = 15.0,
-        # Logging args
-        logger: LoggerProto | None = EMPTY,
-        log_level: int = logging.INFO,
-        # FastDepends args
-        apply_types: bool = True,
-        validate: bool = True,
-        _get_dependant: Callable[..., Any] | None = None,
-        _call_decorators: Iterable[Decorator] = (),
-        # AsyncAPI kwargs,
-        description: str | None = None,
-        tags: Iterable[Tag | TagDict] | None = None,
+        config: StompBrokerConfig,
+        specification: StompBrokerSpec,
+        routers: Sequence[Registrator[stompman.MessageFrame]],
     ) -> None:
+        specification.url = specification.url or [
+            f"{one_server.host}:{one_server.port}" for one_server in client.servers
+        ]
         super().__init__(
-            client=client,  # **connection_kwargs
-            decoder=decoder,
-            parser=parser,
-            dependencies=dependencies,
-            middlewares=middlewares,
-            graceful_timeout=graceful_timeout,
-            logger=logger,
-            log_level=log_level,
-            apply_types=apply_types,
-            validate=validate,
-            _get_dependant=_get_dependant,
-            _call_decorators=_call_decorators,
-            protocol="STOMP",
-            protocol_version="1.2",
-            description=description,
-            tags=tags,
-            asyncapi_url=[f"{one_server.host}:{one_server.port}" for one_server in client.servers],
-            security=StompSecurity(),
-            default_logger=get_broker_logger(
-                name="stomp", default_context={"channel": ""}, message_id_ln=self.__max_msg_id_ln
-            ),
+            config=config,
+            specification=specification,
+            routers=routers,
+            client=client,
         )
         self._attempted_to_connect = False
 
@@ -174,3 +154,12 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         headers: dict[str, str] | None = None,
     ) -> Any:  # noqa: ANN401
         return await super().request(msg, producer=self._producer, correlation_id=correlation_id, headers=headers)
+
+
+def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
+    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
+    task_exception = listen_task.exception()
+    if isinstance(task_exception, ExceptionGroup) and isinstance(
+        task_exception.exceptions[0], stompman.FailedAllConnectAttemptsError
+    ):
+        raise SystemExit(1)
