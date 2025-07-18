@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
-from typing import TypedDict
 
 import stompman
 from faststream._internal.configs import (
     BrokerConfig,
+    PublisherSpecificationConfig,
     PublisherUsecaseConfig,
     SubscriberSpecificationConfig,
     SubscriberUsecaseConfig,
@@ -49,13 +49,18 @@ class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseC
         return AckPolicy.MANUAL if self.ack_mode == "auto" else AckPolicy.NACK_ON_ERROR
 
 
-class StompPublishKwargs(TypedDict):
+@dataclass(kw_only=True)
+class StompBasePublisherConfig:
     destination: str
     correlation_id: str | None
     headers: dict[str, str] | None
 
 
 @dataclass(kw_only=True)
-class StompPublisherUsecaseConfig(PublisherUsecaseConfig):
+class StompPublisherSpecificationConfig(StompBasePublisherConfig, PublisherSpecificationConfig): ...
+
+
+@dataclass(kw_only=True)
+class StompPublisherUsecaseConfig(StompBasePublisherConfig, PublisherUsecaseConfig):
     _outer_config: StompBrokerConfig
-    publish_kwargs: StompPublishKwargs
+    publish_kwargs: StompBasePublisherConfig
