@@ -1,19 +1,22 @@
 import asyncio
 import types
+import typing
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated
 
 import anyio
 import stompman
 from faststream._internal.basic_types import AnyDict, SendableMessage
 from faststream._internal.broker.broker import BrokerUsecase
 from faststream._internal.broker.registrator import Registrator
+from faststream.response.publish_type import PublishType
 from faststream.security import BaseSecurity
 from faststream.specification.schema import BrokerSpec
 from typing_extensions import Doc
 
 from faststream_stomp.configs import StompBrokerConfig
+from faststream_stomp.publisher import StompPublishCommand
 from faststream_stomp.registrator import StompRegistrator
 
 
@@ -88,10 +91,6 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
 
         return False  # pragma: no cover
 
-    @property
-    def _subscriber_setup_extra(self) -> "AnyDict":
-        return {**super()._subscriber_setup_extra, "client": self._connection}
-
     async def publish(  # type: ignore[override]
         self,
         message: SendableMessage,
@@ -100,22 +99,31 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
-        await super().publish(
+        publish_command = StompPublishCommand(
             message,
-            producer=self._producer,
-            correlation_id=correlation_id,
+            _publish_type=PublishType.PUBLISH,
             destination=destination,
+            correlation_id=correlation_id,
             headers=headers,
         )
+        return typing.cast("None", self._basic_publish(publish_command, producer=self._producer))
 
     async def request(  # type: ignore[override]
         self,
-        msg: Any,  # noqa: ANN401
+        message: SendableMessage,
+        destination: str,
         *,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
-    ) -> Any:  # noqa: ANN401
-        return await super().request(msg, producer=self._producer, correlation_id=correlation_id, headers=headers)
+    ) -> None:
+        publish_command = StompPublishCommand(
+            message,
+            _publish_type=PublishType.REQUEST,
+            destination=destination,
+            correlation_id=correlation_id,
+            headers=headers,
+        )
+        return typing.cast("None", self._basic_request(publish_command, producer=self._producer))
 
 
 def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
