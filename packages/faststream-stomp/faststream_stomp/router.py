@@ -20,7 +20,7 @@ from faststream._internal.types import (
 
 from faststream_stomp.registrator import StompRegistrator
 
-
+# TODO: fix this containers to look be like actual interfaces
 class StompRoutePublisher(ArgsContainer):
     """Delayed StompPublisher registration object.
 
@@ -92,3 +92,4 @@ class StompRoute(SubscriberRoute):
 
 class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame, BrokerConfig]):
     """Includable to StompBroker router."""
+# TODO: make router have interface from previous version
