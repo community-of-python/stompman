@@ -2,7 +2,7 @@ import asyncio
 import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Unpack
+from typing import Annotated, Any
 
 import anyio
 import stompman
@@ -18,7 +18,7 @@ from typing_extensions import Doc
 
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
-from faststream_stomp.subscriber import StompLogContext, StompSubscriber
+from faststream_stomp.subscriber import StompSubscriber
 
 
 @dataclass(kw_only=True)
@@ -113,17 +113,6 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
                 await anyio.sleep(sleep_time)  # pragma: no cover
 
         return False  # pragma: no cover
-
-    def get_fmt(self) -> str:
-        # `StompLogContext`
-        return (
-            "%(asctime)s %(levelname)-8s - "
-            f"%(destination)-{self._max_channel_name}s | "
-            f"%(message_id)-{self.__max_msg_id_ln}s "
-            "- %(message)s"
-        )
-
-    def _setup_log_context(self, **log_context: Unpack[StompLogContext]) -> None: ...  # type: ignore[override]
 
     @property
     def _subscriber_setup_extra(self) -> "AnyDict":
