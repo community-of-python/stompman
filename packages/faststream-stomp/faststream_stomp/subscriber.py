@@ -1,5 +1,4 @@
 from collections.abc import AsyncIterator, Sequence
-from typing import TypedDict, cast
 
 import stompman
 from faststream._internal.endpoint.publisher.fake import FakePublisher
@@ -15,11 +14,6 @@ from faststream.specification.schema import (
 
 from faststream_stomp.broker import StompBrokerConfig
 from faststream_stomp.configs import StompSubscriberSpecificationConfig, StompSubscriberUsecaseConfig
-
-
-class StompLogContext(TypedDict):
-    destination: str
-    message_id: str
 
 
 class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
@@ -60,13 +54,12 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         )
 
     def get_log_context(self, message: StreamMessage[stompman.MessageFrame] | None) -> dict[str, str]:
-        log_context: StompLogContext = {
+        return {
             "destination": message.raw_message.headers["destination"]
             if message
             else self.config._outer_config.prefix + self.config.destination,
             "message_id": message.message_id if message else "",
         }
-        return cast("dict[str, str]", log_context)
 
 
 class StompSubscriberSpecification(SubscriberSpecification[StompBrokerConfig, StompSubscriberSpecificationConfig]):
