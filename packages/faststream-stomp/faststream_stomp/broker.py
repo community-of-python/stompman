@@ -42,9 +42,6 @@ class StompBrokerSpec(BrokerSpec):
 
 
 class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, StompBrokerConfig]):
-    _subscribers: Mapping[int, StompSubscriber]
-    _publishers: Mapping[int, StompPublisher]
-    __max_msg_id_ln = 10
     _max_channel_name = 4
 
     def __init__(
@@ -64,23 +61,15 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         )
         self._attempted_to_connect = False
 
-    async def start(self) -> None:
-        await super().start()
-
-        for handler in self._subscribers.values():
-            self._log(f"`{handler.call_name}` waiting for messages", extra=handler.get_log_context(None))
-            await handler.start()
-
     async def _connect(self, client: stompman.Client) -> stompman.Client:  # type: ignore[override]
         if self._attempted_to_connect:
             return client
         self._attempted_to_connect = True
-        self._producer = StompProducer(client)
         await client.__aenter__()
         client._listen_task.add_done_callback(_handle_listen_task_done)  # noqa: SLF001
         return client
 
-    async def _close(
+    async def stop(
         self,
         exc_type: type[BaseException] | None = None,
         exc_val: BaseException | None = None,
@@ -88,7 +77,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
     ) -> None:
         if self._connection:
             await self._connection.__aexit__(exc_type, exc_val, exc_tb)
-        return await super()._close(exc_type, exc_val, exc_tb)
+        return await super().stop(exc_type, exc_val, exc_tb)
 
     async def ping(self, timeout: float | None = None) -> bool:
         sleep_time = (timeout or 10) / 10
