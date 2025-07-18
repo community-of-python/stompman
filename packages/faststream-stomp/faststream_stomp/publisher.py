@@ -3,6 +3,8 @@ from functools import partial
 from itertools import chain
 from typing import Any, NoReturn
 
+from faststream_stomp.broker import StompBrokerConfig
+from faststream_stomp.configs import StompPublisherUsecaseConfig
 import stompman
 from faststream._internal.basic_types import SendableMessage
 from faststream._internal.broker.pub_base import BrokerPublishMixin
@@ -13,7 +15,7 @@ from faststream.message import encode_message
 from faststream.response.response import PublishCommand
 from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.asyncapi.v3_0_0.schema import Channel, CorrelationId, Message, Operation
-
+from faststream._internal.endpoint.publisher import PublisherSpecification
 
 class StompPublishCommand(PublishCommand):
     @classmethod
@@ -41,13 +43,15 @@ class StompProducer(ProducerProto[StompPublishCommand]):
 
     async def publish_batch(self, cmd: StompPublishCommand) -> NoReturn:
         raise NotImplementedError
-
+class StompPublisherSpecification(PublisherSpecification[StompBrokerConfig])
 
 class StompPublisher(BrokerPublishMixin[stompman.MessageFrame]):
     _producer: StompProducer | None
 
     def __init__(
         self,
+        config: StompPublisherUsecaseConfig,
+        specification: "PublisherSpecification[Any, Any]",
         destination: str,
         *,
         broker_middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]],

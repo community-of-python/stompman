@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
+from typing import TypedDict
 
 import stompman
 from faststream._internal.configs import (
+    BrokerConfig,
+    PublisherUsecaseConfig,
     SubscriberSpecificationConfig,
     SubscriberUsecaseConfig,
 )
@@ -10,8 +13,12 @@ from faststream._internal.utils.functions import to_async
 from faststream.message import decode_message
 from faststream.middlewares import AckPolicy
 
-from faststream_stomp.broker import StompBrokerConfig
 from faststream_stomp.message import StompStreamMessage
+
+
+@dataclass(kw_only=True)
+class StompBrokerConfig(BrokerConfig):
+    client: stompman.Client
 
 
 @dataclass(kw_only=True)
@@ -40,3 +47,15 @@ class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseC
     @property
     def ack_policy(self) -> AckPolicy:
         return AckPolicy.MANUAL if self.ack_mode == "auto" else AckPolicy.NACK_ON_ERROR
+
+
+class StompPublishKwargs(TypedDict):
+    destination: str
+    correlation_id: str | None
+    headers: dict[str, str] | None
+
+
+@dataclass(kw_only=True)
+class StompPublisherUsecaseConfig(PublisherUsecaseConfig):
+    _outer_config: StompBrokerConfig
+    publish_kwargs: StompPublishKwargs

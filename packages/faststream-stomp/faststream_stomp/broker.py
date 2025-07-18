@@ -6,24 +6,17 @@ from typing import Annotated, Any
 
 import anyio
 import stompman
-
-# from faststream._internal.basic_types import EMPTY, AnyDict, Decorator, LoggerProto, SendableMessage
 from faststream._internal.basic_types import AnyDict, SendableMessage
 from faststream._internal.broker.broker import BrokerUsecase
 from faststream._internal.broker.registrator import Registrator
-from faststream._internal.configs import BrokerConfig
 from faststream.security import BaseSecurity
 from faststream.specification.schema import BrokerSpec
 from typing_extensions import Doc
 
+from faststream_stomp.configs import StompBrokerConfig
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
 from faststream_stomp.subscriber import StompSubscriber
-
-
-@dataclass(kw_only=True)
-class StompBrokerConfig(BrokerConfig):
-    client: stompman.Client
 
 
 class StompSecurity(BaseSecurity):
