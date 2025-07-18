@@ -1,6 +1,6 @@
 import asyncio
 import types
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
@@ -14,9 +14,7 @@ from faststream.specification.schema import BrokerSpec
 from typing_extensions import Doc
 
 from faststream_stomp.configs import StompBrokerConfig
-from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
-from faststream_stomp.subscriber import StompSubscriber
 
 
 class StompSecurity(BaseSecurity):
@@ -42,8 +40,6 @@ class StompBrokerSpec(BrokerSpec):
 
 
 class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, StompBrokerConfig]):
-    _max_channel_name = 4
-
     def __init__(
         self,
         *,
@@ -54,11 +50,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         specification.url = specification.url or [
             f"{one_server.host}:{one_server.port}" for one_server in config.client.servers
         ]
-        super().__init__(
-            config=config,
-            specification=specification,
-            routers=routers,
-        )
+        super().__init__(config=config, specification=specification, routers=routers)
         self._attempted_to_connect = False
 
     async def _connect(self, client: stompman.Client) -> stompman.Client:  # type: ignore[override]
