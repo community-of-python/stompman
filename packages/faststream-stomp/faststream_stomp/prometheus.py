@@ -3,8 +3,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import stompman
+from faststream._internal.constants import EMPTY
 from faststream.prometheus import ConsumeAttrs, MetricsSettingsProvider
-from faststream.prometheus.middleware import BasePrometheusMiddleware
+from faststream.prometheus.middleware import PrometheusMiddleware
+
+from faststream_stomp.publisher import StompPublishCommand
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -12,12 +15,11 @@ if TYPE_CHECKING:
     from faststream.message import StreamMessage
     from prometheus_client import CollectorRegistry
 
-    from faststream_stomp.publisher import StompProducerPublishKwargs
 
 __all__ = ["StompMetricsSettingsProvider", "StompPrometheusMiddleware"]
 
 
-class StompMetricsSettingsProvider(MetricsSettingsProvider[stompman.MessageFrame]):
+class StompMetricsSettingsProvider(MetricsSettingsProvider[stompman.MessageFrame, StompPublishCommand]):
     messaging_system = "stomp"
 
     def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> ConsumeAttrs:  # noqa: PLR6301
@@ -27,11 +29,11 @@ class StompMetricsSettingsProvider(MetricsSettingsProvider[stompman.MessageFrame
             "messages_count": 1,
         }
 
-    def get_publish_destination_name_from_kwargs(self, kwargs: StompProducerPublishKwargs) -> str:  # type: ignore[override]  # noqa: PLR6301
-        return kwargs["destination"]
+    def get_publish_destination_name_from_cmd(self, cmd: StompPublishCommand) -> str:  # noqa: PLR6301
+        return cmd.destination
 
 
-class StompPrometheusMiddleware(BasePrometheusMiddleware):
+class StompPrometheusMiddleware(PrometheusMiddleware[StompPublishCommand, stompman.MessageFrame]):
     def __init__(
         self,
         *,
@@ -41,7 +43,7 @@ class StompPrometheusMiddleware(BasePrometheusMiddleware):
         received_messages_size_buckets: Sequence[float] | None = None,
     ) -> None:
         super().__init__(
-            settings_provider_factory=lambda _: StompMetricsSettingsProvider(),
+            settings_provider_factory=lambda _: StompMetricsSettingsProvider(),  # type: ignore[arg-type,return-value]
             registry=registry,
             app_name=app_name,
             metrics_prefix=metrics_prefix,

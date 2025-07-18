@@ -5,14 +5,14 @@ from faststream.opentelemetry import TelemetrySettingsProvider
 from faststream.opentelemetry.consts import MESSAGING_DESTINATION_PUBLISH_NAME
 from faststream.opentelemetry.middleware import TelemetryMiddleware
 from opentelemetry.metrics import Meter, MeterProvider
-from opentelemetry.semconv._incubating.attributes import messaging_attributes  # noqa: PLC2701
+from opentelemetry.semconv._incubating.attributes import messaging_attributes
 from opentelemetry.semconv.trace import SpanAttributes
 from opentelemetry.trace import TracerProvider
 
-from faststream_stomp.publisher import StompProducerPublishKwargs
+from faststream_stomp.publisher import StompPublishCommand
 
 
-class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageFrame]):
+class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageFrame, StompPublishCommand]):
     messaging_system = "stomp"
 
     def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> "AnyDict":
@@ -27,17 +27,17 @@ class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageF
     def get_consume_destination_name(self, msg: StreamMessage[stompman.MessageFrame]) -> str:  # noqa: PLR6301
         return msg.raw_message.headers["destination"]
 
-    def get_publish_attrs_from_kwargs(self, kwargs: StompProducerPublishKwargs) -> AnyDict:  # type: ignore[override]
+    def get_publish_attrs_from_cmd(self, cmd: StompPublishCommand) -> AnyDict:
         publish_attrs = {
             messaging_attributes.MESSAGING_SYSTEM: self.messaging_system,
-            messaging_attributes.MESSAGING_DESTINATION_NAME: kwargs["destination"],
+            messaging_attributes.MESSAGING_DESTINATION_NAME: cmd.destination,
         }
-        if kwargs["correlation_id"]:
-            publish_attrs[messaging_attributes.MESSAGING_MESSAGE_CONVERSATION_ID] = kwargs["correlation_id"]
+        if cmd.correlation_id:
+            publish_attrs[messaging_attributes.MESSAGING_MESSAGE_CONVERSATION_ID] = cmd.correlation_id
         return publish_attrs
 
-    def get_publish_destination_name(self, kwargs: StompProducerPublishKwargs) -> str:  # type: ignore[override]  # noqa: PLR6301
-        return kwargs["destination"]
+    def get_publish_destination_name(self, cmd: StompPublishCommand) -> str:  # noqa: PLR6301
+        return cmd.destination
 
 
 class StompTelemetryMiddleware(TelemetryMiddleware):
@@ -49,7 +49,7 @@ class StompTelemetryMiddleware(TelemetryMiddleware):
         meter: Meter | None = None,
     ) -> None:
         super().__init__(
-            settings_provider_factory=lambda _: StompTelemetrySettingsProvider(),
+            settings_provider_factory=lambda _: StompTelemetrySettingsProvider(),  # type: ignore[arg-type,return-value]
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             meter=meter,
