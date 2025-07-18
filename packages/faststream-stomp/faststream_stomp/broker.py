@@ -22,7 +22,8 @@ from faststream_stomp.subscriber import StompLogContext, StompSubscriber
 
 
 @dataclass(kw_only=True)
-class StompBrokerConfig(BrokerConfig): ...
+class StompBrokerConfig(BrokerConfig):
+    client: stompman.Client
 
 
 class StompSecurity(BaseSecurity):
@@ -55,20 +56,18 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
 
     def __init__(
         self,
-        client: stompman.Client,
         *,
         config: StompBrokerConfig,
         specification: StompBrokerSpec,
         routers: Sequence[Registrator[stompman.MessageFrame]],
     ) -> None:
         specification.url = specification.url or [
-            f"{one_server.host}:{one_server.port}" for one_server in client.servers
+            f"{one_server.host}:{one_server.port}" for one_server in config.client.servers
         ]
         super().__init__(
             config=config,
             specification=specification,
             routers=routers,
-            client=client,
         )
         self._attempted_to_connect = False
 

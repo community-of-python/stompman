@@ -3,12 +3,14 @@ from dataclasses import dataclass, field
 import stompman
 from faststream._internal.configs import (
     SubscriberSpecificationConfig,
+    SubscriberUsecaseConfig,
 )
 from faststream._internal.types import AsyncCallable
 from faststream._internal.utils.functions import to_async
 from faststream.message import decode_message
 from faststream.middlewares import AckPolicy
 
+from faststream_stomp.broker import StompBrokerConfig
 from faststream_stomp.message import StompStreamMessage
 
 
@@ -30,7 +32,8 @@ class StompSubscriberSpecificationConfig(StompBaseSubscriberConfig, SubscriberSp
 
 
 @dataclass(kw_only=True)
-class StompSubscriberConfig(StompBaseSubscriberConfig):
+class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseConfig):
+    _outer_config: StompBrokerConfig
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
 
