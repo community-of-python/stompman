@@ -2,10 +2,21 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
 import stompman
-from fast_depends.dependencies import Depends
-from faststream.broker.router import ArgsContainer, BrokerRouter, SubscriberRoute
-from faststream.broker.types import BrokerMiddleware, CustomCallable, PublisherMiddleware, SubscriberMiddleware
-from faststream.types import SendableMessage
+from fast_depends.dependencies import Dependant
+from faststream._internal.basic_types import SendableMessage
+from faststream._internal.broker.router import (
+    ArgsContainer,
+    BrokerRouter,
+    SubscriberRoute,
+)
+from faststream._internal.configs import (
+    BrokerConfig,
+)
+from faststream._internal.types import (
+    CustomCallable,
+    PublisherMiddleware,
+    SubscriberMiddleware,
+)
 
 from faststream_stomp.registrator import StompRegistrator
 
@@ -51,7 +62,7 @@ class StompRoute(SubscriberRoute):
         headers: dict[str, str] | None = None,
         # other args
         publishers: Iterable[StompRoutePublisher] = (),
-        dependencies: Iterable[Depends] = (),
+        dependencies: Iterable[Dependant] = (),
         no_ack: bool = False,
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
@@ -79,26 +90,5 @@ class StompRoute(SubscriberRoute):
         )
 
 
-class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame]):
+class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame, BrokerConfig]):
     """Includable to StompBroker router."""
-
-    def __init__(
-        self,
-        prefix: str = "",
-        handlers: Iterable[StompRoute] = (),
-        *,
-        dependencies: Iterable[Depends] = (),
-        middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]] = (),
-        parser: CustomCallable | None = None,
-        decoder: CustomCallable | None = None,
-        include_in_schema: bool | None = None,
-    ) -> None:
-        super().__init__(
-            handlers=handlers,
-            prefix=prefix,
-            dependencies=dependencies,
-            middlewares=middlewares,
-            parser=parser,
-            decoder=decoder,
-            include_in_schema=include_in_schema,
-        )
