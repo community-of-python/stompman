@@ -58,7 +58,6 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         # Logging args
         logger: LoggerProto | None = EMPTY,
         log_level: int = logging.INFO,
-        log_fmt: str | None = None,
         # FastDepends args
         apply_types: bool = True,
         validate: bool = True,
@@ -77,7 +76,6 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             graceful_timeout=graceful_timeout,
             logger=logger,
             log_level=log_level,
-            log_fmt=log_fmt,
             apply_types=apply_types,
             validate=validate,
             _get_dependant=_get_dependant,

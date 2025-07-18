@@ -112,7 +112,7 @@ async def test_subscriber_lifespan(faker: faker.Faker, broker: faststream_stomp.
     def _() -> None: ...
 
     await broker.start()
-    await broker.close()
+    await broker.stop()
 
 
 class TestPing:
