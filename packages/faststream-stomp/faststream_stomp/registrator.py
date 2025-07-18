@@ -2,7 +2,7 @@ from collections.abc import Iterable
 from typing import Any
 
 import stompman
-from fast_depends.dependencies import Depends
+from fast_depends.dependencies import Dependant
 from faststream._internal.broker.registrator import Registrator
 from faststream._internal.endpoint.subscriber.call_item import CallsCollection
 from faststream._internal.types import CustomCallable
@@ -28,7 +28,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
         ack_mode: stompman.AckMode = "client-individual",
         headers: dict[str, str] | None = None,
         # other args
-        dependencies: Iterable[Depends] = (),
+        dependencies: Iterable[Dependant] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
         title: str | None = None,
