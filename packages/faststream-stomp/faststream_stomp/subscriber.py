@@ -95,10 +95,10 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
             headers=self.headers,
         )
 
-    async def close(self) -> None:
+    async def stop(self) -> None:
         if self._subscription:
             await self._subscription.unsubscribe()
-        await super().close()
+        await super().stop()
 
     async def get_one(self, *, timeout: float = 5) -> None: ...
 
