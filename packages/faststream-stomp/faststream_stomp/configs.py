@@ -52,8 +52,6 @@ class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseC
 @dataclass(kw_only=True)
 class StompBasePublisherConfig:
     destination: str
-    correlation_id: str | None
-    headers: dict[str, str] | None
 
 
 @dataclass(kw_only=True)
@@ -63,4 +61,3 @@ class StompPublisherSpecificationConfig(StompBasePublisherConfig, PublisherSpeci
 @dataclass(kw_only=True)
 class StompPublisherUsecaseConfig(StompBasePublisherConfig, PublisherUsecaseConfig):
     _outer_config: StompBrokerConfig
-    publish_kwargs: StompBasePublisherConfig

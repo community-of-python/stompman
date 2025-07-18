@@ -5,7 +5,7 @@ import stompman
 from faststream._internal.basic_types import SendableMessage
 from faststream._internal.endpoint.publisher import PublisherSpecification, PublisherUsecase
 from faststream._internal.producer import ProducerProto
-from faststream._internal.types import AsyncCallable
+from faststream._internal.types import AsyncCallable, PublisherMiddleware
 from faststream.message import encode_message
 from faststream.response.publish_type import PublishType
 from faststream.response.response import PublishCommand
@@ -71,6 +71,18 @@ class StompPublisher(PublisherUsecase):
     def __init__(self, config: StompPublisherUsecaseConfig, specification: StompPublisherSpecification) -> None:
         self.config = config
         super().__init__(config=config, specification=cast("PublisherSpecification", specification))
+
+    async def _publish(
+        self, cmd: PublishCommand, *, _extra_middlewares: typing.Iterable[PublisherMiddleware[PublishCommand]]
+    ) -> None:
+        publish_command = StompPublishCommand.from_cmd(cmd)
+        publish_command.destination = self.config._outer_config.prefix + self.config.destination
+        return typing.cast(
+            "None",
+            await self._basic_publish(
+                publish_command, producer=self.config._outer_config.producer, _extra_middlewares=_extra_middlewares
+            ),
+        )
 
     async def publish(
         self, message: SendableMessage, *, correlation_id: str | None = None, headers: dict[str, str] | None = None

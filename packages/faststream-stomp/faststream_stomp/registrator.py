@@ -1,15 +1,21 @@
-from collections.abc import Iterable, Sequence
-from typing import Any, cast
+from collections.abc import Iterable
+from typing import Any
 
 import stompman
 from fast_depends.dependencies import Depends
 from faststream._internal.broker.registrator import Registrator
 from faststream._internal.endpoint.subscriber.call_item import CallsCollection
-from faststream._internal.types import CustomCallable, PublisherMiddleware
+from faststream._internal.types import CustomCallable
 from typing_extensions import override
 
-from faststream_stomp.configs import StompBrokerConfig, StompSubscriberSpecificationConfig, StompSubscriberUsecaseConfig
-from faststream_stomp.publisher import StompPublisher
+from faststream_stomp.configs import (
+    StompBrokerConfig,
+    StompPublisherSpecificationConfig,
+    StompPublisherUsecaseConfig,
+    StompSubscriberSpecificationConfig,
+    StompSubscriberUsecaseConfig,
+)
+from faststream_stomp.publisher import StompPublisher, StompPublisherSpecification
 from faststream_stomp.subscriber import StompSubscriber, StompSubscriberSpecification
 
 
@@ -29,6 +35,9 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
         description: str | None = None,
         include_in_schema: bool = True,
     ) -> StompSubscriber:
+        usecase_config = StompSubscriberUsecaseConfig(
+            _outer_config=self.config.broker_config, destination=destination, ack_mode=ack_mode, headers=headers
+        )
         calls = CallsCollection[stompman.MessageFrame]()
         specification = StompSubscriberSpecification(
             _outer_config=self.config.broker_config,
@@ -41,9 +50,6 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
                 headers=headers,
             ),
             calls=calls,
-        )
-        usecase_config = StompSubscriberUsecaseConfig(
-            _outer_config=self.config.broker_config, destination=destination, ack_mode=ack_mode, headers=headers
         )
         subscriber = StompSubscriber(config=usecase_config, specification=specification, calls=calls)
 
@@ -60,23 +66,24 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
         self,
         destination: str,
         *,
-        middlewares: Sequence[PublisherMiddleware] = (),
-        schema_: Any | None = None,
-        title_: str | None = None,
-        description_: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        schema: Any | None = None,
         include_in_schema: bool = True,
     ) -> StompPublisher:
-        return cast(
-            "StompPublisher",
-            super().publisher(
-                StompPublisher(
-                    destination,
-                    broker_middlewares=self._middlewares,
-                    middlewares=middlewares,
-                    schema_=schema_,
-                    title_=title_,
-                    description_=description_,
-                    include_in_schema=include_in_schema,
-                )
+        usecase_config = StompPublisherUsecaseConfig(
+            _outer_config=self.config.broker_config, middlewares=(), destination=destination
+        )
+        specification = StompPublisherSpecification(
+            _outer_config=self.config.broker_config,
+            specification_config=StompPublisherSpecificationConfig(
+                title_=title,
+                description_=description,
+                schema_=schema,
+                include_in_schema=include_in_schema,
+                destination=destination,
             ),
         )
+        publisher = StompPublisher(config=usecase_config, specification=specification)
+        super().publisher(publisher)
+        return publisher
