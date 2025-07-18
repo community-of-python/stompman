@@ -5,14 +5,20 @@ import stompman
 from fast_depends.dependencies import Dependant
 from faststream._internal.basic_types import AnyDict, Decorator, LoggerProto
 from faststream._internal.endpoint.publisher.fake import FakePublisher
-from faststream._internal.endpoint.subscriber import SubscriberUsecase
+from faststream._internal.endpoint.subscriber import SubscriberSpecification, SubscriberUsecase
 from faststream._internal.producer import ProducerProto
 from faststream._internal.types import AsyncCallable, BrokerMiddleware, CustomCallable
 from faststream._internal.utils.functions import to_async
 from faststream.message import StreamMessage, decode_message
 from faststream.specification.asyncapi.utils import resolve_payloads
-from faststream.specification.asyncapi.v3_0_0.schema import Channel, CorrelationId, Message, Operation
+from faststream.specification.schema import (
+    Message,
+    Operation,
+    SubscriberSpec,
+)
 
+from faststream_stomp.broker import StompBrokerConfig
+from faststream_stomp.configs import StompSubscriberConfig, StompSubscriberSpecificationConfig
 from faststream_stomp.message import StompStreamMessage
 
 
@@ -25,9 +31,9 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
     def __init__(
         self,
         *,
-        destination: str,
-        ack_mode: stompman.AckMode,
-        headers: dict[str, str] | None,
+        config: StompSubscriberConfig,
+        # specification: "SubscriberSpecification",
+        # calls: "CallsCollection[stompman.MessageFrame]",
         retry: bool | int,
         no_ack: bool,
         broker_dependencies: Iterable[Dependant],
@@ -112,31 +118,27 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
     def __hash__(self) -> int:
         return hash(self.destination)
 
-    def add_prefix(self, prefix: str) -> None:
-        self.destination = f"{prefix}{self.destination}"
-
-    def get_name(self) -> str:
-        return f"{self.destination}:{self.call_name}"
-
-    def get_schema(self) -> dict[str, Channel]:
-        payloads = self.get_payloads()
-
-        return {
-            self.name: Channel(
-                description=self.description,
-                subscribe=Operation(
-                    message=Message(
-                        title=f"{self.name}:Message",
-                        payload=resolve_payloads(payloads),
-                        correlationId=CorrelationId(location="$message.header#/correlation_id"),
-                    ),
-                ),
-            )
-        }
-
     def get_log_context(self, message: StreamMessage[stompman.MessageFrame] | None) -> dict[str, str]:
         log_context: StompLogContext = {
             "destination": message.raw_message.headers["destination"] if message else self.destination,
             "message_id": message.message_id if message else "",
         }
         return cast("dict[str, str]", log_context)
+
+
+class StompSubscriberSpecification(SubscriberSpecification[StompBrokerConfig, StompSubscriberSpecificationConfig]):
+    @property
+    def name(self) -> str:
+        return f"{self._outer_config.prefix}{self.config.destination}:{self.call_name}"
+
+    def get_schema(self) -> dict[str, SubscriberSpec]:
+        return {
+            self.name: SubscriberSpec(
+                description=self.description,
+                operation=Operation(
+                    message=Message(title=f"{self.name}:Message", payload=resolve_payloads(self.get_payloads())),
+                    bindings=None,
+                ),
+                bindings=None,
+            )
+        }
