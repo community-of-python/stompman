@@ -1,7 +1,7 @@
 from typing import Self, cast
 
 import stompman
-from faststream.broker.message import StreamMessage, gen_cor_id
+from faststream.message import StreamMessage, gen_cor_id
 
 
 class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
