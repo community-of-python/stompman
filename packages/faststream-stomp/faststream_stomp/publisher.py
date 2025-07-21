@@ -64,7 +64,7 @@ class StompPublisherSpecification(PublisherSpecification[BrokerConfig, StompPubl
 class StompPublisher(PublisherUsecase):
     def __init__(self, config: StompPublisherUsecaseConfig, specification: StompPublisherSpecification) -> None:
         self.config = config
-        super().__init__(config=config, specification=cast("PublisherSpecification", specification))
+        super().__init__(config=config, specification=specification) # type: ignore[arg-type]
 
     async def _publish(
         self, cmd: PublishCommand, *, _extra_middlewares: typing.Iterable[PublisherMiddleware[PublishCommand]]

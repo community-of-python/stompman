@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, cast
+from typing import Any
 
 import stompman
 from faststream import PublishCommand, StreamMessage
@@ -59,11 +59,7 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
     ) -> None:
         self.config = config
         self._subscription: stompman.ManualAckSubscription | None = None
-        super().__init__(
-            config=config,
-            specification=cast("SubscriberSpecification", specification),
-            calls=calls,
-        )
+        super().__init__(config=config, specification=specification, calls=calls)  # type: ignore[arg-type]
 
     async def start(self) -> None:
         await super().start()

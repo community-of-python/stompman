@@ -3,7 +3,7 @@ import logging
 import types
 import typing
 from collections.abc import Iterable, Sequence
-from typing import Any, cast
+from typing import Any
 
 import anyio
 import stompman
@@ -104,7 +104,7 @@ class StompBroker(
         tags: Iterable[Tag | TagDict] = (),
     ) -> None:
         broker_config = BrokerConfigWithStompClient(
-            broker_middlewares=cast("Sequence[BrokerMiddleware]", middlewares),
+            broker_middlewares=middlewares,  # type: ignore[arg-type]
             broker_parser=parser,
             broker_decoder=decoder,
             logger=make_logger_state(

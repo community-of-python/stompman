@@ -43,7 +43,6 @@ class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
         )
 
 
-# TODO: remove casts
 class StompPublishCommand(PublishCommand):
     @classmethod
     def from_cmd(cls, cmd: PublishCommand) -> Self:
