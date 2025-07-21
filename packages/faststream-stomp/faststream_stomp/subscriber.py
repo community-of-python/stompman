@@ -7,7 +7,6 @@ from faststream._internal.endpoint.subscriber import SubscriberSpecification, Su
 from faststream._internal.endpoint.subscriber.call_item import CallsCollection
 from faststream._internal.producer import ProducerProto
 from faststream.message import StreamMessage
-from faststream.rabbit.response import RabbitPublishCommand
 from faststream.response.response import PublishCommand
 from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.schema import (
@@ -43,9 +42,9 @@ class StompFakePublisher(FakePublisher):
         super().__init__(producer=producer)
         self.reply_to = reply_to
 
-    def patch_command(self, cmd: PublishCommand | StompPublishCommand) -> "RabbitPublishCommand":
+    def patch_command(self, cmd: PublishCommand | StompPublishCommand) -> StompPublishCommand:
         cmd = super().patch_command(cmd)
-        real_cmd = RabbitPublishCommand.from_cmd(cmd)
+        real_cmd = StompPublishCommand.from_cmd(cmd)
         real_cmd.destination = self.reply_to
         return real_cmd
 

@@ -51,7 +51,8 @@ ignore = [
     "ISC001",
     "PLC2801",
     "PLR0913",
-    "PLC2701" # TODO: remove
+    "PLC2701", # TODO: remove
+    "SLF001" # TODO: remove
 ]
 extend-per-file-ignores = { "*/test_*/*" = ["S101", "SLF001", "ARG", "PLR6301"] }
 

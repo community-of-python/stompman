@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from stompman.frames import MessageHeaders
 
 
-class TestStompBroker(TestBroker[StompBroker]):  # type: ignore[type-var]
+class TestStompBroker(TestBroker[StompBroker]):
     @staticmethod
     def create_publisher_fake_subscriber(
         broker: StompBroker, publisher: StompPublisher
