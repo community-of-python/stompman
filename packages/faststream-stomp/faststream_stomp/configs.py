@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Self, cast
 
 import stompman
 from faststream._internal.configs import (
@@ -10,12 +11,43 @@ from faststream._internal.configs import (
 )
 from faststream._internal.types import AsyncCallable
 from faststream._internal.utils.functions import to_async
-from faststream.message import decode_message
+from faststream.message import StreamMessage, decode_message, gen_cor_id
 from faststream.middlewares import AckPolicy
+from faststream.response.response import PublishCommand
 
-from faststream_stomp.message import StompStreamMessage
 
-# TODO: put more here
+class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
+    async def ack(self) -> None:
+        if not self.committed:
+            await self.raw_message.ack()
+        return await super().ack()
+
+    async def nack(self) -> None:
+        if not self.committed:
+            await self.raw_message.nack()
+        return await super().nack()
+
+    async def reject(self) -> None:
+        if not self.committed:
+            await self.raw_message.nack()
+        return await super().reject()
+
+    @classmethod
+    async def from_frame(cls, message: stompman.AckableMessageFrame) -> Self:
+        return cls(
+            raw_message=message,
+            body=message.body,
+            headers=cast("dict[str, str]", message.headers),
+            content_type=message.headers.get("content-type"),
+            message_id=message.headers["message-id"],
+            correlation_id=cast("str", message.headers.get("correlation-id", gen_cor_id())),
+        )
+
+
+class StompPublishCommand(PublishCommand):
+    @classmethod
+    def from_cmd(cls, cmd: PublishCommand) -> Self:
+        return cmd  # type: ignore[return-value]
 
 
 @dataclass(kw_only=True)

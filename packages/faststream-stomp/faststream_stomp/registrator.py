@@ -10,12 +10,13 @@ from typing_extensions import override
 
 from faststream_stomp.configs import (
     StompBrokerConfig,
+    StompPublishCommand,
     StompPublisherSpecificationConfig,
     StompPublisherUsecaseConfig,
     StompSubscriberSpecificationConfig,
     StompSubscriberUsecaseConfig,
 )
-from faststream_stomp.publisher import StompPublishCommand, StompPublisher, StompPublisherSpecification
+from faststream_stomp.publisher import StompPublisher, StompPublisherSpecification
 from faststream_stomp.subscriber import StompSubscriber, StompSubscriberSpecification
 
 

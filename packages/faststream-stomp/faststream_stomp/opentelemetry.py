@@ -9,7 +9,7 @@ from opentelemetry.semconv._incubating.attributes import messaging_attributes
 from opentelemetry.semconv.trace import SpanAttributes
 from opentelemetry.trace import TracerProvider
 
-from faststream_stomp.publisher import StompPublishCommand
+from faststream_stomp.configs import StompPublishCommand
 
 
 class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageFrame, StompPublishCommand]):

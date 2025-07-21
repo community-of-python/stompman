@@ -16,8 +16,12 @@ from faststream.specification.schema import (
     SubscriberSpec,
 )
 
-from faststream_stomp.configs import StompBrokerConfig, StompSubscriberSpecificationConfig, StompSubscriberUsecaseConfig
-from faststream_stomp.publisher import StompPublishCommand
+from faststream_stomp.configs import (
+    StompBrokerConfig,
+    StompPublishCommand,
+    StompSubscriberSpecificationConfig,
+    StompSubscriberUsecaseConfig,
+)
 
 
 class StompSubscriberSpecification(SubscriberSpecification[StompBrokerConfig, StompSubscriberSpecificationConfig]):

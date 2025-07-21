@@ -35,8 +35,8 @@ from faststream.security import BaseSecurity
 from faststream.specification.schema import BrokerSpec
 from faststream.specification.schema.extra import Tag, TagDict
 
-from faststream_stomp.configs import StompBrokerConfig
-from faststream_stomp.publisher import StompProducer, StompPublishCommand, StompPublisher
+from faststream_stomp.configs import StompBrokerConfig, StompPublishCommand
+from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
 from faststream_stomp.subscriber import StompSubscriber
 

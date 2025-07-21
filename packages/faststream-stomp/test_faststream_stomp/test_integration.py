@@ -13,7 +13,7 @@ from faststream import BaseMiddleware, Context, FastStream
 from faststream.asgi import AsgiFastStream
 from faststream.exceptions import AckMessage, NackMessage, RejectMessage
 from faststream.message import gen_cor_id
-from faststream_stomp.message import StompStreamMessage
+from faststream_stomp.configs import StompStreamMessage
 from faststream_stomp.router import StompRoutePublisher
 
 if TYPE_CHECKING:

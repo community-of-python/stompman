@@ -7,16 +7,13 @@ from faststream._internal.constants import EMPTY
 from faststream.prometheus import ConsumeAttrs, MetricsSettingsProvider
 from faststream.prometheus.middleware import PrometheusMiddleware
 
-from faststream_stomp.publisher import StompPublishCommand
+from faststream_stomp.configs import StompPublishCommand
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from faststream.message import StreamMessage
     from prometheus_client import CollectorRegistry
-
-
-__all__ = ["StompMetricsSettingsProvider", "StompPrometheusMiddleware"]
 
 
 class StompMetricsSettingsProvider(MetricsSettingsProvider[stompman.MessageFrame, StompPublishCommand]):

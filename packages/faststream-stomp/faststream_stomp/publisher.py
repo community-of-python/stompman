@@ -1,5 +1,5 @@
 import typing
-from typing import Any, NoReturn, Self, cast
+from typing import Any, NoReturn, cast
 
 import stompman
 from faststream._internal.basic_types import SendableMessage
@@ -16,13 +16,12 @@ from faststream.specification.schema import (
     PublisherSpec,
 )
 
-from faststream_stomp.configs import StompBrokerConfig, StompPublisherSpecificationConfig, StompPublisherUsecaseConfig
-
-
-class StompPublishCommand(PublishCommand):
-    @classmethod
-    def from_cmd(cls, cmd: PublishCommand) -> Self:
-        return cmd  # type: ignore[return-value]
+from faststream_stomp.configs import (
+    StompBrokerConfig,
+    StompPublishCommand,
+    StompPublisherSpecificationConfig,
+    StompPublisherUsecaseConfig,
+)
 
 
 class StompProducer(ProducerProto[StompPublishCommand]):
