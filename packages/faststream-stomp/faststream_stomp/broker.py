@@ -19,7 +19,13 @@ from faststream._internal.configs import (
     BrokerConfig,
 )
 from faststream._internal.constants import EMPTY
+from faststream._internal.context import ContextRepo
 from faststream._internal.di import FastDependsConfig
+from faststream._internal.logger import (
+    DefaultLoggerStorage,
+    make_logger_state,
+)
+from faststream._internal.logger.logging import get_broker_logger
 from faststream._internal.types import (
     BrokerMiddleware,
     CustomCallable,
@@ -49,6 +55,30 @@ class StompSecurity(BaseSecurity):
         return {"user-password": {"type": "userPassword"}}
 
 
+class StompParamsStorage(DefaultLoggerStorage):
+    __max_msg_id_ln = 10
+    _max_channel_name = 4
+
+    def get_logger(self, *, context: ContextRepo) -> LoggerProto:
+        if logger := self._get_logger_ref():
+            return logger
+        logger = get_broker_logger(
+            name="stomp",
+            default_context={"destination": "", "message_id": ""},
+            message_id_ln=self.__max_msg_id_ln,
+            fmt=(
+                "%(asctime)s %(levelname)-8s - "
+                f"%(destination)-{self._max_channel_name}s | "
+                f"%(message_id)-{self.__max_msg_id_ln}s "
+                "- %(message)s"
+            ),
+            context=context,
+            log_level=self.logger_log_level,
+        )
+        self._logger_ref.add(logger)
+        return logger
+
+
 class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, BrokerConfig]):
     _subscribers: list["StompSubscriber"]  # type: ignore[assignment]
     _publishers: list["StompPublisher"]  # type: ignore[assignment]
@@ -74,7 +104,11 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             broker_middlewares=cast("Sequence[BrokerMiddleware]", middlewares),
             broker_parser=parser,
             broker_decoder=decoder,
-            logger=logger,  # TODO
+            logger=make_logger_state(
+                logger=logger,
+                log_level=log_level,
+                default_storage_cls=StompParamsStorage,
+            ),
             fd_config=FastDependsConfig(use_fastdepends=apply_types),
             broker_dependencies=dependencies,
             graceful_timeout=graceful_timeout,
