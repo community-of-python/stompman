@@ -1,6 +1,6 @@
 import stompman
+from faststream import StreamMessage
 from faststream._internal.basic_types import AnyDict
-from faststream.message import StreamMessage
 from faststream.opentelemetry import TelemetrySettingsProvider
 from faststream.opentelemetry.consts import MESSAGING_DESTINATION_PUBLISH_NAME
 from faststream.opentelemetry.middleware import TelemetryMiddleware

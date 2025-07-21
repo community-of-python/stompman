@@ -12,7 +12,7 @@ from faststream_stomp.models import StompPublishCommand
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from faststream.message import StreamMessage
+    from faststream import StreamMessage
     from prometheus_client import CollectorRegistry
 
 

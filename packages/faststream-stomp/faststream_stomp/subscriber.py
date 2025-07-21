@@ -3,18 +3,13 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any, cast
 
 import stompman
+from faststream import PublishCommand, StreamMessage
 from faststream._internal.endpoint.publisher.fake import FakePublisher
 from faststream._internal.endpoint.subscriber import SubscriberSpecification, SubscriberUsecase
 from faststream._internal.endpoint.subscriber.call_item import CallsCollection
 from faststream._internal.producer import ProducerProto
-from faststream.message import StreamMessage
-from faststream.response.response import PublishCommand
 from faststream.specification.asyncapi.utils import resolve_payloads
-from faststream.specification.schema import (
-    Message,
-    Operation,
-    SubscriberSpec,
-)
+from faststream.specification.schema import Message, Operation, SubscriberSpec
 
 from faststream_stomp.models import (
     StompBrokerConfig,

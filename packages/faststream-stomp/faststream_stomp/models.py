@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Self, cast
 
 import stompman
+from faststream import AckPolicy, PublishCommand, StreamMessage
 from faststream._internal.configs import (
     BrokerConfig,
     PublisherSpecificationConfig,
@@ -11,9 +12,7 @@ from faststream._internal.configs import (
 )
 from faststream._internal.types import AsyncCallable
 from faststream._internal.utils.functions import to_async
-from faststream.message import StreamMessage, decode_message, gen_cor_id
-from faststream.middlewares import AckPolicy
-from faststream.response.response import PublishCommand
+from faststream.message import decode_message, gen_cor_id
 
 
 class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
