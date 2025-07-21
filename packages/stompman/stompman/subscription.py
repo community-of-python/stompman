@@ -112,10 +112,10 @@ class AckableMessageFrame(MessageFrame):
     _subscription: ManualAckSubscription
 
     async def ack(self) -> None:
-        await self._subscription._ack(self)  # noqa: SLF001
+        await self._subscription._ack(self)
 
     async def nack(self) -> None:
-        await self._subscription._nack(self)  # noqa: SLF001
+        await self._subscription._nack(self)
 
 
 def _make_subscription_id() -> str:
