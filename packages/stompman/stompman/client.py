@@ -49,8 +49,8 @@ class Client:
     _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
-    _listen_task: asyncio.Task[None] = field(init=False)
-    _task_group: asyncio.TaskGroup = field(init=False)
+    _listen_task: asyncio.Task[None] = field(init=False, repr=False)
+    _task_group: asyncio.TaskGroup = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
@@ -98,7 +98,7 @@ class Client:
                     case MessageFrame():
                         if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
                             task_group.create_task(
-                                subscription._run_handler(frame=frame)  # noqa: SLF001
+                                subscription._run_handler(frame=frame)
                                 if isinstance(subscription, AutoAckSubscription)
                                 else subscription.handler(
                                     AckableMessageFrame(
@@ -159,7 +159,7 @@ class Client:
             _connection_manager=self._connection_manager,
             _active_subscriptions=self._active_subscriptions,
         )
-        await subscription._subscribe()  # noqa: SLF001
+        await subscription._subscribe()
         return subscription
 
     async def subscribe_with_manual_ack(
@@ -178,10 +178,10 @@ class Client:
             _connection_manager=self._connection_manager,
             _active_subscriptions=self._active_subscriptions,
         )
-        await subscription._subscribe()  # noqa: SLF001
+        await subscription._subscribe()
         return subscription
 
     def is_alive(self) -> bool:
         return (
-            self._connection_manager._active_connection_state or False  # noqa: SLF001
-        ) and self._connection_manager._active_connection_state.is_alive(self.check_server_alive_interval_factor)  # noqa: SLF001
+            self._connection_manager._active_connection_state or False
+        ) and self._connection_manager._active_connection_state.is_alive(self.check_server_alive_interval_factor)
