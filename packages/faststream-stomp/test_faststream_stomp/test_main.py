@@ -62,6 +62,12 @@ async def test_broker_request_not_implemented(faker: faker.Faker, broker: fastst
             await broker.request(faker.pystr(), faker.pystr())
 
 
+async def test_broker_publish_batch_not_implemented(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+    async with faststream_stomp.TestStompBroker(broker):
+        with pytest.raises(NotImplementedError):
+            await broker.publish_batch(faker.pystr(), destination=faker.pystr())
+
+
 async def test_publisher_request_not_implemented(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     async with faststream_stomp.TestStompBroker(broker):
         with pytest.raises(NotImplementedError):

@@ -4,6 +4,7 @@ import types
 import typing
 from collections.abc import Iterable, Sequence
 from typing import (
+    Any,
     cast,
 )
 
@@ -201,7 +202,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         *,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
-    ) -> None:
+    ) -> Any:  # noqa: ANN401
         publish_command = StompPublishCommand(
             message,
             _publish_type=PublishType.REQUEST,
@@ -209,4 +210,20 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             correlation_id=correlation_id,
             headers=headers,
         )
-        return typing.cast("None", await self._basic_request(publish_command, producer=self.config.producer))
+        return await self._basic_request(publish_command, producer=self.config.producer)
+
+    async def publish_batch(  # type: ignore[override]
+        self,
+        *_messages: "SendableMessage",
+        destination: str,
+        correlation_id: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        publish_command = StompPublishCommand(
+            "",
+            _publish_type=PublishType.PUBLISH,
+            destination=destination,
+            correlation_id=correlation_id,
+            headers=headers,
+        )
+        return typing.cast("None", await self._basic_publish_batch(publish_command, producer=self.config.producer))
