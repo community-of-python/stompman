@@ -56,20 +56,20 @@ class BrokerConfigWithStompClient(BrokerConfig):
 
 
 @dataclass(kw_only=True)
-class StompBaseSubscriberConfig:
+class _StompBaseSubscriberConfig:
     destination_without_prefix: str
     ack_mode: stompman.AckMode
     headers: dict[str, str] | None
 
 
 @dataclass(kw_only=True)
-class StompSubscriberSpecificationConfig(StompBaseSubscriberConfig, SubscriberSpecificationConfig):
+class StompSubscriberSpecificationConfig(_StompBaseSubscriberConfig, SubscriberSpecificationConfig):
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
 
 
 @dataclass(kw_only=True)
-class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseConfig):
+class StompSubscriberUsecaseConfig(_StompBaseSubscriberConfig, SubscriberUsecaseConfig):
     _outer_config: BrokerConfigWithStompClient
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
@@ -84,16 +84,16 @@ class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseC
 
 
 @dataclass(kw_only=True)
-class StompBasePublisherConfig:
+class _StompBasePublisherConfig:
     destination_without_prefix: str
 
 
 @dataclass(kw_only=True)
-class StompPublisherSpecificationConfig(StompBasePublisherConfig, PublisherSpecificationConfig): ...
+class StompPublisherSpecificationConfig(_StompBasePublisherConfig, PublisherSpecificationConfig): ...
 
 
 @dataclass(kw_only=True)
-class StompPublisherUsecaseConfig(StompBasePublisherConfig, PublisherUsecaseConfig):
+class StompPublisherUsecaseConfig(_StompBasePublisherConfig, PublisherUsecaseConfig):
     _outer_config: BrokerConfigWithStompClient
 
     @property
