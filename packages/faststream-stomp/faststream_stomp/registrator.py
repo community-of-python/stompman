@@ -8,7 +8,7 @@ from faststream._internal.endpoint.subscriber.call_item import CallsCollection
 from faststream._internal.types import CustomCallable, PublisherMiddleware, SubscriberMiddleware
 from typing_extensions import override
 
-from faststream_stomp.configs import (
+from faststream_stomp.models import (
     StompBrokerConfig,
     StompPublishCommand,
     StompPublisherSpecificationConfig,

@@ -8,7 +8,7 @@ from faststream._internal.broker.router import ArgsContainer, BrokerRouter, Subs
 from faststream._internal.configs import BrokerConfig
 from faststream._internal.types import BrokerMiddleware, CustomCallable, PublisherMiddleware, SubscriberMiddleware
 
-from faststream_stomp.configs import StompPublishCommand
+from faststream_stomp.models import StompPublishCommand
 from faststream_stomp.registrator import StompRegistrator
 
 

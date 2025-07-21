@@ -16,7 +16,7 @@ from faststream.specification.schema import (
     SubscriberSpec,
 )
 
-from faststream_stomp.configs import (
+from faststream_stomp.models import (
     StompBrokerConfig,
     StompPublishCommand,
     StompSubscriberSpecificationConfig,

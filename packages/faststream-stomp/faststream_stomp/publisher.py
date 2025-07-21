@@ -16,7 +16,7 @@ from faststream.specification.schema import (
     PublisherSpec,
 )
 
-from faststream_stomp.configs import (
+from faststream_stomp.models import (
     StompBrokerConfig,
     StompPublishCommand,
     StompPublisherSpecificationConfig,

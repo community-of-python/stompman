@@ -10,7 +10,7 @@ from faststream._internal.testing.broker import TestBroker, change_producer
 from faststream.message import encode_message
 
 from faststream_stomp.broker import StompBroker
-from faststream_stomp.configs import StompPublishCommand
+from faststream_stomp.models import StompPublishCommand
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.subscriber import StompSubscriber
 
