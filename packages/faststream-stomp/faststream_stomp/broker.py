@@ -147,8 +147,6 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
     async def start(self) -> None:
         await self.connect()
         await super().start()
-        for sub in self.subscribers:
-            sub.running = True
 
     async def stop(
         self,

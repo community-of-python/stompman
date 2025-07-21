@@ -73,6 +73,7 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
             ack=self.config.ack_mode,
             headers=self.config.headers,
         )
+        self._post_start()
 
     async def stop(self) -> None:
         if self._subscription:
