@@ -87,9 +87,7 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         raise NotImplementedError
 
     def _make_response_publisher(self, message: StreamMessage[stompman.MessageFrame]) -> Sequence[FakePublisher]:
-        return (  # pragma: no cover
-            (StompFakePublisher(producer=self.config._outer_config.producer, reply_to=message.reply_to),)
-        )
+        return (StompFakePublisher(producer=self.config._outer_config.producer, reply_to=message.reply_to),)
 
     def get_log_context(self, message: StreamMessage[stompman.MessageFrame] | None) -> dict[str, str]:
         return {
