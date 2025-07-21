@@ -109,6 +109,3 @@ class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame, BrokerCo
             handlers=handlers,
             routers=routers,  # type: ignore[arg-type]
         )
-
-
-# TODO: make router have interface from previous version

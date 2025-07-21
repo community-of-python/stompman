@@ -59,7 +59,11 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
     ) -> None:
         self.config = config
         self._subscription: stompman.ManualAckSubscription | None = None
-        super().__init__(config=config, specification=cast("SubscriberSpecification", specification), calls=calls)
+        super().__init__(
+            config=config,
+            specification=cast("SubscriberSpecification", specification),
+            calls=calls,
+        )
 
     async def start(self) -> None:
         await super().start()

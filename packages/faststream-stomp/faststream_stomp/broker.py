@@ -55,6 +55,15 @@ class StompSecurity(BaseSecurity):
         return {"user-password": {"type": "userPassword"}}
 
 
+def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
+    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
+    task_exception = listen_task.exception()
+    if isinstance(task_exception, ExceptionGroup) and isinstance(
+        task_exception.exceptions[0], stompman.FailedAllConnectAttemptsError
+    ):
+        raise SystemExit(1)
+
+
 class StompParamsStorage(DefaultLoggerStorage):
     __max_msg_id_ln = 10
     _max_channel_name = 4
@@ -91,10 +100,12 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         parser: CustomCallable | None = None,
         dependencies: Iterable[Dependant] = (),
         middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame, StompPublishCommand]] = (),
-        graceful_timeout: float | None = None,
+        graceful_timeout: float | None = 15.0,
         routers: Sequence[Registrator[stompman.MessageFrame]] = (),
+        # Logging args
         logger: LoggerProto | None = EMPTY,
         log_level: int = logging.INFO,
+        # FastDepends args
         apply_types: bool = True,
         # AsyncAPI args
         description: str | None = None,
@@ -195,12 +206,3 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             headers=headers,
         )
         return typing.cast("None", self._basic_request(publish_command, producer=self._producer))
-
-
-def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
-    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
-    task_exception = listen_task.exception()
-    if isinstance(task_exception, ExceptionGroup) and isinstance(
-        task_exception.exceptions[0], stompman.FailedAllConnectAttemptsError
-    ):
-        raise SystemExit(1)
