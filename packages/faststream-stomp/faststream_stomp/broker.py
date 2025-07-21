@@ -188,7 +188,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             correlation_id=correlation_id,
             headers=headers,
         )
-        return typing.cast("None", self._basic_publish(publish_command, producer=self._producer))
+        return typing.cast("None", await self._basic_publish(publish_command, producer=self.config.producer))
 
     async def request(  # type: ignore[override]
         self,
@@ -205,4 +205,4 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             correlation_id=correlation_id,
             headers=headers,
         )
-        return typing.cast("None", self._basic_request(publish_command, producer=self._producer))
+        return typing.cast("None", await self._basic_request(publish_command, producer=self.config.producer))
