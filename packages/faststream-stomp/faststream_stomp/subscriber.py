@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import AsyncIterator, Sequence
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, NoReturn
 
 import stompman
 from faststream import PublishCommand, StreamMessage
@@ -76,10 +76,10 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
             await self._subscription.unsubscribe()
         await super().stop()
 
-    async def get_one(self, *, timeout: float = 5) -> None:
+    async def get_one(self, *, timeout: float = 5) -> NoReturn:
         raise NotImplementedError
 
-    async def __aiter__(self) -> AsyncIterator[StreamMessage[stompman.MessageFrame]]:  # type: ignore[override, misc]
+    async def __aiter__(self) -> NoReturn:  # type: ignore[override, misc]
         raise NotImplementedError
         yield  # pragma: no cover
         await asyncio.sleep(0)  # pragma: no cover
