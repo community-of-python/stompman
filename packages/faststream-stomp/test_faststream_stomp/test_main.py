@@ -1,5 +1,3 @@
-from unittest import mock
-
 import faker
 import faststream_stomp
 import pytest
@@ -71,15 +69,12 @@ async def test_publisher_request_not_implemented(faker: faker.Faker, broker: fas
 
 
 def test_asyncapi_schema(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    broker.include_router(
-        faststream_stomp.StompRouter(
-            handlers=(
-                faststream_stomp.StompRoute(
-                    mock.Mock(), faker.pystr(), publishers=(faststream_stomp.StompRoutePublisher(faker.pystr()),)
-                ),
-            )
-        )
-    )
+    @broker.publisher(faker.pystr())
+    def _publisher() -> None: ...
+
+    @broker.subscriber(faker.pystr())
+    def _subscriber() -> None: ...
+
     FastStream(broker).schema.to_specification()
 
 

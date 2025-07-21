@@ -35,10 +35,6 @@ class StompSubscriberSpecificationConfig(StompBaseSubscriberConfig, SubscriberSp
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
 
-    @property
-    def ack_policy(self) -> AckPolicy:
-        return AckPolicy.MANUAL if self.ack_mode == "auto" else AckPolicy.NACK_ON_ERROR
-
 
 @dataclass(kw_only=True)
 class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseConfig):
