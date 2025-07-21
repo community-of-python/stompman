@@ -102,7 +102,7 @@ class ConnectionManager:
             if not self._active_connection_state:
                 continue
             if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
-                self._active_connection_state = None
+                self._clear_active_connection_state()
 
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters
