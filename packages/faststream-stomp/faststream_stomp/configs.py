@@ -15,6 +15,8 @@ from faststream.middlewares import AckPolicy
 
 from faststream_stomp.message import StompStreamMessage
 
+# TODO: put more here
+
 
 @dataclass(kw_only=True)
 class StompBrokerConfig(BrokerConfig):

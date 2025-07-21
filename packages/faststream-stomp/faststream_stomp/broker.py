@@ -4,7 +4,6 @@ import types
 import typing
 from collections.abc import Iterable, Sequence
 from typing import (
-    TYPE_CHECKING,
     cast,
 )
 
@@ -38,9 +37,7 @@ from faststream.specification.schema.extra import Tag, TagDict
 from faststream_stomp.configs import StompBrokerConfig
 from faststream_stomp.publisher import StompPublishCommand, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
-
-if TYPE_CHECKING:
-    from faststream_stomp.subscriber import StompSubscriber
+from faststream_stomp.subscriber import StompSubscriber
 
 
 class StompSecurity(BaseSecurity):
@@ -89,8 +86,8 @@ class StompParamsStorage(DefaultLoggerStorage):
 
 
 class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, BrokerConfig]):
-    _subscribers: list["StompSubscriber"]  # type: ignore[assignment]
-    _publishers: list["StompPublisher"]  # type: ignore[assignment]
+    _subscribers: list[StompSubscriber]  # type: ignore[assignment]
+    _publishers: list[StompPublisher]  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -138,13 +135,13 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         super().__init__(config=broker_config, specification=specification, routers=routers)
         self._attempted_to_connect = False
 
-    async def _connect(self, client: stompman.Client) -> stompman.Client:  # type: ignore[override]
+    async def _connect(self) -> stompman.Client:
         if self._attempted_to_connect:
-            return client
+            return self.config.broker_config.client
         self._attempted_to_connect = True
-        await client.__aenter__()
-        client._listen_task.add_done_callback(_handle_listen_task_done)
-        return client
+        await self.config.broker_config.client.__aenter__()
+        self.config.broker_config.client._listen_task.add_done_callback(_handle_listen_task_done)
+        return self.config.broker_config.client
 
     async def stop(
         self,
