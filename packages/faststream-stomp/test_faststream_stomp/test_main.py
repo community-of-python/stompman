@@ -56,22 +56,32 @@ async def test_testing(faker: faker.Faker, broker: faststream_stomp.StompBroker)
         third_publisher.mock.assert_called_once_with(expected_body)
 
 
-async def test_broker_request_not_implemented(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    async with faststream_stomp.TestStompBroker(broker):
-        with pytest.raises(NotImplementedError):
-            await broker.request(faker.pystr(), faker.pystr())
+class TestNotImplemented:
+    async def test_broker_request(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.request(faker.pystr(), faker.pystr())
 
+    async def test_broker_publish_batch(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.publish_batch(faker.pystr(), destination=faker.pystr())
 
-async def test_broker_publish_batch_not_implemented(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    async with faststream_stomp.TestStompBroker(broker):
-        with pytest.raises(NotImplementedError):
-            await broker.publish_batch(faker.pystr(), destination=faker.pystr())
+    async def test_publisher_request(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.publisher(faker.pystr()).request(faker.pystr())
 
+    async def test_subscriber_get_one(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.subscriber(faker.pystr()).get_one()
 
-async def test_publisher_request_not_implemented(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    async with faststream_stomp.TestStompBroker(broker):
-        with pytest.raises(NotImplementedError):
-            await broker.publisher(faker.pystr()).request(faker.pystr())
+    async def test_subscriber_aiter(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                async for _ in broker.subscriber(faker.pystr()):
+                    ...  # pragma: no cover
 
 
 def test_asyncapi_schema(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:

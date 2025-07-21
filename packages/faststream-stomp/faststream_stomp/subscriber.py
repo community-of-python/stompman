@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, cast
 
@@ -83,8 +84,10 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
     async def get_one(self, *, timeout: float = 5) -> None:
         raise NotImplementedError
 
-    async def __aiter__(self) -> AsyncIterator[StreamMessage[stompman.MessageFrame]]:
+    async def __aiter__(self) -> AsyncIterator[StreamMessage[stompman.MessageFrame]]:  # type: ignore[override, misc]
         raise NotImplementedError
+        yield  # pragma: no cover
+        await asyncio.sleep(0)  # pragma: no cover
 
     def _make_response_publisher(self, message: StreamMessage[stompman.MessageFrame]) -> Sequence[FakePublisher]:
         return (StompFakePublisher(producer=self.config._outer_config.producer, reply_to=message.reply_to),)
