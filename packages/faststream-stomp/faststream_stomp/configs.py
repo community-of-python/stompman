@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import stompman
 from faststream._internal.configs import (
@@ -23,7 +24,7 @@ class StompBrokerConfig(BrokerConfig):
 
 @dataclass(kw_only=True)
 class StompBaseSubscriberConfig:
-    destination: str
+    destination_without_prefix: str
     ack_mode: stompman.AckMode
     headers: dict[str, str] | None
 
@@ -33,7 +34,7 @@ class StompSubscriberSpecificationConfig(StompBaseSubscriberConfig, SubscriberSp
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
 
-    @property
+    @cached_property
     def ack_policy(self) -> AckPolicy:
         return AckPolicy.MANUAL if self.ack_mode == "auto" else AckPolicy.NACK_ON_ERROR
 
@@ -44,14 +45,18 @@ class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseC
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
 
-    @property
+    @cached_property
     def ack_policy(self) -> AckPolicy:
         return AckPolicy.MANUAL if self.ack_mode == "auto" else AckPolicy.NACK_ON_ERROR
+
+    @cached_property
+    def full_destination(self) -> str:
+        return self._outer_config.prefix + self.destination_without_prefix
 
 
 @dataclass(kw_only=True)
 class StompBasePublisherConfig:
-    destination: str
+    destination_without_prefix: str
 
 
 @dataclass(kw_only=True)
@@ -61,3 +66,7 @@ class StompPublisherSpecificationConfig(StompBasePublisherConfig, PublisherSpeci
 @dataclass(kw_only=True)
 class StompPublisherUsecaseConfig(StompBasePublisherConfig, PublisherUsecaseConfig):
     _outer_config: StompBrokerConfig
+
+    @cached_property
+    def full_destination(self) -> str:
+        return self._outer_config.prefix + self.destination_without_prefix

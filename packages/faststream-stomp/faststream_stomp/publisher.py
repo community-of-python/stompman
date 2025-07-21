@@ -1,5 +1,5 @@
 import typing
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, Self, cast
 
 import stompman
 from faststream._internal.basic_types import SendableMessage
@@ -21,8 +21,8 @@ from faststream_stomp.configs import StompBrokerConfig, StompPublisherSpecificat
 
 class StompPublishCommand(PublishCommand):
     @classmethod
-    def from_cmd(cls, cmd: PublishCommand) -> PublishCommand:
-        return cmd
+    def from_cmd(cls, cmd: PublishCommand) -> Self:
+        return cmd  # type: ignore[return-value]
 
 
 class StompProducer(ProducerProto[StompPublishCommand]):
@@ -50,7 +50,7 @@ class StompProducer(ProducerProto[StompPublishCommand]):
 class StompPublisherSpecification(PublisherSpecification[StompBrokerConfig, StompPublisherSpecificationConfig]):
     @property
     def name(self) -> str:
-        return f"{self._outer_config.prefix}{self.config.destination}:Publisher"
+        return f"{self._outer_config.prefix}{self.config.destination_without_prefix}:Publisher"
 
     def get_schema(self) -> dict[str, PublisherSpec]:
         return {
@@ -76,7 +76,7 @@ class StompPublisher(PublisherUsecase):
         self, cmd: PublishCommand, *, _extra_middlewares: typing.Iterable[PublisherMiddleware[PublishCommand]]
     ) -> None:
         publish_command = StompPublishCommand.from_cmd(cmd)
-        publish_command.destination = self.config._outer_config.prefix + self.config.destination
+        publish_command.destination = self.config.full_destination
         return typing.cast(
             "None",
             await self._basic_publish(
@@ -90,7 +90,7 @@ class StompPublisher(PublisherUsecase):
         publish_command = StompPublishCommand(
             message,
             _publish_type=PublishType.PUBLISH,
-            destination=self.config.destination,
+            destination=self.config.full_destination,
             correlation_id=correlation_id,
             headers=headers,
         )
@@ -107,7 +107,7 @@ class StompPublisher(PublisherUsecase):
         publish_command = StompPublishCommand(
             message,
             _publish_type=PublishType.REQUEST,
-            destination=self.config.destination,
+            destination=self.config.full_destination,
             correlation_id=correlation_id,
             headers=headers,
         )

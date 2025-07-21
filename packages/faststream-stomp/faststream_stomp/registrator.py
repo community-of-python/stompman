@@ -38,7 +38,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
     ) -> StompSubscriber:
         usecase_config = StompSubscriberUsecaseConfig(
             _outer_config=self.config.broker_config,
-            destination=destination,
+            destination_without_prefix=destination,
             ack_mode=ack_mode,
             headers=headers,
         )
@@ -49,7 +49,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
                 title_=title,
                 description_=description,
                 include_in_schema=include_in_schema,
-                destination=destination,
+                destination_without_prefix=destination,
                 ack_mode=ack_mode,
                 headers=headers,
             ),
@@ -78,7 +78,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
         usecase_config = StompPublisherUsecaseConfig(
             _outer_config=self.config.broker_config,
             middlewares=middlewares,
-            destination=destination,
+            destination_without_prefix=destination,
         )
         specification = StompPublisherSpecification(
             _outer_config=self.config.broker_config,
@@ -87,7 +87,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
                 description_=description_,
                 schema_=schema_,
                 include_in_schema=include_in_schema,
-                destination=destination,
+                destination_without_prefix=destination,
             ),
         )
         publisher = StompPublisher(config=usecase_config, specification=specification)

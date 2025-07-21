@@ -132,7 +132,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             return client
         self._attempted_to_connect = True
         await client.__aenter__()
-        client._listen_task.add_done_callback(_handle_listen_task_done)  # noqa: SLF001
+        client._listen_task.add_done_callback(_handle_listen_task_done)
         return client
 
     async def stop(

@@ -22,7 +22,7 @@ from faststream_stomp.publisher import StompPublishCommand
 class StompSubscriberSpecification(SubscriberSpecification[StompBrokerConfig, StompSubscriberSpecificationConfig]):
     @property
     def name(self) -> str:
-        return f"{self._outer_config.prefix}{self.config.destination}:{self.call_name}"
+        return f"{self._outer_config.prefix}{self.config.destination_without_prefix}:{self.call_name}"
 
     def get_schema(self) -> dict[str, SubscriberSpec]:
         return {
@@ -63,8 +63,8 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
 
     async def start(self) -> None:
         await super().start()
-        self._subscription = await self.config._outer_config.client.subscribe_with_manual_ack(  # noqa: SLF001
-            destination=self.config._outer_config.prefix + self.config.destination,  # noqa: SLF001
+        self._subscription = await self.config._outer_config.client.subscribe_with_manual_ack(
+            destination=self.config.full_destination,
             handler=self.consume,
             ack=self.config.ack_mode,
             headers=self.config.headers,
@@ -83,13 +83,11 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
 
     def _make_response_publisher(self, message: StreamMessage[stompman.MessageFrame]) -> Sequence[FakePublisher]:
         return (  # pragma: no cover
-            (StompFakePublisher(producer=self.config._outer_config.producer, reply_to=message.reply_to),)  # noqa: SLF001
+            (StompFakePublisher(producer=self.config._outer_config.producer, reply_to=message.reply_to),)
         )
 
     def get_log_context(self, message: StreamMessage[stompman.MessageFrame] | None) -> dict[str, str]:
         return {
-            "destination": message.raw_message.headers["destination"]
-            if message
-            else self.config._outer_config.prefix + self.config.destination,  # noqa: SLF001
+            "destination": message.raw_message.headers["destination"] if message else self.config.full_destination,
             "message_id": message.message_id if message else "",
         }

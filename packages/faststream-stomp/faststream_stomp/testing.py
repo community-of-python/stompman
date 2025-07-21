@@ -23,17 +23,16 @@ class TestStompBroker(TestBroker[StompBroker]):
     def create_publisher_fake_subscriber(
         broker: StompBroker, publisher: StompPublisher
     ) -> tuple[StompSubscriber, bool]:
-        publisher_full_destination = publisher.config._outer_config.prefix + publisher.config.destination  # noqa: SLF001
         subscriber: StompSubscriber | None = None
 
-        for handler in broker._subscribers:  # noqa: SLF001
-            if handler.config._outer_config.prefix + handler.config.destination == publisher_full_destination:  # noqa: SLF001
+        for handler in broker._subscribers:
+            if handler.config.full_destination == publisher.config.full_destination:
                 subscriber = handler
                 break
 
         if subscriber is None:
             is_real = False
-            subscriber = broker.subscriber(publisher_full_destination)
+            subscriber = broker.subscriber(publisher.config.full_destination)
         else:
             is_real = True
 
@@ -82,7 +81,6 @@ class FakeStompProducer(StompProducer):
         if content_type:
             all_headers["content-type"] = content_type
         frame = FakeAckableMessageFrame(headers=all_headers, body=body, _subscription=mock.AsyncMock())
-
-        for handler in self.broker._subscribers:  # noqa: SLF001
-            if handler.config._outer_config.prefix + handler.config.destination == destination:  # noqa: SLF001
+        for handler in self.broker._subscribers:
+            if handler.config.full_destination == self.broker.config.prefix + destination:
                 await handler.process_message(frame)
