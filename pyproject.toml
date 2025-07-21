@@ -12,7 +12,7 @@ dev = [
     "polyfactory==2.19.0",
     "pytest==8.3.4",
     "pytest-cov==6.0.0",
-    "pytest-timeout>=2.4.0",
+    "pytest-timeout==2.4.0",
     "ruff==0.9.3",
     "uvloop==0.21.0",
 ]

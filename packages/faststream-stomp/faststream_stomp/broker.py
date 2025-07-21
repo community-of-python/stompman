@@ -154,9 +154,11 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         exc_val: BaseException | None = None,
         exc_tb: types.TracebackType | None = None,
     ) -> None:
+        for sub in self.subscribers:
+            await sub.stop()
         if self._connection:
             await self._connection.__aexit__(exc_type, exc_val, exc_tb)
-        return await super().stop(exc_type, exc_val, exc_tb)
+        self.running = False
 
     async def ping(self, timeout: float | None = None) -> bool:
         sleep_time = (timeout or 10) / 10
