@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from faststream import StreamMessage
     from prometheus_client import CollectorRegistry
 
+__all__ = ["StompMetricsSettingsProvider", "StompPrometheusMiddleware"]
+
 
 class StompMetricsSettingsProvider(MetricsSettingsProvider[stompman.MessageFrame, StompPublishCommand]):
     messaging_system = "stomp"

@@ -5,7 +5,6 @@ import typing
 from collections.abc import Iterable, Sequence
 from typing import Any, cast
 
-# TODO: simplify imports  # noqa: FIX002, TD002, TD003
 import anyio
 import stompman
 from fast_depends.dependencies import Dependant

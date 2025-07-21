@@ -11,6 +11,8 @@ from opentelemetry.trace import TracerProvider
 
 from faststream_stomp.models import StompPublishCommand
 
+__all__ = ["StompTelemetryMiddleware", "StompTelemetrySettingsProvider"]
+
 
 class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageFrame, StompPublishCommand]):
     messaging_system = "stomp"
