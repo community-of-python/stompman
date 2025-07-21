@@ -15,7 +15,7 @@ from faststream_stomp.models import StompPublishCommand
 class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageFrame, StompPublishCommand]):
     messaging_system = "stomp"
 
-    def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> "AnyDict":
+    def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> AnyDict:
         return {
             messaging_attributes.MESSAGING_SYSTEM: self.messaging_system,
             messaging_attributes.MESSAGING_MESSAGE_ID: msg.message_id,

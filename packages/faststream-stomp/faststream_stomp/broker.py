@@ -202,7 +202,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
 
     async def publish_batch(  # type: ignore[override]
         self,
-        *_messages: "SendableMessage",
+        *_messages: SendableMessage,
         destination: str,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
