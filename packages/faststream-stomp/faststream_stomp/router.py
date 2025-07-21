@@ -4,21 +4,13 @@ from typing import Any
 import stompman
 from fast_depends.dependencies import Dependant
 from faststream._internal.basic_types import SendableMessage
-from faststream._internal.broker.router import (
-    ArgsContainer,
-    BrokerRouter,
-    SubscriberRoute,
-)
-from faststream._internal.configs import (
-    BrokerConfig,
-)
-from faststream._internal.types import (
-    CustomCallable,
-    PublisherMiddleware,
-    SubscriberMiddleware,
-)
+from faststream._internal.broker.router import ArgsContainer, BrokerRouter, SubscriberRoute
+from faststream._internal.configs import BrokerConfig
+from faststream._internal.types import BrokerMiddleware, CustomCallable, PublisherMiddleware, SubscriberMiddleware
 
+from faststream_stomp.publisher import StompPublishCommand
 from faststream_stomp.registrator import StompRegistrator
+
 
 # TODO: fix this containers to look be like actual interfaces
 class StompRoutePublisher(ArgsContainer):
@@ -31,7 +23,7 @@ class StompRoutePublisher(ArgsContainer):
         self,
         destination: str,
         *,
-        middlewares: Sequence[PublisherMiddleware] = (),
+        middlewares: Sequence[PublisherMiddleware[StompPublishCommand]] = (),
         schema_: Any | None = None,  # noqa: ANN401
         title_: str | None = None,
         description_: str | None = None,
@@ -92,4 +84,31 @@ class StompRoute(SubscriberRoute):
 
 class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame, BrokerConfig]):
     """Includable to StompBroker router."""
+
+    def __init__(
+        self,
+        prefix: str = "",
+        handlers: Iterable[StompRoute] = (),
+        *,
+        dependencies: Iterable[Dependant] = (),
+        middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]] = (),
+        parser: CustomCallable | None = None,
+        decoder: CustomCallable | None = None,
+        include_in_schema: bool | None = None,
+        routers: Sequence[StompRegistrator] = (),
+    ) -> None:
+        super().__init__(
+            config=BrokerConfig(
+                broker_middlewares=middlewares,
+                broker_dependencies=dependencies,
+                broker_parser=parser,
+                broker_decoder=decoder,
+                include_in_schema=include_in_schema,
+                prefix=prefix,
+            ),
+            handlers=handlers,
+            routers=routers,  # type: ignore[arg-type]
+        )
+
+
 # TODO: make router have interface from previous version
