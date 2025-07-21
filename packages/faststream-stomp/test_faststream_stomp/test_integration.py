@@ -14,6 +14,7 @@ from faststream.asgi import AsgiFastStream
 from faststream.exceptions import AckMessage, NackMessage, RejectMessage
 from faststream.message import gen_cor_id
 from faststream_stomp.message import StompStreamMessage
+from faststream_stomp.router import StompRoutePublisher
 
 if TYPE_CHECKING:
     from faststream_stomp.broker import StompBroker
@@ -79,11 +80,15 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
 async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     expected_body, prefix, destination = faker.pystr(), faker.pystr(), faker.pystr()
 
-    def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> None:  # noqa: B008
+    def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> bytes:  # noqa: B008
         assert body == expected_body
         event.set()
+        return message.body
 
-    router = faststream_stomp.StompRouter(prefix=prefix, handlers=(faststream_stomp.StompRoute(route, destination),))
+    router = faststream_stomp.StompRouter(
+        prefix=prefix,
+        handlers=[faststream_stomp.StompRoute(route, destination, publishers=[StompRoutePublisher(faker.pystr())])],
+    )
     publisher = router.publisher(destination)
 
     broker.include_router(router)
