@@ -76,7 +76,6 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
         run_task.cancel()
 
 
-@pytest.mark.skip  # TODO: report the error to upstream
 async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     expected_body, prefix, destination = faker.pystr(), faker.pystr(), faker.pystr()
 
