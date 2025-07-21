@@ -12,7 +12,6 @@ from faststream_stomp.publisher import StompPublishCommand
 from faststream_stomp.registrator import StompRegistrator
 
 
-# TODO: fix this containers to look be like actual interfaces
 class StompRoutePublisher(ArgsContainer):
     """Delayed StompPublisher registration object.
 
