@@ -40,7 +40,7 @@ class StompPrometheusMiddleware(PrometheusMiddleware[StompPublishCommand, stompm
         received_messages_size_buckets: Sequence[float] | None = None,
     ) -> None:
         super().__init__(
-            settings_provider_factory=lambda _: StompMetricsSettingsProvider(),  # type: ignore[arg-type,return-value]
+            settings_provider_factory=lambda _: StompMetricsSettingsProvider(),
             registry=registry,
             app_name=app_name,
             metrics_prefix=metrics_prefix,
