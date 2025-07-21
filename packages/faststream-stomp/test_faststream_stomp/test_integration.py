@@ -168,8 +168,7 @@ class TestLogging:
     ) -> None:
         monkeypatch.delenv("PYTEST_CURRENT_TEST")
         broker: StompBroker = request.getfixturevalue("broker")
-        assert broker.logger
-        broker.logger = mock.Mock(log=(log_mock := mock.Mock()), handlers=[])
+        broker.config.logger.logger = mock.Mock(log=(log_mock := mock.Mock()), handlers=[])
 
         @broker.subscriber(destination := faker.pystr())
         def some_handler() -> None: ...
@@ -191,9 +190,9 @@ class TestLogging:
     ) -> None:
         monkeypatch.delenv("PYTEST_CURRENT_TEST")
         broker: StompBroker = request.getfixturevalue("broker")
-        assert isinstance(broker._middlewares[0], CriticalLogMiddleware)
-        assert broker._middlewares[0].logger
-        broker._middlewares[0].logger = mock.Mock(log=(log_mock := mock.Mock()))
+        assert isinstance(broker.middlewares[0], CriticalLogMiddleware)
+        assert broker.middlewares[0].logger
+        broker.middlewares[0].logger = mock.Mock(log=(log_mock := mock.Mock()))
         event = asyncio.Event()
         message_id: str | None = None
 

@@ -8,12 +8,12 @@ from typing import (
     cast,
 )
 
+# TODO: simplify imports  # noqa: FIX002, TD002, TD003
 import anyio
 import stompman
 from fast_depends.dependencies import Dependant
 from faststream._internal.basic_types import AnyDict, LoggerProto, SendableMessage
 from faststream._internal.broker import BrokerUsecase
-from faststream._internal.broker.broker import BrokerUsecase
 from faststream._internal.broker.registrator import Registrator
 from faststream._internal.configs import (
     BrokerConfig,
@@ -107,7 +107,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             logger=make_logger_state(
                 logger=logger,
                 log_level=log_level,
-                default_storage_cls=StompParamsStorage,
+                default_storage_cls=StompParamsStorage,  # type: ignore[type-abstract]
             ),
             fd_config=FastDependsConfig(use_fastdepends=apply_types),
             broker_dependencies=dependencies,
@@ -162,7 +162,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
 
         return False  # pragma: no cover
 
-    async def publish(  # type: ignore[override]
+    async def publish(
         self,
         message: SendableMessage,
         destination: str,

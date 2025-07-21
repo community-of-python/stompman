@@ -6,7 +6,6 @@ import pytest
 import stompman
 from faststream import FastStream
 from faststream.message import gen_cor_id
-from faststream.specification.asyncapi.v3_0_0 import get_app_schema
 from faststream_stomp.opentelemetry import StompTelemetryMiddleware
 from faststream_stomp.prometheus import StompPrometheusMiddleware
 from opentelemetry.sdk.metrics import MeterProvider
@@ -71,10 +70,6 @@ async def test_publisher_request_not_implemented(faker: faker.Faker, broker: fas
             await broker.publisher(faker.pystr()).request(faker.pystr())
 
 
-def test_get_fmt(broker: faststream_stomp.StompBroker) -> None:
-    broker.get_fmt()
-
-
 def test_asyncapi_schema(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     broker.include_router(
         faststream_stomp.StompRouter(
@@ -85,7 +80,7 @@ def test_asyncapi_schema(faker: faker.Faker, broker: faststream_stomp.StompBroke
             )
         )
     )
-    get_app_schema(FastStream(broker))
+    FastStream(broker).schema.to_specification()
 
 
 async def test_opentelemetry_publish(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
