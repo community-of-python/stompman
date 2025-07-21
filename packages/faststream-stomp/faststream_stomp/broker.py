@@ -35,7 +35,7 @@ from faststream.specification.schema import BrokerSpec
 from faststream.specification.schema.extra import Tag, TagDict
 
 from faststream_stomp.configs import StompBrokerConfig
-from faststream_stomp.publisher import StompPublishCommand, StompPublisher
+from faststream_stomp.publisher import StompProducer, StompPublishCommand, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
 from faststream_stomp.subscriber import StompSubscriber
 
@@ -121,6 +121,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
             broker_dependencies=dependencies,
             graceful_timeout=graceful_timeout,
             extra_context={"broker": self},
+            producer=StompProducer(client),
             client=client,
         )
         specification = BrokerSpec(
@@ -142,6 +143,10 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         await self.config.broker_config.client.__aenter__()
         self.config.broker_config.client._listen_task.add_done_callback(_handle_listen_task_done)
         return self.config.broker_config.client
+
+    async def start(self) -> None:
+        await self.connect()
+        await super().start()
 
     async def stop(
         self,
