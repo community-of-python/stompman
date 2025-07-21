@@ -9,7 +9,7 @@ from faststream._internal.types import CustomCallable, PublisherMiddleware, Subs
 from typing_extensions import override
 
 from faststream_stomp.models import (
-    StompBrokerConfig,
+    BrokerConfigWithStompClient,
     StompPublishCommand,
     StompPublisherSpecificationConfig,
     StompPublisherUsecaseConfig,
@@ -20,7 +20,7 @@ from faststream_stomp.publisher import StompPublisher, StompPublisherSpecificati
 from faststream_stomp.subscriber import StompSubscriber, StompSubscriberSpecification
 
 
-class StompRegistrator(Registrator[stompman.MessageFrame, StompBrokerConfig]):
+class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompClient]):
     @override
     def subscriber(  # type: ignore[override]
         self,

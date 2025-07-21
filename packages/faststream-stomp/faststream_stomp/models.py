@@ -43,6 +43,7 @@ class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
         )
 
 
+# TODO: remove casts
 class StompPublishCommand(PublishCommand):
     @classmethod
     def from_cmd(cls, cmd: PublishCommand) -> Self:
@@ -50,7 +51,7 @@ class StompPublishCommand(PublishCommand):
 
 
 @dataclass(kw_only=True)
-class StompBrokerConfig(BrokerConfig):
+class BrokerConfigWithStompClient(BrokerConfig):
     client: stompman.Client
 
 
@@ -69,7 +70,7 @@ class StompSubscriberSpecificationConfig(StompBaseSubscriberConfig, SubscriberSp
 
 @dataclass(kw_only=True)
 class StompSubscriberUsecaseConfig(StompBaseSubscriberConfig, SubscriberUsecaseConfig):
-    _outer_config: StompBrokerConfig
+    _outer_config: BrokerConfigWithStompClient
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
 
@@ -93,7 +94,7 @@ class StompPublisherSpecificationConfig(StompBasePublisherConfig, PublisherSpeci
 
 @dataclass(kw_only=True)
 class StompPublisherUsecaseConfig(StompBasePublisherConfig, PublisherUsecaseConfig):
-    _outer_config: StompBrokerConfig
+    _outer_config: BrokerConfigWithStompClient
 
     @property
     def full_destination(self) -> str:

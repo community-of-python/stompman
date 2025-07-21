@@ -22,7 +22,7 @@ from faststream.security import BaseSecurity
 from faststream.specification.schema import BrokerSpec
 from faststream.specification.schema.extra import Tag, TagDict
 
-from faststream_stomp.models import StompBrokerConfig, StompPublishCommand
+from faststream_stomp.models import BrokerConfigWithStompClient, StompPublishCommand
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
 from faststream_stomp.subscriber import StompSubscriber
@@ -73,7 +73,14 @@ class StompParamsStorage(DefaultLoggerStorage):
         return logger
 
 
-class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client, BrokerConfig]):
+class StompBroker(
+    StompRegistrator,
+    BrokerUsecase[
+        stompman.MessageFrame,
+        stompman.Client,
+        BrokerConfig,  # Using BrokerConfig to avoid typing issues when passing broker to FastStream app
+    ],
+):
     _subscribers: list[StompSubscriber]  # type: ignore[assignment]
     _publishers: list[StompPublisher]  # type: ignore[assignment]
 
@@ -96,7 +103,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         description: str | None = None,
         tags: Iterable[Tag | TagDict] = (),
     ) -> None:
-        broker_config = StompBrokerConfig(
+        broker_config = BrokerConfigWithStompClient(
             broker_middlewares=cast("Sequence[BrokerMiddleware]", middlewares),
             broker_parser=parser,
             broker_decoder=decoder,

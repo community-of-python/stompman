@@ -4,6 +4,7 @@ from typing import Any, NoReturn, cast
 import stompman
 from faststream import PublishCommand, PublishType
 from faststream._internal.basic_types import SendableMessage
+from faststream._internal.configs import BrokerConfig
 from faststream._internal.endpoint.publisher import PublisherSpecification, PublisherUsecase
 from faststream._internal.producer import ProducerProto
 from faststream._internal.types import AsyncCallable, PublisherMiddleware
@@ -12,7 +13,6 @@ from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.schema import Message, Operation, PublisherSpec
 
 from faststream_stomp.models import (
-    StompBrokerConfig,
     StompPublishCommand,
     StompPublisherSpecificationConfig,
     StompPublisherUsecaseConfig,
@@ -41,7 +41,7 @@ class StompProducer(ProducerProto[StompPublishCommand]):
         raise NotImplementedError
 
 
-class StompPublisherSpecification(PublisherSpecification[StompBrokerConfig, StompPublisherSpecificationConfig]):
+class StompPublisherSpecification(PublisherSpecification[BrokerConfig, StompPublisherSpecificationConfig]):
     @property
     def name(self) -> str:
         return f"{self._outer_config.prefix}{self.config.destination_without_prefix}:Publisher"

@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import stompman
 from faststream import PublishCommand, StreamMessage
+from faststream._internal.configs import BrokerConfig
 from faststream._internal.endpoint.publisher.fake import FakePublisher
 from faststream._internal.endpoint.subscriber import SubscriberSpecification, SubscriberUsecase
 from faststream._internal.endpoint.subscriber.call_item import CallsCollection
@@ -12,14 +13,13 @@ from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.schema import Message, Operation, SubscriberSpec
 
 from faststream_stomp.models import (
-    StompBrokerConfig,
     StompPublishCommand,
     StompSubscriberSpecificationConfig,
     StompSubscriberUsecaseConfig,
 )
 
 
-class StompSubscriberSpecification(SubscriberSpecification[StompBrokerConfig, StompSubscriberSpecificationConfig]):
+class StompSubscriberSpecification(SubscriberSpecification[BrokerConfig, StompSubscriberSpecificationConfig]):
     @property
     def name(self) -> str:
         return f"{self._outer_config.prefix}{self.config.destination_without_prefix}:{self.call_name}"
