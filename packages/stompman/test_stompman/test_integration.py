@@ -89,7 +89,7 @@ def bytes_not_contains(*avoided: bytes) -> Callable[[bytes], bool]:
     return lambda checked: all(item not in checked for item in avoided)
 
 
-noise_bytes_strategy = strategies.binary().filter(bytes_not_contains(NEWLINE, NULL))
+noise_bytes_strategy = strategies.binary().filter(bytes_not_contains(NEWLINE, NULL, *COMMANDS_TO_FRAMES))
 header_value_strategy = strategies.text().filter(lambda text: "\x00" not in text)
 headers_strategy = strategies.dictionaries(header_value_strategy, header_value_strategy).map(
     lambda headers: dict(
