@@ -10,7 +10,7 @@ dev = [
     "hypothesis==6.124.7",
     "mypy==1.17.1",
     "polyfactory==2.19.0",
-    "pytest==8.3.4",
+    "pytest==8.4.1",
     "pytest-cov==6.0.0",
     "ruff==0.9.3",
     "uvloop==0.21.0",
