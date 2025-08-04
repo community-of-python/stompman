@@ -9,7 +9,7 @@ import anyio
 import stompman
 from fast_depends.dependencies import Dependant
 from faststream import ContextRepo, PublishType
-from faststream._internal.basic_types import AnyDict, LoggerProto, SendableMessage
+from faststream._internal.basic_types import LoggerProto, SendableMessage
 from faststream._internal.broker import BrokerUsecase
 from faststream._internal.broker.registrator import Registrator
 from faststream._internal.configs import BrokerConfig
@@ -33,7 +33,7 @@ class StompSecurity(BaseSecurity):
         self.ssl_context = None
         self.use_ssl = False
 
-    def get_requirement(self) -> list[AnyDict]:  # noqa: PLR6301
+    def get_requirement(self) -> list[dict[str, Any]]:  # noqa: PLR6301
         return [{"user-password": []}]
 
     def get_schema(self) -> dict[str, dict[str, str]]:  # noqa: PLR6301

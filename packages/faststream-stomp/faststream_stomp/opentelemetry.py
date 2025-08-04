@@ -1,6 +1,7 @@
+from typing import Any
+
 import stompman
 from faststream import StreamMessage
-from faststream._internal.basic_types import AnyDict
 from faststream.opentelemetry import TelemetrySettingsProvider
 from faststream.opentelemetry.consts import MESSAGING_DESTINATION_PUBLISH_NAME
 from faststream.opentelemetry.middleware import TelemetryMiddleware
@@ -17,7 +18,7 @@ __all__ = ["StompTelemetryMiddleware", "StompTelemetrySettingsProvider"]
 class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageFrame, StompPublishCommand]):
     messaging_system = "stomp"
 
-    def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> AnyDict:
+    def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> dict[str, Any]:
         return {
             messaging_attributes.MESSAGING_SYSTEM: self.messaging_system,
             messaging_attributes.MESSAGING_MESSAGE_ID: msg.message_id,
@@ -29,7 +30,7 @@ class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageF
     def get_consume_destination_name(self, msg: StreamMessage[stompman.MessageFrame]) -> str:  # noqa: PLR6301
         return msg.raw_message.headers["destination"]
 
-    def get_publish_attrs_from_cmd(self, cmd: StompPublishCommand) -> AnyDict:
+    def get_publish_attrs_from_cmd(self, cmd: StompPublishCommand) -> dict[str, Any]:
         publish_attrs = {
             messaging_attributes.MESSAGING_SYSTEM: self.messaging_system,
             messaging_attributes.MESSAGING_DESTINATION_NAME: cmd.destination,
