@@ -18,7 +18,7 @@ test-fast *args:
 
 test *args:
     #!/bin/bash
-    trap 'echo; docker compose down --remove-orphans' EXIT
+    trap 'echo; docker compose logs && docker compose down --remove-orphans' EXIT
     docker compose up -d
     uv run pytest {{args}}
 
