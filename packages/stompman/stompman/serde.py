@@ -46,7 +46,7 @@ HEADER_UNESCAPE_CHARS: Final = {
 }
 
 
-def iter_bytes(bytes_: bytes) -> tuple[bytes, ...]:
+def iter_bytes(bytes_: bytes | bytearray) -> tuple[bytes, ...]:
     return struct.unpack(f"{len(bytes_)!s}c", bytes_)
 
 
