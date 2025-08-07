@@ -40,6 +40,7 @@ async with stompman.Client(
     disconnect_confirmation_timeout=2,
     write_retry_attempts=3,
     check_server_alive_interval_factor=3,
+    max_concurrent_consumed_messages=10,
 ) as client:
     ...
 ```
