@@ -112,6 +112,7 @@ class Client:
                 while True:
                     frame = await self._message_frame_queue.get()
                     if not (subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"])):
+                        self._message_frame_queue.task_done()
                         continue
                     created_task = task_group.create_task(
                         subscription._run_handler(frame=frame)  # noqa: SLF001
