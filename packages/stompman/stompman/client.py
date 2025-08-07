@@ -99,26 +99,19 @@ class Client:
             async for frame in self._connection_manager.read_frames_reconnecting():
                 match frame:
                     case MessageFrame():
+                        if not (subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"])):
+                            continue
                         await self._message_frame_semaphore.acquire()
-
-                        async def _process_next_frame(frame: MessageFrame) -> None:
-                            try:
-                                if not (
-                                    subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"])
-                                ):
-                                    return
-                                if isinstance(subscription, AutoAckSubscription):
-                                    await subscription._run_handler(frame=frame)  # noqa: SLF001
-                                else:
-                                    await subscription.handler(
-                                        AckableMessageFrame(
-                                            headers=frame.headers, body=frame.body, _subscription=subscription
-                                        )
-                                    )
-                            finally:
-                                self._message_frame_semaphore.release()
-
-                        task_group.create_task(_process_next_frame(frame))
+                        created_task = task_group.create_task(
+                            subscription._run_handler(frame=frame)  # noqa: SLF001
+                            if isinstance(subscription, AutoAckSubscription)
+                            else subscription.handler(
+                                AckableMessageFrame(
+                                    headers=frame.headers, body=frame.body, _subscription=subscription
+                                )
+                            )
+                        )
+                        created_task.add_done_callback(lambda _: self._message_frame_semaphore.release())
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)

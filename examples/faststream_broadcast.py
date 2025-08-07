@@ -15,7 +15,7 @@ async def _(message: str) -> None:
     global count
     count += 1
     print(f"started {count}")
-    await asyncio.sleep(1)
+    # await asyncio.sleep(1)
     print(f"done {count}")
     # print(message)
 
