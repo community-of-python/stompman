@@ -42,7 +42,7 @@ class Client:
     disconnect_confirmation_timeout: int = 2
     check_server_alive_interval_factor: int = 3
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
-    max_concurrent_messages_limit: int = 10
+    max_concurrent_consumed_messages: int = 10
 
     connection_class: type[AbstractConnection] = Connection
 
@@ -75,7 +75,7 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             ssl=self.ssl,
         )
-        self._message_frame_semaphore = asyncio.Semaphore(self.max_concurrent_messages_limit)
+        self._message_frame_semaphore = asyncio.Semaphore(self.max_concurrent_consumed_messages)
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
