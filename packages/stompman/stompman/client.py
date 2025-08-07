@@ -42,7 +42,7 @@ class Client:
     disconnect_confirmation_timeout: int = 2
     check_server_alive_interval_factor: int = 3
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
-    message_frames_max_processing: int = 10
+    max_concurrent_messages_limit: int = 10
 
     connection_class: type[AbstractConnection] = Connection
 
@@ -75,7 +75,7 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             ssl=self.ssl,
         )
-        self._message_frame_semaphore = asyncio.Semaphore(self.message_frames_max_processing)
+        self._message_frame_semaphore = asyncio.Semaphore(self.max_concurrent_messages_limit)
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
@@ -106,9 +106,7 @@ class Client:
                             subscription._run_handler(frame=frame)  # noqa: SLF001
                             if isinstance(subscription, AutoAckSubscription)
                             else subscription.handler(
-                                AckableMessageFrame(
-                                    headers=frame.headers, body=frame.body, _subscription=subscription
-                                )
+                                AckableMessageFrame(headers=frame.headers, body=frame.body, _subscription=subscription)
                             )
                         )
                         created_task.add_done_callback(lambda _: self._message_frame_semaphore.release())
