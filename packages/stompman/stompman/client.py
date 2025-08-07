@@ -50,7 +50,9 @@ class Client:
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
     _listen_task: asyncio.Task[None] = field(init=False)
+    _process_message_frames_task: asyncio.Task[None] = field(init=False)
     _task_group: asyncio.TaskGroup = field(init=False)
+    _message_frame_queue: asyncio.Queue[MessageFrame] = field(default_factory=asyncio.Queue, init=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
@@ -78,6 +80,7 @@ class Client:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
         await self._exit_stack.enter_async_context(self._connection_manager)
         self._listen_task = self._task_group.create_task(self._listen_to_frames())
+        self._process_message_frames_task = self._task_group.create_task(self._process_message_frames())
         return self
 
     async def __aexit__(
@@ -88,29 +91,38 @@ class Client:
                 await self._active_subscriptions.wait_until_empty()
         finally:
             self._listen_task.cancel()
-            await asyncio.wait([self._listen_task])
+            self._process_message_frames_task.cancel()
+            await asyncio.wait([self._listen_task, self._process_message_frames_task])
             await self._exit_stack.aclose()
 
     async def _listen_to_frames(self) -> None:
+        async for frame in self._connection_manager.read_frames_reconnecting():
+            match frame:
+                case MessageFrame():
+                    await self._message_frame_queue.put(frame)
+                case ErrorFrame():
+                    if self.on_error_frame:
+                        self.on_error_frame(frame)
+                case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
+                    pass
+
+    async def _process_message_frames(self) -> None:
         async with asyncio.TaskGroup() as task_group:
-            async for frame in self._connection_manager.read_frames_reconnecting():
-                match frame:
-                    case MessageFrame():
-                        if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
-                            task_group.create_task(
-                                subscription._run_handler(frame=frame)  # noqa: SLF001
-                                if isinstance(subscription, AutoAckSubscription)
-                                else subscription.handler(
-                                    AckableMessageFrame(
-                                        headers=frame.headers, body=frame.body, _subscription=subscription
-                                    )
-                                )
-                            )
-                    case ErrorFrame():
-                        if self.on_error_frame:
-                            self.on_error_frame(frame)
-                    case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
-                        pass
+            try:
+                while True:
+                    frame = await self._message_frame_queue.get()
+                    if not (subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"])):
+                        continue
+                    created_task = task_group.create_task(
+                        subscription._run_handler(frame=frame)  # noqa: SLF001
+                        if isinstance(subscription, AutoAckSubscription)
+                        else subscription.handler(
+                            AckableMessageFrame(headers=frame.headers, body=frame.body, _subscription=subscription)
+                        )
+                    )
+                    created_task.add_done_callback(lambda _: self._message_frame_queue.task_done())
+            finally:
+                await self._message_frame_queue.join()
 
     async def send(
         self,
