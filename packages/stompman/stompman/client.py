@@ -42,17 +42,18 @@ class Client:
     disconnect_confirmation_timeout: int = 2
     check_server_alive_interval_factor: int = 3
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
+    message_frames_buffer_size: int = 10
 
     connection_class: type[AbstractConnection] = Connection
 
     _connection_manager: ConnectionManager = field(init=False)
-    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
+    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False, repr=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
-    _listen_task: asyncio.Task[None] = field(init=False)
-    _process_message_frames_task: asyncio.Task[None] = field(init=False)
-    _task_group: asyncio.TaskGroup = field(init=False)
-    _message_frame_queue: asyncio.Queue[MessageFrame] = field(default_factory=asyncio.Queue, init=False)
+    _listen_task: asyncio.Task[None] = field(init=False, repr=False)
+    _process_message_frames_task: asyncio.Task[None] = field(init=False, repr=False)
+    _task_group: asyncio.TaskGroup = field(init=False, repr=False)
+    _message_frame_queue: asyncio.Queue[MessageFrame] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
@@ -75,6 +76,7 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             ssl=self.ssl,
         )
+        self._message_frame_queue = asyncio.Queue(self.message_frames_buffer_size)
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
