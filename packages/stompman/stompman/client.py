@@ -42,15 +42,17 @@ class Client:
     disconnect_confirmation_timeout: int = 2
     check_server_alive_interval_factor: int = 3
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
+    max_concurrent_consumed_messages: int = 10
 
     connection_class: type[AbstractConnection] = Connection
 
     _connection_manager: ConnectionManager = field(init=False)
-    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
+    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False, repr=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
-    _listen_task: asyncio.Task[None] = field(init=False)
-    _task_group: asyncio.TaskGroup = field(init=False)
+    _listen_task: asyncio.Task[None] = field(init=False, repr=False)
+    _task_group: asyncio.TaskGroup = field(init=False, repr=False)
+    _message_frame_semaphore: asyncio.Semaphore = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
@@ -73,6 +75,7 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             ssl=self.ssl,
         )
+        self._message_frame_semaphore = asyncio.Semaphore(self.max_concurrent_consumed_messages)
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
@@ -96,16 +99,17 @@ class Client:
             async for frame in self._connection_manager.read_frames_reconnecting():
                 match frame:
                     case MessageFrame():
-                        if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
-                            task_group.create_task(
-                                subscription._run_handler(frame=frame)  # noqa: SLF001
-                                if isinstance(subscription, AutoAckSubscription)
-                                else subscription.handler(
-                                    AckableMessageFrame(
-                                        headers=frame.headers, body=frame.body, _subscription=subscription
-                                    )
-                                )
+                        if not (subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"])):
+                            continue
+                        await self._message_frame_semaphore.acquire()
+                        created_task = task_group.create_task(
+                            subscription._run_handler(frame=frame)  # noqa: SLF001
+                            if isinstance(subscription, AutoAckSubscription)
+                            else subscription.handler(
+                                AckableMessageFrame(headers=frame.headers, body=frame.body, _subscription=subscription)
                             )
+                        )
+                        created_task.add_done_callback(lambda _: self._message_frame_semaphore.release())
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)
