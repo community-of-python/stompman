@@ -143,6 +143,8 @@ async def test_ack_nack_reject_exception(
         await broker.start()
         await broker.publish(faker.pystr(), destination)
         await event.wait()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
 
 @pytest.mark.parametrize("method_name", ["ack", "nack", "reject"])
@@ -211,6 +213,8 @@ class TestLogging:
             await broker.start()
             await broker.publish(faker.pystr(), destination)
             await event.wait()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
 
         assert message_id
         extra = {"destination": destination, "message_id": message_id}
