@@ -133,6 +133,7 @@ stompman takes care of cleaning up resources automatically. When you leave the c
 
 - When connection is lost, stompman will attempt to handle it automatically. `stompman.FailedAllConnectAttemptsError` will be raised if all connection attempts fail. `stompman.FailedAllWriteAttemptsError` will be raised if connection succeeds but sending a frame or heartbeat lead to losing connection.
 - To implement health checks, use `stompman.Client.is_alive()` — it will return `True` if everything is OK and `False` if server is not responding.
+- `stompman` will write log warnings when connection is lost, after successful reconnection or invalid state during ack/nack.
 
 ### ...and caveats
 
