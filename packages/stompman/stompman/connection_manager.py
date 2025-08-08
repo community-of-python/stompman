@@ -11,8 +11,8 @@ from stompman.connection import AbstractConnection
 from stompman.errors import (
     AllServersUnavailable,
     AnyConnectionIssue,
-    ConnectionLost,
     ConnectionLostError,
+    ConnectionLostOnLifespanEnter,
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
 )
@@ -147,7 +147,7 @@ class ConnectionManager:
         try:
             connection_result = await lifespan.enter()
         except ConnectionLostError:
-            return ConnectionLost()
+            return ConnectionLostOnLifespanEnter()
 
         return (
             ActiveConnectionState(

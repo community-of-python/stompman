@@ -28,7 +28,7 @@ class UnsupportedProtocolVersion:
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class ConnectionLost: ...
+class ConnectionLostOnLifespanEnter: ...
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -38,7 +38,7 @@ class AllServersUnavailable:
 
 
 StompProtocolConnectionIssue = ConnectionConfirmationTimeout | UnsupportedProtocolVersion
-AnyConnectionIssue = StompProtocolConnectionIssue | ConnectionLost | AllServersUnavailable
+AnyConnectionIssue = StompProtocolConnectionIssue | ConnectionLostOnLifespanEnter | AllServersUnavailable
 
 
 @dataclass(kw_only=True)
