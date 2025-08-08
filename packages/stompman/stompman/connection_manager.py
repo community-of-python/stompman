@@ -109,9 +109,7 @@ class ConnectionManager:
                     self._active_connection_state.lifespan.connection_parameters,
                     self._active_connection_state.server_heartbeat.will_send_interval_ms,
                 )
-                stale_connection = self._active_connection_state.connection
                 self._clear_active_connection_state()
-                await stale_connection.close()
 
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters
