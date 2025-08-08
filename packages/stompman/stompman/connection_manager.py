@@ -103,12 +103,6 @@ class ConnectionManager:
             if not self._active_connection_state:
                 continue
             if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
-                LOGGER.warning(
-                    "server did not send bytes for too long, disconnecting. "
-                    "connection_parameters: %s, promised_heartbeat_interval_ms: %s",
-                    self._active_connection_state.lifespan.connection_parameters,
-                    self._active_connection_state.server_heartbeat.will_send_interval_ms,
-                )
                 self._clear_active_connection_state()
 
     async def _create_connection_to_one_server(
