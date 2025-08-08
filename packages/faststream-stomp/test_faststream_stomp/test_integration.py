@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated
 from unittest import mock
@@ -27,6 +29,15 @@ def broker(first_server_connection_parameters: stompman.ConnectionParameters) ->
     return faststream_stomp.StompBroker(stompman.Client([first_server_connection_parameters]))
 
 
+@asynccontextmanager
+async def run_faststream_app(application: FastStream) -> AsyncGenerator[None, None]:
+    async with asyncio.TaskGroup() as task_group:
+        run_task = task_group.create_task(application.run())
+        yield
+        application.exit()
+        await asyncio.wait([run_task])
+
+
 async def test_simple(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     app = FastStream(broker)
     expected_body, destination = faker.pystr(), faker.pystr()
@@ -43,10 +54,8 @@ async def test_simple(faker: faker.Faker, broker: faststream_stomp.StompBroker) 
         await broker.connect()
         await publisher.publish(expected_body.encode(), correlation_id=gen_cor_id())
 
-    async with asyncio.timeout(10), asyncio.TaskGroup() as task_group:
-        run_task = task_group.create_task(app.run())
+    async with asyncio.timeout(10), run_faststream_app(app):
         await event.wait()
-        run_task.cancel()
 
 
 async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
@@ -71,10 +80,8 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
         await broker.connect()
         await first_publisher.publish(expected_body.encode())
 
-    async with asyncio.timeout(10), asyncio.TaskGroup() as task_group:
-        run_task = task_group.create_task(app.run())
+    async with asyncio.timeout(10), run_faststream_app(app):
         await event.wait()
-        run_task.cancel()
 
 
 async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
@@ -96,10 +103,8 @@ async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) 
         await broker.connect()
         await publisher.publish(expected_body)
 
-    async with asyncio.timeout(1), asyncio.TaskGroup() as task_group:
-        run_task = task_group.create_task(app.run())
+    async with asyncio.timeout(1), run_faststream_app(app):
         await event.wait()
-        run_task.cancel()
 
 
 async def test_broker_close(broker: faststream_stomp.StompBroker) -> None:
