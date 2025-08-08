@@ -49,8 +49,8 @@ class Client:
     _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
-    _listen_task: asyncio.Task[None] = field(init=False)
-    _task_group: asyncio.TaskGroup = field(init=False)
+    _listen_task: asyncio.Task[None] = field(init=False, repr=False)
+    _task_group: asyncio.TaskGroup = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
