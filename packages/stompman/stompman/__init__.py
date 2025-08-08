@@ -71,5 +71,5 @@ __all__ = [
     "UnsubscribeFrame",
     "UnsupportedProtocolVersion",
     "dump_frame",
-    "logger"
+    "logger",
 ]
