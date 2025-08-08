@@ -61,7 +61,7 @@ class ConnectionManager:
         await self._task_group.__aenter__()
         self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
-        self._active_connection_state = await self._get_active_connection_state()
+        self._active_connection_state = await self._get_active_connection_state_reconnecting()
         return self
 
     async def __aexit__(
@@ -157,7 +157,7 @@ class ConnectionManager:
             else connection_result
         )
 
-    async def _get_active_connection_state(self) -> ActiveConnectionState:
+    async def _get_active_connection_state_reconnecting(self) -> ActiveConnectionState:
         if self._active_connection_state:
             return self._active_connection_state
 
@@ -184,7 +184,7 @@ class ConnectionManager:
 
     async def write_heartbeat_reconnecting(self) -> None:
         for _ in range(self.write_retry_attempts):
-            connection_state = await self._get_active_connection_state()
+            connection_state = await self._get_active_connection_state_reconnecting()
             try:
                 return connection_state.connection.write_heartbeat()
             except ConnectionLostError:
@@ -194,7 +194,7 @@ class ConnectionManager:
 
     async def write_frame_reconnecting(self, frame: AnyClientFrame) -> None:
         for _ in range(self.write_retry_attempts):
-            connection_state = await self._get_active_connection_state()
+            connection_state = await self._get_active_connection_state_reconnecting()
             try:
                 return await connection_state.connection.write_frame(frame)
             except ConnectionLostError:
@@ -204,7 +204,7 @@ class ConnectionManager:
 
     async def read_frames_reconnecting(self) -> AsyncGenerator[AnyServerFrame, None]:
         while True:
-            connection_state = await self._get_active_connection_state()
+            connection_state = await self._get_active_connection_state_reconnecting()
             try:
                 async for frame in connection_state.connection.read_frames():
                     yield frame

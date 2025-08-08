@@ -63,7 +63,7 @@ async def test_connect_attempts_ok(ok_on_attempt: int, monkeypatch: pytest.Monke
     sleep_mock = mock.AsyncMock()
     monkeypatch.setattr("asyncio.sleep", sleep_mock)
     manager = EnrichedConnectionManager(connection_class=MockConnection)
-    active_connection_state = await manager._get_active_connection_state()
+    active_connection_state = await manager._get_active_connection_state_reconnecting()
     assert isinstance(active_connection_state, ActiveConnectionState)
     assert attempts == ok_on_attempt == (len(sleep_mock.mock_calls) + 1)
 
@@ -136,7 +136,7 @@ async def test_get_active_connection_state_lifespan_flaky_ok() -> None:
     lifespan_factory = mock.Mock(return_value=mock.Mock(enter=enter))
     manager = EnrichedConnectionManager(lifespan_factory=lifespan_factory, connection_class=BaseMockConnection)
 
-    await manager._get_active_connection_state()
+    await manager._get_active_connection_state_reconnecting()
 
     assert enter.mock_calls == [mock.call(), mock.call()]
     assert lifespan_factory.mock_calls == [
@@ -159,7 +159,7 @@ async def test_get_active_connection_state_lifespan_flaky_fails() -> None:
     manager = EnrichedConnectionManager(lifespan_factory=lifespan_factory, connection_class=BaseMockConnection)
 
     with pytest.raises(FailedAllConnectAttemptsError) as exc_info:
-        await manager._get_active_connection_state()
+        await manager._get_active_connection_state_reconnecting()
 
     assert (
         exc_info.value.retry_attempts
@@ -174,7 +174,7 @@ async def test_get_active_connection_state_fails_to_connect() -> None:
         connect = mock.AsyncMock(return_value=None)
 
     with pytest.raises(FailedAllConnectAttemptsError):
-        await EnrichedConnectionManager(connection_class=MockConnection)._get_active_connection_state()
+        await EnrichedConnectionManager(connection_class=MockConnection)._get_active_connection_state_reconnecting()
 
 
 async def test_get_active_connection_state_ok_concurrent() -> None:
@@ -184,11 +184,11 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
     manager = EnrichedConnectionManager(lifespan_factory=lifespan_factory, connection_class=BaseMockConnection)
 
     first_state, second_state, third_state = await asyncio.gather(
-        manager._get_active_connection_state(),
-        manager._get_active_connection_state(),
-        manager._get_active_connection_state(),
+        manager._get_active_connection_state_reconnecting(),
+        manager._get_active_connection_state_reconnecting(),
+        manager._get_active_connection_state_reconnecting(),
     )
-    fourth_state = await manager._get_active_connection_state()
+    fourth_state = await manager._get_active_connection_state_reconnecting()
 
     assert (
         first_state
