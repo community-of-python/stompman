@@ -38,6 +38,7 @@ class AbstractConnectionLifespan(Protocol):
 @dataclass(kw_only=True, slots=True)
 class ConnectionLifespan(AbstractConnectionLifespan):
     connection: AbstractConnection
+    connection_parameters: ConnectionParameters
     protocol_version: str
     client_heartbeat: Heartbeat
     connection_confirmation_timeout: int
