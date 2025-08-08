@@ -17,6 +17,7 @@ from stompman.errors import (
     FailedAllWriteAttemptsError,
 )
 from stompman.frames import AnyClientFrame, AnyServerFrame
+from stompman.log import LOGGER
 
 if TYPE_CHECKING:
     from stompman.connection_lifespan import AbstractConnectionLifespan, ConnectionLifespanFactory
@@ -102,6 +103,12 @@ class ConnectionManager:
             if not self._active_connection_state:
                 continue
             if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
+                LOGGER.info(
+                    "server did not send bytes for too long. "
+                    "connection_parameters: %s, promised_heartbeat_interval_ms: %s",
+                    self._active_connection_state.lifespan.connection_parameters,
+                    self._active_connection_state.server_heartbeat.will_send_interval_ms,
+                )
                 self._active_connection_state = None
 
     async def _create_connection_to_one_server(

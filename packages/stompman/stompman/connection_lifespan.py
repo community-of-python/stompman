@@ -27,7 +27,10 @@ class EstablishedConnectionResult:
     server_heartbeat: Heartbeat
 
 
+@dataclass(kw_only=True, slots=True)
 class AbstractConnectionLifespan(Protocol):
+    connection_parameters: ConnectionParameters
+
     async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue: ...
     async def exit(self) -> None: ...
 
@@ -35,7 +38,6 @@ class AbstractConnectionLifespan(Protocol):
 @dataclass(kw_only=True, slots=True)
 class ConnectionLifespan(AbstractConnectionLifespan):
     connection: AbstractConnection
-    connection_parameters: ConnectionParameters
     protocol_version: str
     client_heartbeat: Heartbeat
     connection_confirmation_timeout: int
