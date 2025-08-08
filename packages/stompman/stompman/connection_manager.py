@@ -61,7 +61,7 @@ class ConnectionManager:
         await self._task_group.__aenter__()
         self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
-        self._active_connection_state = await self._get_active_connection_state_reconnecting(is_initial=True)
+        self._active_connection_state = await self._get_active_connection_state(is_initial_call=True)
         return self
 
     async def __aexit__(
@@ -159,7 +159,10 @@ class ConnectionManager:
             else connection_result
         )
 
-    async def _get_active_connection_state_reconnecting(self, *, is_initial: bool = False) -> ActiveConnectionState:
+    async def _get_active_connection_state(self, *, is_initial_call: bool = False) -> ActiveConnectionState:
+        if self._active_connection_state:
+            return self._active_connection_state
+
         connection_issues: list[AnyConnectionIssue] = []
 
         async with self._reconnect_lock:
@@ -171,7 +174,7 @@ class ConnectionManager:
 
                 if isinstance(connection_result, ActiveConnectionState):
                     self._active_connection_state = connection_result
-                    if not is_initial:
+                    if not is_initial_call:
                         LOGGER.warning(
                             "reconnected after failure connection failure. connection_parameters: %s",
                             connection_result.lifespan.connection_parameters,
@@ -184,16 +187,17 @@ class ConnectionManager:
         raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=connection_issues)
 
     def _clear_active_connection_state(self) -> None:
-        if self._active_connection_state:
-            LOGGER.warning(
-                "connection lost. connection_parameters: %s",
-                self._active_connection_state.lifespan.connection_parameters,
-            )
+        if not self._active_connection_state:
+            return
+        LOGGER.warning(
+            "connection lost. connection_parameters: %s",
+            self._active_connection_state.lifespan.connection_parameters,
+        )
         self._active_connection_state = None
 
     async def write_heartbeat_reconnecting(self) -> None:
         for _ in range(self.write_retry_attempts):
-            connection_state = await self._get_active_connection_state_reconnecting()
+            connection_state = await self._get_active_connection_state()
             try:
                 return connection_state.connection.write_heartbeat()
             except ConnectionLostError:
@@ -203,7 +207,7 @@ class ConnectionManager:
 
     async def write_frame_reconnecting(self, frame: AnyClientFrame) -> None:
         for _ in range(self.write_retry_attempts):
-            connection_state = await self._get_active_connection_state_reconnecting()
+            connection_state = await self._get_active_connection_state()
             try:
                 return await connection_state.connection.write_frame(frame)
             except ConnectionLostError:
@@ -213,7 +217,7 @@ class ConnectionManager:
 
     async def read_frames_reconnecting(self) -> AsyncGenerator[AnyServerFrame, None]:
         while True:
-            connection_state = await self._get_active_connection_state_reconnecting()
+            connection_state = await self._get_active_connection_state()
             try:
                 async for frame in connection_state.connection.read_frames():
                     yield frame

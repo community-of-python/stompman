@@ -54,9 +54,10 @@ class EnrichedClient(stompman.Client):
     )
 
 
-@dataclass(kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class NoopLifespan(AbstractConnectionLifespan):
     connection: AbstractConnection
+    connection_parameters: stompman.ConnectionParameters
     set_heartbeat_interval: Callable[[Heartbeat], Any]
 
     async def enter(self) -> EstablishedConnectionResult | stompman.StompProtocolConnectionIssue:

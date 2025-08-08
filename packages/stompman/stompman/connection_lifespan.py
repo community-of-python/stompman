@@ -27,7 +27,6 @@ class EstablishedConnectionResult:
     server_heartbeat: Heartbeat
 
 
-@dataclass(kw_only=True, slots=True)
 class AbstractConnectionLifespan(Protocol):
     connection_parameters: ConnectionParameters
 

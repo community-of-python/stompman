@@ -76,18 +76,18 @@ class BaseSubscription:
         if not self._active_subscriptions.contains_by_id(self.id):
             LOGGER.warning(
                 "failed to nack message frame: subscription is not active. "
-                "subscription_id: %s, message_id: %s, active_subscriptions: %s",
-                self.id,
+                "message_id: %s, subscription_id: %s, active_subscriptions: %s",
                 frame.headers["message-id"],
+                self.id,
                 self._active_subscriptions.get_ids(),
             )
             return
         if not (ack_id := frame.headers.get("ack")):
             LOGGER.warning(
                 'failed to nack message frame: it has no "ack" header. "'
-                "subscription_id: %s, message_id: %s, frame_header_names: %s",
-                self.id,
+                "message_id: %s, subscription_id: %s, frame_header_names: %s",
                 frame.headers["message-id"],
+                self.id,
                 frame.headers.keys(),
             )
             return
@@ -97,18 +97,18 @@ class BaseSubscription:
         if not self._active_subscriptions.contains_by_id(self.id):
             LOGGER.warning(
                 "failed to ack message frame: subscription is not active. "
-                "subscription_id: %s, message_id: %s, active_subscriptions: %s",
-                self.id,
+                "message_id: %s, subscription_id: %s, active_subscriptions: %s",
                 frame.headers["message-id"],
+                self.id,
                 self._active_subscriptions.get_ids(),
             )
             return
         if not (ack_id := frame.headers.get("ack")):
             LOGGER.warning(
                 'failed to ack message frame: it has no "ack" header. "'
-                "subscription_id: %s, message_id: %s, frame_header_names: %s",
-                self.id,
+                "message_id: %s, subscription_id: %s, frame_header_names: %s",
                 frame.headers["message-id"],
+                self.id,
                 frame.headers.keys(),
             )
             return
