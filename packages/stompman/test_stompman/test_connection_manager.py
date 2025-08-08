@@ -210,6 +210,7 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
 async def test_connection_manager_context_connection_lost() -> None:
     async with EnrichedConnectionManager(connection_class=BaseMockConnection) as manager:
         manager._clear_active_connection_state()
+        manager._clear_active_connection_state()
 
 
 async def test_connection_manager_context_lifespan_aexit_raises_connection_lost() -> None:

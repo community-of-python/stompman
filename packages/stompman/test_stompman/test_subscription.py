@@ -190,7 +190,11 @@ async def test_client_listen_routing_ok(monkeypatch: pytest.MonkeyPatch, faker: 
 @pytest.mark.parametrize("side_effect", [None, SomeError])
 @pytest.mark.parametrize("ack", ["client", "client-individual"])
 async def test_client_listen_unsubscribe_before_ack_or_nack(
-    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, ack: AckMode, side_effect: object
+    monkeypatch: pytest.MonkeyPatch,
+    faker: faker.Faker,
+    ack: AckMode,
+    side_effect: object,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     subscription_id, destination = faker.pystr(), faker.pystr()
     monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
@@ -213,6 +217,42 @@ async def test_client_listen_unsubscribe_before_ack_or_nack(
         message_frame,
         UnsubscribeFrame(headers={"id": subscription_id}),
     )
+    assert len(caplog.messages) == 1
+
+
+@pytest.mark.parametrize("side_effect", [None, SomeError])
+@pytest.mark.parametrize("ack", ["client", "client-individual"])
+async def test_client_listen_ack_with_no_ack_header(
+    monkeypatch: pytest.MonkeyPatch,
+    faker: faker.Faker,
+    ack: AckMode,
+    side_effect: object,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    subscription_id, destination = faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+
+    message_frame = build_dataclass(MessageFrame, headers={"subscription": subscription_id})
+    message_frame.headers.pop("ack")
+
+    connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([message_frame]))
+    message_handler = mock.AsyncMock(side_effect=side_effect)
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        subscription = await client.subscribe(
+            destination, message_handler, on_suppressed_exception=noop_error_handler, ack=ack
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await subscription.unsubscribe()
+
+    message_handler.assert_called_once_with(message_frame)
+    assert collected_frames == enrich_expected_frames(
+        SubscribeFrame(headers={"ack": ack, "destination": destination, "id": subscription_id}),
+        message_frame,
+        UnsubscribeFrame(headers={"id": subscription_id}),
+    )
+    assert len(caplog.messages) == 1
 
 
 @pytest.mark.parametrize("ok", [True, False])

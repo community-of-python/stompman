@@ -28,6 +28,8 @@ class EstablishedConnectionResult:
 
 
 class AbstractConnectionLifespan(Protocol):
+    connection_parameters: ConnectionParameters
+
     async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue: ...
     async def exit(self) -> None: ...
 

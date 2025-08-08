@@ -11,12 +11,13 @@ from stompman.connection import AbstractConnection
 from stompman.errors import (
     AllServersUnavailable,
     AnyConnectionIssue,
-    ConnectionLost,
     ConnectionLostError,
+    ConnectionLostOnLifespanEnter,
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
 )
 from stompman.frames import AnyClientFrame, AnyServerFrame
+from stompman.logger import LOGGER
 
 if TYPE_CHECKING:
     from stompman.connection_lifespan import AbstractConnectionLifespan, ConnectionLifespanFactory
@@ -60,7 +61,7 @@ class ConnectionManager:
         await self._task_group.__aenter__()
         self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
-        self._active_connection_state = await self._get_active_connection_state()
+        self._active_connection_state = await self._get_active_connection_state(is_initial_call=True)
         return self
 
     async def __aexit__(
@@ -102,7 +103,7 @@ class ConnectionManager:
             if not self._active_connection_state:
                 continue
             if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
-                self._active_connection_state = None
+                self._clear_active_connection_state()
 
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters
@@ -140,7 +141,7 @@ class ConnectionManager:
         try:
             connection_result = await lifespan.enter()
         except ConnectionLostError:
-            return ConnectionLost()
+            return ConnectionLostOnLifespanEnter()
 
         return (
             ActiveConnectionState(
@@ -150,7 +151,7 @@ class ConnectionManager:
             else connection_result
         )
 
-    async def _get_active_connection_state(self) -> ActiveConnectionState:
+    async def _get_active_connection_state(self, *, is_initial_call: bool = False) -> ActiveConnectionState:
         if self._active_connection_state:
             return self._active_connection_state
 
@@ -165,6 +166,11 @@ class ConnectionManager:
 
                 if isinstance(connection_result, ActiveConnectionState):
                     self._active_connection_state = connection_result
+                    if not is_initial_call:
+                        LOGGER.warning(
+                            "reconnected after failure connection failure. connection_parameters: %s",
+                            connection_result.lifespan.connection_parameters,
+                        )
                     return connection_result
 
                 connection_issues.append(connection_result)
@@ -173,6 +179,12 @@ class ConnectionManager:
         raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=connection_issues)
 
     def _clear_active_connection_state(self) -> None:
+        if not self._active_connection_state:
+            return
+        LOGGER.warning(
+            "connection lost. connection_parameters: %s",
+            self._active_connection_state.lifespan.connection_parameters,
+        )
         self._active_connection_state = None
 
     async def write_heartbeat_reconnecting(self) -> None:
