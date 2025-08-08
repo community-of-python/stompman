@@ -190,7 +190,11 @@ async def test_client_listen_routing_ok(monkeypatch: pytest.MonkeyPatch, faker: 
 @pytest.mark.parametrize("side_effect", [None, SomeError])
 @pytest.mark.parametrize("ack", ["client", "client-individual"])
 async def test_client_listen_unsubscribe_before_ack_or_nack(
-    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, ack: AckMode, side_effect: object
+    monkeypatch: pytest.MonkeyPatch,
+    faker: faker.Faker,
+    ack: AckMode,
+    side_effect: object,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     subscription_id, destination = faker.pystr(), faker.pystr()
     monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
@@ -213,6 +217,7 @@ async def test_client_listen_unsubscribe_before_ack_or_nack(
         message_frame,
         UnsubscribeFrame(headers={"id": subscription_id}),
     )
+    assert len(caplog.messages) == 1
 
 
 @pytest.mark.parametrize("ok", [True, False])
