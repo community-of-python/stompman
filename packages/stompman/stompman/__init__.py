@@ -30,6 +30,7 @@ from stompman.frames import (
     SubscribeFrame,
     UnsubscribeFrame,
 )
+from stompman.log import LOGGER as logger  # noqa: N811
 from stompman.serde import FrameParser, dump_frame
 from stompman.subscription import AckableMessageFrame, AutoAckSubscription, ManualAckSubscription
 from stompman.transaction import Transaction
@@ -70,4 +71,5 @@ __all__ = [
     "UnsubscribeFrame",
     "UnsupportedProtocolVersion",
     "dump_frame",
+    "logger"
 ]

@@ -184,6 +184,11 @@ class ConnectionManager:
         raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=connection_issues)
 
     def _clear_active_connection_state(self) -> None:
+        if self._active_connection_state:
+            LOGGER.warning(
+                "connection lost. connection_parameters: %s",
+                self._active_connection_state.lifespan.connection_parameters,
+            )
         self._active_connection_state = None
 
     async def write_heartbeat_reconnecting(self) -> None:
