@@ -1,5 +1,5 @@
 import logging
-import typing
+from typing import Final
 
-LOGGER: typing.Final = logging.getLogger("stompman")
+LOGGER: Final = logging.getLogger("stompman")
 __all__ = ["LOGGER"]
