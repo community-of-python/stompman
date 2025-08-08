@@ -17,7 +17,7 @@ from stompman.errors import (
     FailedAllWriteAttemptsError,
 )
 from stompman.frames import AnyClientFrame, AnyServerFrame
-from stompman.log import LOGGER
+from stompman.logger import LOGGER
 
 if TYPE_CHECKING:
     from stompman.connection_lifespan import AbstractConnectionLifespan, ConnectionLifespanFactory

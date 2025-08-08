@@ -14,7 +14,7 @@ from stompman.frames import (
     SubscribeFrame,
     UnsubscribeFrame,
 )
-from stompman.log import LOGGER
+from stompman.logger import LOGGER
 
 
 @dataclass(kw_only=True, slots=True, frozen=True)
