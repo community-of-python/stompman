@@ -14,6 +14,7 @@ from stompman.frames import (
     SubscribeFrame,
     UnsubscribeFrame,
 )
+from stompman.log import LOGGER
 
 
 @dataclass(kw_only=True, slots=True, frozen=True)
@@ -30,8 +31,12 @@ class ActiveSubscriptions:
     def get_all(self) -> list["AutoAckSubscription | ManualAckSubscription"]:
         return list(self.subscriptions.values())
 
+    def get_ids(self) -> list[str]:
+        return list(self.subscriptions.keys())
+
     def delete_by_id(self, subscription_id: str) -> None:
-        del self.subscriptions[subscription_id]
+        if subscription_id in self.subscriptions:
+            del self.subscriptions[subscription_id]
         if not self.subscriptions:
             self.event.set()
 
@@ -68,16 +73,44 @@ class BaseSubscription:
         await self._connection_manager.maybe_write_frame(UnsubscribeFrame(headers={"id": self.id}))
 
     async def _nack(self, frame: MessageFrame) -> None:
-        if self._active_subscriptions.contains_by_id(self.id) and (ack_id := frame.headers.get("ack")):
-            await self._connection_manager.maybe_write_frame(
-                NackFrame(headers={"id": ack_id, "subscription": frame.headers["subscription"]})
+        if not self._active_subscriptions.contains_by_id(self.id):
+            LOGGER.warning(
+                "failed to nack message frame: subscription is not active. subscription_id: %s, message_id: %s, active_subscriptions: %s",
+                self.id,
+                frame.headers["message-id"],
+                self._active_subscriptions.get_ids(),
             )
+            return
+        if not (ack_id := frame.headers.get("ack")):
+            LOGGER.warning(
+                'failed to nack message frame: it has no "ack" header. "'
+                "subscription_id: %s, message_id: %s, frame_header_names: %s",
+                self.id,
+                frame.headers["message-id"],
+                frame.headers.keys(),
+            )
+            return
+        await self._connection_manager.maybe_write_frame(NackFrame(headers={"id": ack_id, "subscription": self.id}))
 
     async def _ack(self, frame: MessageFrame) -> None:
-        if self._active_subscriptions.contains_by_id(self.id) and (ack_id := frame.headers.get("ack")):
-            await self._connection_manager.maybe_write_frame(
-                AckFrame(headers={"id": ack_id, "subscription": frame.headers["subscription"]})
+        if not self._active_subscriptions.contains_by_id(self.id):
+            LOGGER.warning(
+                "failed to ack message frame: subscription is not active. subscription_id: %s, message_id: %s, active_subscriptions: %s",
+                self.id,
+                frame.headers["message-id"],
+                self._active_subscriptions.get_ids(),
             )
+            return
+        if not (ack_id := frame.headers.get("ack")):
+            LOGGER.warning(
+                'failed to ack message frame: it has no "ack" header. "'
+                "subscription_id: %s, message_id: %s, frame_header_names: %s",
+                self.id,
+                frame.headers["message-id"],
+                frame.headers.keys(),
+            )
+            return
+        await self._connection_manager.maybe_write_frame(AckFrame(headers={"id": ack_id, "subscription": self.id}))
 
 
 @dataclass(kw_only=True, slots=True)
