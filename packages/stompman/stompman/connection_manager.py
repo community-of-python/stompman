@@ -61,7 +61,7 @@ class ConnectionManager:
         await self._task_group.__aenter__()
         self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
-        self._active_connection_state = await self._create_active_connection_state()
+        self._active_connection_state = await self._get_active_connection_state_reconnecting(is_initial=True)
         return self
 
     async def __aexit__(
@@ -159,7 +159,7 @@ class ConnectionManager:
             else connection_result
         )
 
-    async def _create_active_connection_state(self) -> ActiveConnectionState:
+    async def _get_active_connection_state_reconnecting(self, *, is_initial: bool = False) -> ActiveConnectionState:
         connection_issues: list[AnyConnectionIssue] = []
 
         async with self._reconnect_lock:
@@ -170,17 +170,18 @@ class ConnectionManager:
                 connection_result = await self._connect_to_any_server()
 
                 if isinstance(connection_result, ActiveConnectionState):
+                    self._active_connection_state = connection_result
+                    if not is_initial:
+                        LOGGER.warning(
+                            "reconnected after failure connection failure. connection_parameters: %s",
+                            connection_result.lifespan.connection_parameters,
+                        )
                     return connection_result
 
                 connection_issues.append(connection_result)
                 await asyncio.sleep(self.connect_retry_interval * (attempt + 1))
 
         raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=connection_issues)
-
-    async def _get_active_connection_state_reconnecting(self) -> ActiveConnectionState:
-        if not self._active_connection_state:
-            self._active_connection_state = await self._create_active_connection_state()
-        return self._active_connection_state
 
     def _clear_active_connection_state(self) -> None:
         self._active_connection_state = None
