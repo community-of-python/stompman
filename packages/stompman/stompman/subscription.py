@@ -75,7 +75,8 @@ class BaseSubscription:
     async def _nack(self, frame: MessageFrame) -> None:
         if not self._active_subscriptions.contains_by_id(self.id):
             LOGGER.warning(
-                "failed to nack message frame: subscription is not active. subscription_id: %s, message_id: %s, active_subscriptions: %s",
+                "failed to nack message frame: subscription is not active. "
+                "subscription_id: %s, message_id: %s, active_subscriptions: %s",
                 self.id,
                 frame.headers["message-id"],
                 self._active_subscriptions.get_ids(),
@@ -95,7 +96,8 @@ class BaseSubscription:
     async def _ack(self, frame: MessageFrame) -> None:
         if not self._active_subscriptions.contains_by_id(self.id):
             LOGGER.warning(
-                "failed to ack message frame: subscription is not active. subscription_id: %s, message_id: %s, active_subscriptions: %s",
+                "failed to ack message frame: subscription is not active. "
+                "subscription_id: %s, message_id: %s, active_subscriptions: %s",
                 self.id,
                 frame.headers["message-id"],
                 self._active_subscriptions.get_ids(),
