@@ -1,12 +1,9 @@
-from unittest import mock
-
 import faker
 import faststream_stomp
 import pytest
 import stompman
 from faststream import FastStream
-from faststream.asyncapi import get_app_schema
-from faststream.broker.message import gen_cor_id
+from faststream.message import gen_cor_id
 from faststream_stomp.opentelemetry import StompTelemetryMiddleware
 from faststream_stomp.prometheus import StompPrometheusMiddleware
 from opentelemetry.sdk.metrics import MeterProvider
@@ -59,33 +56,42 @@ async def test_testing(faker: faker.Faker, broker: faststream_stomp.StompBroker)
         third_publisher.mock.assert_called_once_with(expected_body)
 
 
-async def test_broker_request_not_implemented(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    async with faststream_stomp.TestStompBroker(broker):
-        with pytest.raises(NotImplementedError):
-            await broker.request(faker.pystr())
+class TestNotImplemented:
+    async def test_broker_request(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.request(faker.pystr(), faker.pystr())
 
+    async def test_broker_publish_batch(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.publish_batch(faker.pystr(), destination=faker.pystr())
 
-async def test_publisher_request_not_implemented(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    async with faststream_stomp.TestStompBroker(broker):
-        with pytest.raises(NotImplementedError):
-            await broker.publisher(faker.pystr()).request(faker.pystr())
+    async def test_publisher_request(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.publisher(faker.pystr()).request(faker.pystr())
 
+    async def test_subscriber_get_one(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                await broker.subscriber(faker.pystr()).get_one()
 
-def test_get_fmt(broker: faststream_stomp.StompBroker) -> None:
-    broker.get_fmt()
+    async def test_subscriber_aiter(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        async with faststream_stomp.TestStompBroker(broker):
+            with pytest.raises(NotImplementedError):
+                async for _ in broker.subscriber(faker.pystr()):
+                    ...  # pragma: no cover
 
 
 def test_asyncapi_schema(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    broker.include_router(
-        faststream_stomp.StompRouter(
-            handlers=(
-                faststream_stomp.StompRoute(
-                    mock.Mock(), faker.pystr(), publishers=(faststream_stomp.StompRoutePublisher(faker.pystr()),)
-                ),
-            )
-        )
-    )
-    get_app_schema(FastStream(broker))
+    @broker.publisher(faker.pystr())
+    def _publisher() -> None: ...
+
+    @broker.subscriber(faker.pystr())
+    def _subscriber() -> None: ...
+
+    FastStream(broker).schema.to_specification()
 
 
 async def test_opentelemetry_publish(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
