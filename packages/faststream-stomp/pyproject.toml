@@ -27,7 +27,7 @@ build-backend = "hatchling.build"
 dev = ["faststream[otel,prometheus]~=0.6", "asgi-lifespan"]
 
 [tool.uv.sources]
-faststream = {git="https://github.com/ag2ai/faststream", tag="0.6.0rc0"}
+faststream = {git="https://github.com/ag2ai/faststream", tag="0.6.0rc1"}
 [tool.hatch.version]
 source = "vcs"
 raw-options.root = "../.."
