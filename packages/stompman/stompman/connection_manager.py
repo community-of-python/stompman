@@ -66,8 +66,7 @@ class ConnectionManager:
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
     ) -> None:
         self._send_heartbeat_task.cancel()
-        self._check_server_heartbeat_task.cancel()
-        await asyncio.wait([self._send_heartbeat_task, self._check_server_heartbeat_task])
+        await asyncio.wait([self._send_heartbeat_task])
         await self._task_group.__aexit__(exc_type, exc_value, traceback)
 
         if not self._active_connection_state:
@@ -80,12 +79,8 @@ class ConnectionManager:
 
     def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
-        self._check_server_heartbeat_task.cancel()
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
-        )
-        self._check_server_heartbeat_task = self._task_group.create_task(
-            self._check_server_heartbeat_forever(server_heartbeat.will_send_interval_ms)
         )
 
     async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
