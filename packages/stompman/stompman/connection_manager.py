@@ -77,7 +77,7 @@ class ConnectionManager:
             return
         await self._active_connection_state.connection.close()
 
-    def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
+    def _restart_heartbeat_task(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
@@ -119,7 +119,7 @@ class ConnectionManager:
         lifespan = self.lifespan_factory(
             connection=connection,
             connection_parameters=connection_parameters,
-            set_heartbeat_interval=self._restart_heartbeat_tasks,
+            set_heartbeat_interval=self._restart_heartbeat_task,
         )
 
         try:
