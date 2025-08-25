@@ -143,12 +143,12 @@ async def test_get_active_connection_state_lifespan_flaky_ok() -> None:
         mock.call(
             connection=BaseMockConnection(),
             connection_parameters=manager.servers[0],
-            set_heartbeat_interval=manager._restart_heartbeat_task,
+            set_heartbeat_interval=manager._restart_heartbeat_tasks,
         ),
         mock.call(
             connection=BaseMockConnection(),
             connection_parameters=manager.servers[0],
-            set_heartbeat_interval=manager._restart_heartbeat_task,
+            set_heartbeat_interval=manager._restart_heartbeat_tasks,
         ),
     ]
 
