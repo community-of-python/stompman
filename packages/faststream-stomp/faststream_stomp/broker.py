@@ -1,22 +1,31 @@
 import asyncio
 import logging
 import types
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Unpack
+import typing
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 import anyio
 import stompman
-from fast_depends.dependencies import Depends
-from faststream.asyncapi.schema import Tag, TagDict
-from faststream.broker.core.usecase import BrokerUsecase
-from faststream.broker.types import BrokerMiddleware, CustomCallable
-from faststream.log.logging import get_broker_logger
+from fast_depends.dependencies import Dependant
+from faststream import ContextRepo, PublishType
+from faststream._internal.basic_types import LoggerProto, SendableMessage
+from faststream._internal.broker import BrokerUsecase
+from faststream._internal.broker.registrator import Registrator
+from faststream._internal.configs import BrokerConfig
+from faststream._internal.constants import EMPTY
+from faststream._internal.di import FastDependsConfig
+from faststream._internal.logger import DefaultLoggerStorage, make_logger_state
+from faststream._internal.logger.logging import get_broker_logger
+from faststream._internal.types import BrokerMiddleware, CustomCallable
 from faststream.security import BaseSecurity
-from faststream.types import EMPTY, AnyDict, Decorator, LoggerProto, SendableMessage
+from faststream.specification.schema import BrokerSpec
+from faststream.specification.schema.extra import Tag, TagDict
 
+from faststream_stomp.models import BrokerConfigWithStompClient, StompPublishCommand
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
-from faststream_stomp.subscriber import StompLogContext, StompSubscriber
+from faststream_stomp.subscriber import StompSubscriber
 
 
 class StompSecurity(BaseSecurity):
@@ -24,7 +33,7 @@ class StompSecurity(BaseSecurity):
         self.ssl_context = None
         self.use_ssl = False
 
-    def get_requirement(self) -> list[AnyDict]:  # noqa: PLR6301
+    def get_requirement(self) -> list[dict[str, Any]]:  # noqa: PLR6301
         return [{"user-password": []}]
 
     def get_schema(self) -> dict[str, dict[str, str]]:  # noqa: PLR6301
@@ -43,11 +52,40 @@ def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
         raise SystemExit(1)
 
 
-class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompman.Client]):
-    _subscribers: Mapping[int, StompSubscriber]
-    _publishers: Mapping[int, StompPublisher]
+class StompParamsStorage(DefaultLoggerStorage):
     __max_msg_id_ln = 10
     _max_channel_name = 4
+
+    def get_logger(self, *, context: ContextRepo) -> LoggerProto:
+        if logger := self._get_logger_ref():
+            return logger
+        logger = get_broker_logger(
+            name="stomp",
+            default_context={"destination": "", "message_id": ""},
+            message_id_ln=self.__max_msg_id_ln,
+            fmt=(
+                "%(asctime)s %(levelname)-8s - "
+                f"%(destination)-{self._max_channel_name}s | "
+                f"%(message_id)-{self.__max_msg_id_ln}s "
+                "- %(message)s"
+            ),
+            context=context,
+            log_level=self.logger_log_level,
+        )
+        self._logger_ref.add(logger)
+        return logger
+
+
+class StompBroker(
+    StompRegistrator,
+    BrokerUsecase[
+        stompman.MessageFrame,
+        stompman.Client,
+        BrokerConfig,  # Using BrokerConfig to avoid typing issues when passing broker to FastStream app
+    ],
+):
+    _subscribers: list[StompSubscriber]  # type: ignore[assignment]
+    _publishers: list[StompPublisher]  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -55,71 +93,70 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         *,
         decoder: CustomCallable | None = None,
         parser: CustomCallable | None = None,
-        dependencies: Iterable[Depends] = (),
-        middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]] = (),
+        dependencies: Iterable[Dependant] = (),
+        middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame, StompPublishCommand]] = (),
         graceful_timeout: float | None = 15.0,
+        routers: Sequence[Registrator[stompman.MessageFrame]] = (),
         # Logging args
         logger: LoggerProto | None = EMPTY,
         log_level: int = logging.INFO,
         # FastDepends args
         apply_types: bool = True,
-        validate: bool = True,
-        _get_dependant: Callable[..., Any] | None = None,
-        _call_decorators: Iterable[Decorator] = (),
-        # AsyncAPI kwargs,
+        # AsyncAPI args
         description: str | None = None,
-        tags: Iterable[Tag | TagDict] | None = None,
+        tags: Iterable[Tag | TagDict] = (),
     ) -> None:
-        super().__init__(
-            client=client,  # **connection_kwargs
-            decoder=decoder,
-            parser=parser,
-            dependencies=dependencies,
-            middlewares=middlewares,
+        broker_config = BrokerConfigWithStompClient(
+            broker_middlewares=middlewares,  # type: ignore[arg-type]
+            broker_parser=parser,
+            broker_decoder=decoder,
+            logger=make_logger_state(
+                logger=logger,
+                log_level=log_level,
+                default_storage_cls=StompParamsStorage,  # type: ignore[type-abstract]
+            ),
+            fd_config=FastDependsConfig(use_fastdepends=apply_types),
+            broker_dependencies=dependencies,
             graceful_timeout=graceful_timeout,
-            logger=logger,
-            log_level=log_level,
-            apply_types=apply_types,
-            validate=validate,
-            _get_dependant=_get_dependant,
-            _call_decorators=_call_decorators,
+            extra_context={"broker": self},
+            producer=StompProducer(client),
+            client=client,
+        )
+        specification = BrokerSpec(
+            url=[f"{one_server.host}:{one_server.port}" for one_server in broker_config.client.servers],
             protocol="STOMP",
             protocol_version="1.2",
             description=description,
             tags=tags,
-            asyncapi_url=[f"{one_server.host}:{one_server.port}" for one_server in client.servers],
             security=StompSecurity(),
-            default_logger=get_broker_logger(
-                name="stomp", default_context={"channel": ""}, message_id_ln=self.__max_msg_id_ln
-            ),
         )
+
+        super().__init__(config=broker_config, specification=specification, routers=routers)
         self._attempted_to_connect = False
 
+    async def _connect(self) -> stompman.Client:
+        if self._attempted_to_connect:
+            return self.config.broker_config.client
+        self._attempted_to_connect = True
+        await self.config.broker_config.client.__aenter__()
+        self.config.broker_config.client._listen_task.add_done_callback(_handle_listen_task_done)
+        return self.config.broker_config.client
+
     async def start(self) -> None:
+        await self.connect()
         await super().start()
 
-        for handler in self._subscribers.values():
-            self._log(f"`{handler.call_name}` waiting for messages", extra=handler.get_log_context(None))
-            await handler.start()
-
-    async def _connect(self, client: stompman.Client) -> stompman.Client:  # type: ignore[override]
-        if self._attempted_to_connect:
-            return client
-        self._attempted_to_connect = True
-        self._producer = StompProducer(client)
-        await client.__aenter__()
-        client._listen_task.add_done_callback(_handle_listen_task_done)  # noqa: SLF001
-        return client
-
-    async def _close(
+    async def stop(
         self,
         exc_type: type[BaseException] | None = None,
         exc_val: BaseException | None = None,
         exc_tb: types.TracebackType | None = None,
     ) -> None:
+        for sub in self.subscribers:
+            await sub.stop()
         if self._connection:
             await self._connection.__aexit__(exc_type, exc_val, exc_tb)
-        return await super()._close(exc_type, exc_val, exc_tb)
+        self.running = False
 
     async def ping(self, timeout: float | None = None) -> bool:
         sleep_time = (timeout or 10) / 10
@@ -138,22 +175,7 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
 
         return False  # pragma: no cover
 
-    def get_fmt(self) -> str:
-        # `StompLogContext`
-        return (
-            "%(asctime)s %(levelname)-8s - "
-            f"%(destination)-{self._max_channel_name}s | "
-            f"%(message_id)-{self.__max_msg_id_ln}s "
-            "- %(message)s"
-        )
-
-    def _setup_log_context(self, **log_context: Unpack[StompLogContext]) -> None: ...  # type: ignore[override]
-
-    @property
-    def _subscriber_setup_extra(self) -> "AnyDict":
-        return {**super()._subscriber_setup_extra, "client": self._connection}
-
-    async def publish(  # type: ignore[override]
+    async def publish(
         self,
         message: SendableMessage,
         destination: str,
@@ -161,19 +183,44 @@ class StompBroker(StompRegistrator, BrokerUsecase[stompman.MessageFrame, stompma
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
-        await super().publish(
+        publish_command = StompPublishCommand(
             message,
-            producer=self._producer,
-            correlation_id=correlation_id,
+            _publish_type=PublishType.PUBLISH,
             destination=destination,
+            correlation_id=correlation_id,
             headers=headers,
         )
+        return typing.cast("None", await self._basic_publish(publish_command, producer=self.config.producer))
 
     async def request(  # type: ignore[override]
         self,
-        msg: Any,  # noqa: ANN401
+        message: SendableMessage,
+        destination: str,
         *,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> Any:  # noqa: ANN401
-        return await super().request(msg, producer=self._producer, correlation_id=correlation_id, headers=headers)
+        publish_command = StompPublishCommand(
+            message,
+            _publish_type=PublishType.REQUEST,
+            destination=destination,
+            correlation_id=correlation_id,
+            headers=headers,
+        )
+        return await self._basic_request(publish_command, producer=self.config.producer)
+
+    async def publish_batch(  # type: ignore[override]
+        self,
+        *_messages: SendableMessage,
+        destination: str,
+        correlation_id: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        publish_command = StompPublishCommand(
+            "",
+            _publish_type=PublishType.PUBLISH,
+            destination=destination,
+            correlation_id=correlation_id,
+            headers=headers,
+        )
+        return typing.cast("None", await self._basic_publish_batch(publish_command, producer=self.config.producer))
