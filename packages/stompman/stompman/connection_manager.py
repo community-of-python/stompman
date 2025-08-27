@@ -103,7 +103,7 @@ class ConnectionManager:
             if not self._active_connection_state:
                 continue
             if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
-                self._clear_active_connection_state()
+                self._clear_active_connection_state(ConnectionLostError(reason="server heartbeat timeout"))
 
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters
@@ -168,7 +168,7 @@ class ConnectionManager:
                     self._active_connection_state = connection_result
                     if not is_initial_call:
                         LOGGER.warning(
-                            "reconnected after failure connection failure. connection_parameters: %s",
+                            "reconnected after connection failure. connection_parameters: %s",
                             connection_result.lifespan.connection_parameters,
                         )
                     return connection_result
@@ -178,11 +178,12 @@ class ConnectionManager:
 
         raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=connection_issues)
 
-    def _clear_active_connection_state(self) -> None:
+    def _clear_active_connection_state(self, error_reason: ConnectionLostError) -> None:
         if not self._active_connection_state:
             return
         LOGGER.warning(
-            "connection lost. connection_parameters: %s",
+            "connection lost. reason: %s, connection_parameters: %s",
+            error_reason.reason,
             self._active_connection_state.lifespan.connection_parameters,
         )
         self._active_connection_state = None
@@ -192,8 +193,8 @@ class ConnectionManager:
             connection_state = await self._get_active_connection_state()
             try:
                 return connection_state.connection.write_heartbeat()
-            except ConnectionLostError:
-                self._clear_active_connection_state()
+            except ConnectionLostError as error:
+                self._clear_active_connection_state(error)
 
         raise FailedAllWriteAttemptsError(retry_attempts=self.write_retry_attempts)
 
@@ -202,8 +203,8 @@ class ConnectionManager:
             connection_state = await self._get_active_connection_state()
             try:
                 return await connection_state.connection.write_frame(frame)
-            except ConnectionLostError:
-                self._clear_active_connection_state()
+            except ConnectionLostError as error:
+                self._clear_active_connection_state(error)
 
         raise FailedAllWriteAttemptsError(retry_attempts=self.write_retry_attempts)
 
@@ -213,15 +214,15 @@ class ConnectionManager:
             try:
                 async for frame in connection_state.connection.read_frames():
                     yield frame
-            except ConnectionLostError:
-                self._clear_active_connection_state()
+            except ConnectionLostError as error:
+                self._clear_active_connection_state(error)
 
     async def maybe_write_frame(self, frame: AnyClientFrame) -> bool:
         if not self._active_connection_state:
             return False
         try:
             await self._active_connection_state.connection.write_frame(frame)
-        except ConnectionLostError:
-            self._clear_active_connection_state()
+        except ConnectionLostError as error:
+            self._clear_active_connection_state(error)
             return False
         return True
