@@ -12,6 +12,7 @@ from stompman import (
     CommitFrame,
     SendFrame,
 )
+from stompman.errors import ConnectionLostError
 
 from test_stompman.conftest import (
     CONNECT_FRAME,
@@ -85,7 +86,7 @@ async def test_commit_pending_transactions(monkeypatch: pytest.MonkeyPatch, fake
     async with EnrichedClient(connection_class=connection_class) as client:
         async with client.begin() as first_transaction:
             await first_transaction.send(body, destination=destination)
-            client._connection_manager._clear_active_connection_state()
+            client._connection_manager._clear_active_connection_state(ConnectionLostError(reason=""))
         async with client.begin() as second_transaction:
             await second_transaction.send(body, destination=destination)
         await asyncio.sleep(0)

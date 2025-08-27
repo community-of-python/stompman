@@ -209,8 +209,8 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
 
 async def test_connection_manager_context_connection_lost() -> None:
     async with EnrichedConnectionManager(connection_class=BaseMockConnection) as manager:
-        manager._clear_active_connection_state()
-        manager._clear_active_connection_state()
+        manager._clear_active_connection_state(ConnectionLostError(reason=""))
+        manager._clear_active_connection_state(ConnectionLostError(reason=""))
 
 
 async def test_connection_manager_context_lifespan_aexit_raises_connection_lost() -> None:
@@ -271,7 +271,11 @@ async def test_write_frame_reconnecting_raises() -> None:
         await manager.write_frame_reconnecting(build_dataclass(ConnectFrame))
 
 
-SIDE_EFFECTS = [(None,), (ConnectionLostError(), None), (ConnectionLostError(), ConnectionLostError(), None)]
+SIDE_EFFECTS = [
+    (None,),
+    (ConnectionLostError(reason=""), None),
+    (ConnectionLostError(reason=""), ConnectionLostError(reason=""), None),
+]
 
 
 @pytest.mark.parametrize("side_effect", SIDE_EFFECTS)
@@ -318,7 +322,7 @@ async def test_read_frames_reconnecting_ok(side_effect: tuple[ConnectionLostErro
             attempt += 1
             current_effect = side_effect[attempt]
             if isinstance(current_effect, ConnectionLostError):
-                raise ConnectionLostError
+                raise current_effect
             for frame in frames:
                 yield frame
 
