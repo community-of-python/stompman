@@ -182,7 +182,7 @@ class ConnectionManager:
         if not self._active_connection_state:
             return
         LOGGER.warning(
-            "connection lost. reason: %s, connection_parameters: %s",
+            "connection lost. reason: %r, connection_parameters: %s",
             error_reason.reason,
             self._active_connection_state.lifespan.connection_parameters,
         )
