@@ -19,6 +19,7 @@ from test_stompman.conftest import (
     CONNECTED_FRAME,
     EnrichedClient,
     SomeError,
+    build_dataclass,
     create_spying_connection,
     enrich_expected_frames,
     get_read_frames_with_lifespan,
