@@ -20,6 +20,7 @@ from stompman import (
     SubscribeFrame,
     UnsubscribeFrame,
 )
+from stompman.errors import ConnectionLostError
 
 from test_stompman.conftest import (
     CONNECT_FRAME,
@@ -52,7 +53,7 @@ async def test_client_subscriptions_lifespan_resubscribe(ack: AckMode, faker: fa
             headers=sub_extra_headers,
             on_suppressed_exception=noop_error_handler,
         )
-        client._connection_manager._clear_active_connection_state()
+        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
         await client.send(message_body, destination=message_destination)
         await subscription.unsubscribe()
         await asyncio.sleep(0)
@@ -352,7 +353,7 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
 
     async def close_connection_soon(client: stompman.Client) -> None:
         await asyncio.sleep(0)
-        client._connection_manager._clear_active_connection_state()
+        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
 
     with pytest.raises(ExceptionGroup) as exc_info:  # noqa: PT012
         async with asyncio.TaskGroup() as task_group, EnrichedClient(connection_class=connection_class) as client:
