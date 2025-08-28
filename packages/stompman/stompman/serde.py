@@ -141,53 +141,69 @@ def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: byte
     return frame_type(headers=headers_, body=body) if frame_type in FRAMES_WITH_BODY else frame_type(headers=headers_)  # type: ignore[call-arg]
 
 
-def parse_lines_into_frame(lines: deque[bytearray]) -> AnyClientFrame | AnyServerFrame:
-    command = bytes(lines.popleft())
-    headers = {}
-
-    while line := lines.popleft():
-        header = parse_header(line)
-        if header and header[0] not in headers:
-            headers[header[0]] = header[1]
-    body = bytes(lines.popleft()) if lines else b""
-    return make_frame_from_parts(command=command, headers=headers, body=body)
-
-
 @dataclass(kw_only=True, slots=True)
 class FrameParser:
-    _lines: deque[bytearray] = field(default_factory=deque, init=False)
     _current_line: bytearray = field(default_factory=bytearray, init=False)
-    _previous_byte: bytes = field(default=b"", init=False)
     _headers_processed: bool = field(default=False, init=False)
+    _content_len: int = field(default=0, init=0)
+    _body_len: int = field(default=0, init=0)
+    _headers: dict = field(default_factory=dict)
+    _command: bytes = field(default=False, init=False)
+    
 
     def _reset(self) -> None:
         self._headers_processed = False
-        self._lines.clear()
         self._current_line = bytearray()
+        self._body_len = 0
+        self._content_len = 0
+        self._headers = {}
+        self._command = ""
 
     def parse_frames_from_chunk(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:
         for byte in iter_bytes(chunk):
             if byte == NULL:
                 if self._headers_processed:
-                    self._lines.append(self._current_line)
-                    yield parse_lines_into_frame(self._lines)
-                self._reset()
-
-            elif not self._headers_processed and byte == NEWLINE:
-                if self._current_line or self._lines:
-                    if self._previous_byte == CARRIAGE:
-                        self._current_line.pop()
-                    self._headers_processed = not self._current_line  # extra empty line after headers
-
-                    if not self._lines and bytes(self._current_line) not in COMMANDS_TO_FRAMES:
+                    # receiving body. If no content-len then stop at the first NULL byte
+                    # otherelse continue reading until reachign content length
+                    if self._content_len == 0 or self._body_len == self._content_len:
+                        yield make_frame_from_parts(command = self._command, headers = self._headers, body = self._current_line)
                         self._reset()
                     else:
-                        self._lines.append(self._current_line)
+                        # update the buffer and update the bytecount
+                        self._current_line += byte
+                        self._body_len += 1
+                else:
+                    # if receiving a null while processing header reset
+                    self._reset()
+
+            elif not self._headers_processed and byte == NEWLINE:
+                # processing headers here
+                # when receiving a NEWLINE
+                if self._current_line or self._command:
+                    # if we have received a command or just received a new line
+                    if self._current_line and self._current_line[-1] == CARRIAGE:
+                        self._current_line.pop() # remove the extraneous final byte
+                    self._headers_processed = not self._current_line  # extra empty line after headers
+
+                    if self._current_line: # only continue if we have something
+                        if not self._command: # command still empty, command comes first
+                            self._command = bytes(self._current_line)
+                            if self._command not in COMMANDS_TO_FRAMES:
+                                self._reset()
+                        else: # otherelse we need to parse headers
+                            header = parse_header(self._current_line)
+                            if header and header[0] not in self._headers:
+                                self._headers[header[0]] = header[1]
+                                if header[0] == "content-length":
+                                    self._content_len = int(header[1])                            
+                        # empty after processing
                         self._current_line = bytearray()
                 else:
                     yield HeartbeatFrame()
 
             else:
                 self._current_line += byte
+                # update the byte count if necessary
+                if self._headers_processed and self._content_len:
+                    self._body_len += 1
 
-            self._previous_byte = byte
