@@ -141,18 +141,6 @@ def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: byte
     return frame_type(headers=headers_, body=body) if frame_type in FRAMES_WITH_BODY else frame_type(headers=headers_)  # type: ignore[call-arg]
 
 
-def parse_lines_into_frame(lines: deque[bytearray]) -> AnyClientFrame | AnyServerFrame:
-    command = bytes(lines.popleft())
-    headers = {}
-
-    while line := lines.popleft():
-        header = parse_header(line)
-        if header and header[0] not in headers:
-            headers[header[0]] = header[1]
-    body = bytes(lines.popleft()) if lines else b""
-    return make_frame_from_parts(command=command, headers=headers, body=body)
-
-
 @dataclass(kw_only=True, slots=True)
 class FrameParser:
     _lines: deque[bytearray] = field(default_factory=deque, init=False)
@@ -170,7 +158,15 @@ class FrameParser:
             if byte == NULL:
                 if self._headers_processed:
                     self._lines.append(self._current_line)
-                    yield parse_lines_into_frame(self._lines)
+                    command = bytes(self._lines.popleft())
+                    headers = {}
+
+                    while line := self._lines.popleft():
+                        header = parse_header(line)
+                        if header and header[0] not in headers:
+                            headers[header[0]] = header[1]
+                    body = bytes(self._lines.popleft()) if self._lines else b""
+                    yield make_frame_from_parts(command=command, headers=headers, body=body)
                 self._reset()
 
             elif not self._headers_processed and byte == NEWLINE:
