@@ -1,7 +1,7 @@
 import struct
 from collections.abc import Iterator
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Final, cast
 
 from stompman.frames import (
@@ -140,18 +140,22 @@ def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: byte
     return frame_type(headers=headers_, body=body) if frame_type in FRAMES_WITH_BODY else frame_type(headers=headers_)  # type: ignore[call-arg]
 
 
-@dataclass(kw_only=True, slots=True)
+@dataclass(kw_only=True, slots=True, init=False)
 class FrameParser:
-    _current_buf: bytearray = field(default_factory=bytearray, init=False)
-    _previous_byte: bytes | None = field(default=None, init=False)
-    _headers_processed: bool = field(default=False, init=False)
-    _command: bytes | None = field(default=None, init=False)
-    _headers: dict[str, str] = field(default_factory=dict, init=False)
-    _content_length: int | None = field(default=None, init=False)
+    _current_buf: bytearray
+    _previous_byte: bytes | None
+    _headers_processed: bool
+    _command: bytes | None
+    _headers: dict[str, str]
+    _content_length: int | None
+
+    def __init__(self) -> None:
+        self._previous_byte = None
+        self._reset()
 
     def _reset(self) -> None:
-        self._headers_processed = False
         self._current_buf = bytearray()
+        self._headers_processed = False
         self._command = None
         self._headers = {}
         self._content_length = None
