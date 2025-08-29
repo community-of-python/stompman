@@ -1,5 +1,4 @@
 import struct
-from collections import deque
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -143,7 +142,6 @@ def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: byte
 
 @dataclass(kw_only=True, slots=True)
 class FrameParser:
-    _lines: deque[bytearray] = field(default_factory=deque, init=False)
     _current_buf: bytearray = field(default_factory=bytearray, init=False)
     _previous_byte: bytes = field(default=b"", init=False)
     _headers_processed: bool = field(default=False, init=False)
@@ -153,7 +151,6 @@ class FrameParser:
 
     def _reset(self) -> None:
         self._headers_processed = False
-        self._lines.clear()
         self._current_buf = bytearray()
         self._command = None
         self._headers = {}
