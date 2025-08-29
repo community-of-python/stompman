@@ -50,6 +50,7 @@ class ConnectionManager:
     read_max_chunk_size: int
     write_retry_attempts: int
     check_server_alive_interval_factor: int
+    _ff_disable_server_heartbeat_check: bool
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
@@ -86,8 +87,10 @@ class ConnectionManager:
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
         )
-        self._check_server_heartbeat_task = self._task_group.create_task(
-            self._check_server_heartbeat_forever(server_heartbeat.will_send_interval_ms)
+        self._check_server_heartbeat_task = (
+            self._task_group.create_task(self._check_server_heartbeat_forever(server_heartbeat.will_send_interval_ms))
+            if not self._ff_disable_server_heartbeat_check
+            else self._task_group.create_task(asyncio.sleep(0))
         )
 
     async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
