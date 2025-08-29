@@ -144,46 +144,53 @@ def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: byte
 @dataclass(kw_only=True, slots=True)
 class FrameParser:
     _lines: deque[bytearray] = field(default_factory=deque, init=False)
-    _current_line: bytearray = field(default_factory=bytearray, init=False)
+    _current_buf: bytearray = field(default_factory=bytearray, init=False)  # TODO: rename
     _previous_byte: bytes = field(default=b"", init=False)
     _headers_processed: bool = field(default=False, init=False)
+    _command: bytes | None = field(default=None, init=False)
+    _headers: dict[str, str] = field(default_factory=dict, init=False)
 
     def _reset(self) -> None:
         self._headers_processed = False
         self._lines.clear()
-        self._current_line = bytearray()
+        self._current_buf = bytearray()
+        self._command = None
+        self._headers = {}
 
-    def parse_frames_from_chunk(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:
-        for byte in iter_bytes(chunk):
+    def parse_frames_from_chunk(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:  # noqa: C901, PLR0912
+        for byte in iter_bytes(chunk):  # noqa: PLR1702
             if byte == NULL:
-                if self._headers_processed:
-                    self._lines.append(self._current_line)
-                    command = bytes(self._lines.popleft())
-                    headers = {}
+                if self._command and self._headers_processed:
+                    if content_length := self._headers.get("content-length"):
+                        if len(self._current_buf) != int(content_length):
+                            self._current_buf += byte
+                            continue
 
-                    while line := self._lines.popleft():
-                        header = parse_header(line)
-                        if header and header[0] not in headers:
-                            headers[header[0]] = header[1]
-                    body = bytes(self._lines.popleft()) if self._lines else b""
-                    yield make_frame_from_parts(command=command, headers=headers, body=body)
+                    yield make_frame_from_parts(
+                        command=self._command, headers=self._headers, body=bytes(self._current_buf)
+                    )
                 self._reset()
 
             elif not self._headers_processed and byte == NEWLINE:
-                if self._current_line or self._lines:
+                if self._current_buf or self._command or self._headers_processed:
                     if self._previous_byte == CARRIAGE:
-                        self._current_line.pop()
-                    self._headers_processed = not self._current_line  # extra empty line after headers
+                        self._current_buf.pop()
+                    self._headers_processed = not self._current_buf  # extra empty line after headers
 
-                    if not self._lines and bytes(self._current_line) not in COMMANDS_TO_FRAMES:
+                    if not self._command and bytes(self._current_buf) not in COMMANDS_TO_FRAMES:
                         self._reset()
                     else:
-                        self._lines.append(self._current_line)
-                        self._current_line = bytearray()
+                        if not self._command:
+                            self._command = bytes(self._current_buf)
+                        else:
+                            header = parse_header(self._current_buf)
+                            if header and header[0] not in self._headers:
+                                self._headers[header[0]] = header[1]
+                        self._current_buf = bytearray()
                 else:
                     yield HeartbeatFrame()
 
             else:
-                self._current_line += byte
+                self._current_buf += byte
 
             self._previous_byte = byte
