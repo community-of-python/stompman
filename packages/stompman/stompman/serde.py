@@ -163,11 +163,9 @@ class FrameParser:
         for byte in iter_bytes(chunk):  # noqa: PLR1702
             if byte == NULL:
                 if self._command and self._headers_processed:
-                    if content_length := self._headers.get("content-length"):
-                        if len(self._current_buf) != int(content_length):
-                            self._current_buf += byte
-                            continue
-
+                    if self._content_length is not None and len(self._current_buf) != self._content_length:
+                        self._current_buf += byte
+                        continue
                     yield make_frame_from_parts(
                         command=self._command, headers=self._headers, body=bytes(self._current_buf)
                     )
@@ -192,6 +190,9 @@ class FrameParser:
                         header = parse_header(self._current_buf)
                         if header and header[0] not in self._headers:
                             self._headers[header[0]] = header[1]
+                            if header[0].lower() == "content-length":
+                                with suppress(ValueError):
+                                    self._content_length = int(header[1])
                         self._current_buf = bytearray()
 
             else:
