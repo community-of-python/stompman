@@ -149,6 +149,7 @@ class FrameParser:
     _headers_processed: bool = field(default=False, init=False)
     _command: bytes | None = field(default=None, init=False)
     _headers: dict[str, str] = field(default_factory=dict, init=False)
+    _content_length: int | None = field(default=None, init=False)
 
     def _reset(self) -> None:
         self._headers_processed = False
@@ -156,6 +157,7 @@ class FrameParser:
         self._current_buf = bytearray()
         self._command = None
         self._headers = {}
+        self._content_length = None
 
     def parse_frames_from_chunk(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:  # noqa: C901, PLR0912
         for byte in iter_bytes(chunk):  # noqa: PLR1702
