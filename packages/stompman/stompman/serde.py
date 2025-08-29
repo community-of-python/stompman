@@ -143,7 +143,7 @@ def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: byte
 @dataclass(kw_only=True, slots=True)
 class FrameParser:
     _current_buf: bytearray = field(default_factory=bytearray, init=False)
-    _previous_byte: bytes = field(default=b"", init=False)
+    _previous_byte: bytes | None = field(default=None, init=False)
     _headers_processed: bool = field(default=False, init=False)
     _command: bytes | None = field(default=None, init=False)
     _headers: dict[str, str] = field(default_factory=dict, init=False)
