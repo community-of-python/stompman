@@ -172,7 +172,9 @@ class FrameParser:
                 self._reset()
 
             elif not self._headers_processed and byte == NEWLINE:
-                if self._current_buf or self._command:
+                if not self._current_buf and not self._command:
+                    yield HeartbeatFrame()
+                else:
                     if self._previous_byte == CARRIAGE:
                         self._current_buf.pop()
                     self._headers_processed = not self._current_buf  # extra empty line after headers
@@ -189,8 +191,6 @@ class FrameParser:
                         if header and header[0] not in self._headers:
                             self._headers[header[0]] = header[1]
                         self._current_buf = bytearray()
-                else:
-                    yield HeartbeatFrame()
 
             else:
                 self._current_buf += byte
