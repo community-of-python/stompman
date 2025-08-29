@@ -12,6 +12,7 @@ dev = [
     "polyfactory==2.19.0",
     "pytest==8.4.1",
     "pytest-cov==6.0.0",
+    "pytest-rerunfailures==16.0",
     "ruff==0.9.3",
     "uvloop==0.21.0",
 ]
@@ -55,7 +56,7 @@ ignore = [
 extend-per-file-ignores = { "*/test_*/*" = ["S101", "SLF001", "ARG", "PLR6301"] }
 
 [tool.pytest.ini_options]
-addopts = "--cov -s -vv"
+addopts = "--cov -s -vv --reruns 2 --only-rerun FailedAllConnectAttemptsError"
 
 [tool.coverage.report]
 skip_covered = true
