@@ -172,20 +172,22 @@ class FrameParser:
                 self._reset()
 
             elif not self._headers_processed and byte == NEWLINE:
-                if self._current_buf or self._command or self._headers_processed:
+                if self._current_buf or self._command:
                     if self._previous_byte == CARRIAGE:
                         self._current_buf.pop()
                     self._headers_processed = not self._current_buf  # extra empty line after headers
 
-                    if not self._command and bytes(self._current_buf) not in COMMANDS_TO_FRAMES:
-                        self._reset()
-                    else:
-                        if not self._command:
-                            self._command = bytes(self._current_buf)
+                    if not self._command:
+                        current_buf_bytes = bytes(self._current_buf)
+                        if current_buf_bytes not in COMMANDS_TO_FRAMES:
+                            self._reset()
                         else:
-                            header = parse_header(self._current_buf)
-                            if header and header[0] not in self._headers:
-                                self._headers[header[0]] = header[1]
+                            self._command = current_buf_bytes
+                            self._current_buf = bytearray()
+                    else:
+                        header = parse_header(self._current_buf)
+                        if header and header[0] not in self._headers:
+                            self._headers[header[0]] = header[1]
                         self._current_buf = bytearray()
                 else:
                     yield HeartbeatFrame()
