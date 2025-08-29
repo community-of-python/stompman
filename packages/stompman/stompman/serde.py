@@ -160,47 +160,62 @@ class FrameParser:
         self._headers = {}
         self._content_length = None
 
-    def parse_frames_from_chunk(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:  # noqa: C901, PLR0912
-        for byte in iter_bytes(chunk):  # noqa: PLR1702
+    def _handle_null_byte(self) -> Iterator[AnyClientFrame | AnyServerFrame]:
+        if not self._command or not self._headers_processed:
+            self._reset()
+            return
+        if self._content_length is not None and self._content_length != len(self._current_buf):
+            self._current_buf += NULL
+            return
+        yield make_frame_from_parts(command=self._command, headers=self._headers, body=bytes(self._current_buf))
+        self._reset()
+
+    def _handle_newline_byte(self) -> Iterator[HeartbeatFrame]:
+        if not self._current_buf and not self._command:
+            yield HeartbeatFrame()
+            return
+        if self._previous_byte == CARRIAGE:
+            self._current_buf.pop()
+        self._headers_processed = not self._current_buf  # extra empty line after headers
+
+        if self._command:
+            self._process_header()
+        else:
+            self._process_command()
+
+    def _process_command(self) -> None:
+        current_buf_bytes = bytes(self._current_buf)
+        if current_buf_bytes not in COMMANDS_TO_FRAMES:
+            self._reset()
+        else:
+            self._command = current_buf_bytes
+            self._current_buf = bytearray()
+
+    def _process_header(self) -> None:
+        header = parse_header(self._current_buf)
+        if not header:
+            self._current_buf = bytearray()
+            return
+        header_key, header_value = header
+        if header_key not in self._headers:
+            self._headers[header_key] = header_value
+            if header_key.lower() == "content-length":
+                with suppress(ValueError):
+                    self._content_length = int(header_value)
+        self._current_buf = bytearray()
+
+    def _handle_body_byte(self, byte: bytes) -> None:
+        if self._content_length is None or self._content_length != len(self._current_buf):
+            self._current_buf += byte
+
+    def parse_frames_from_chunk(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:
+        for byte in iter_bytes(chunk):
             if byte == NULL:
-                if self._command and self._headers_processed:
-                    if self._content_length is not None and self._content_length != len(self._current_buf):
-                        self._current_buf += byte
-                        continue
-                    yield make_frame_from_parts(
-                        command=self._command, headers=self._headers, body=bytes(self._current_buf)
-                    )
-                self._reset()
-
-            elif not self._headers_processed and byte == NEWLINE:
-                if not self._current_buf and not self._command:
-                    yield HeartbeatFrame()
-                else:
-                    if self._previous_byte == CARRIAGE:
-                        self._current_buf.pop()
-                    self._headers_processed = not self._current_buf  # extra empty line after headers
-
-                    if not self._command:
-                        current_buf_bytes = bytes(self._current_buf)
-                        if current_buf_bytes not in COMMANDS_TO_FRAMES:
-                            self._reset()
-                        else:
-                            self._command = current_buf_bytes
-                            self._current_buf = bytearray()
-                    else:
-                        header = parse_header(self._current_buf)
-                        if header and header[0] not in self._headers:
-                            self._headers[header[0]] = header[1]
-                            if header[0].lower() == "content-length":
-                                with suppress(ValueError):
-                                    self._content_length = int(header[1])
-                        self._current_buf = bytearray()
-
-            elif not self._headers_processed:
-                self._current_buf += byte
-            elif self._content_length is not None:
-                if self._content_length != len(self._current_buf):
-                    self._current_buf += byte
+                yield from self._handle_null_byte()
+            elif self._headers_processed:
+                self._handle_body_byte(byte)
+            elif byte == NEWLINE:
+                yield from self._handle_newline_byte()
             else:
                 self._current_buf += byte
 
