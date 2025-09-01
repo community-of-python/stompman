@@ -44,7 +44,6 @@ class Client:
     connection_confirmation_timeout: int = 2
     disconnect_confirmation_timeout: int = 2
     check_server_alive_interval_factor: int = 3
-    _ff_disable_server_heartbeat_check: bool = False
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
 
     connection_class: type[AbstractConnection] = Connection
@@ -75,7 +74,6 @@ class Client:
             read_max_chunk_size=self.read_max_chunk_size,
             write_retry_attempts=self.write_retry_attempts,
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
-            _ff_disable_server_heartbeat_check=self._ff_disable_server_heartbeat_check,
             ssl=self.ssl,
         )
 
