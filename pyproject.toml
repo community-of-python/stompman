@@ -6,7 +6,7 @@ version = "0"
 [dependency-groups]
 dev = [
     "anyio==4.9.0",
-    "faker==37.5.3",
+    "faker==37.6.0",
     "hypothesis==6.136.6",
     "mypy==1.17.1",
     "polyfactory==2.19.0",
