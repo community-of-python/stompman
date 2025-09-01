@@ -11,7 +11,7 @@ dev = [
     "mypy==1.17.1",
     "polyfactory==2.22.2",
     "pytest==8.4.1",
-    "pytest-cov==6.0.0",
+    "pytest-cov==6.2.1",
     "pytest-rerunfailures==16.0",
     "ruff==0.9.3",
     "uvloop==0.21.0",
