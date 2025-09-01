@@ -7,7 +7,7 @@ version = "0"
 dev = [
     "anyio==4.9.0",
     "faker==37.6.0",
-    "hypothesis==6.136.6",
+    "hypothesis==6.138.11",
     "mypy==1.17.1",
     "polyfactory==2.22.2",
     "pytest==8.4.1",
