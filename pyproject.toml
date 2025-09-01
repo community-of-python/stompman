@@ -9,7 +9,7 @@ dev = [
     "faker==37.5.3",
     "hypothesis==6.136.6",
     "mypy==1.17.1",
-    "polyfactory==2.19.0",
+    "polyfactory==2.22.2",
     "pytest==8.4.1",
     "pytest-cov==6.0.0",
     "pytest-rerunfailures==16.0",
