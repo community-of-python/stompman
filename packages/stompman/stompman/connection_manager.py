@@ -89,15 +89,6 @@ class ConnectionManager:
             await self.write_heartbeat_reconnecting()
             await asyncio.sleep(send_heartbeat_interval_seconds)
 
-    async def _check_server_heartbeat_forever(self, receive_heartbeat_interval_ms: int) -> None:
-        receive_heartbeat_interval_seconds = receive_heartbeat_interval_ms / 1000
-        while True:
-            await asyncio.sleep(receive_heartbeat_interval_seconds * self.check_server_alive_interval_factor)
-            if not self._active_connection_state:
-                continue
-            if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
-                self._clear_active_connection_state(ConnectionLostError(reason="server heartbeat timeout"))
-
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters
     ) -> tuple[AbstractConnection, ConnectionParameters] | None:
