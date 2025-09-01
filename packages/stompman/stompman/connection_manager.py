@@ -50,18 +50,15 @@ class ConnectionManager:
     read_max_chunk_size: int
     write_retry_attempts: int
     check_server_alive_interval_factor: int
-    _ff_disable_server_heartbeat_check: bool
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
     _task_group: asyncio.TaskGroup = field(init=False, default_factory=asyncio.TaskGroup)
     _send_heartbeat_task: asyncio.Task[None] = field(init=False, repr=False)
-    _check_server_heartbeat_task: asyncio.Task[None] = field(init=False, repr=False)
 
     async def __aenter__(self) -> Self:
         await self._task_group.__aenter__()
         self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
-        self._check_server_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
         self._active_connection_state = await self._get_active_connection_state(is_initial_call=True)
         return self
 
@@ -69,8 +66,7 @@ class ConnectionManager:
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
     ) -> None:
         self._send_heartbeat_task.cancel()
-        self._check_server_heartbeat_task.cancel()
-        await asyncio.wait([self._send_heartbeat_task, self._check_server_heartbeat_task])
+        await asyncio.wait([self._send_heartbeat_task])
         await self._task_group.__aexit__(exc_type, exc_value, traceback)
 
         if not self._active_connection_state:
@@ -83,14 +79,8 @@ class ConnectionManager:
 
     def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
-        self._check_server_heartbeat_task.cancel()
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
-        )
-        self._check_server_heartbeat_task = (
-            self._task_group.create_task(self._check_server_heartbeat_forever(server_heartbeat.will_send_interval_ms))
-            if not self._ff_disable_server_heartbeat_check
-            else self._task_group.create_task(asyncio.sleep(0))
         )
 
     async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
@@ -98,15 +88,6 @@ class ConnectionManager:
         while True:
             await self.write_heartbeat_reconnecting()
             await asyncio.sleep(send_heartbeat_interval_seconds)
-
-    async def _check_server_heartbeat_forever(self, receive_heartbeat_interval_ms: int) -> None:
-        receive_heartbeat_interval_seconds = receive_heartbeat_interval_ms / 1000
-        while True:
-            await asyncio.sleep(receive_heartbeat_interval_seconds * self.check_server_alive_interval_factor)
-            if not self._active_connection_state:
-                continue
-            if not self._active_connection_state.is_alive(self.check_server_alive_interval_factor):
-                self._clear_active_connection_state(ConnectionLostError(reason="server heartbeat timeout"))
 
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters

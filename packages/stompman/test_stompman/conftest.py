@@ -79,7 +79,6 @@ class EnrichedConnectionManager(ConnectionManager):
     write_retry_attempts: int = 3
     ssl: Literal[True] | SSLContext | None = None
     check_server_alive_interval_factor: int = 3
-    _ff_disable_server_heartbeat_check: bool = False
 
 
 DataclassType = TypeVar("DataclassType")
