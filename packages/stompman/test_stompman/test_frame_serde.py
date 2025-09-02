@@ -222,6 +222,26 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
                 ConnectedFrame(headers={"header": "1.2"}),
             ],
         ),
+        # Correct content-length with body containing NULL byte
+        (
+            b"MESSAGE\ncontent-length:5\n\nBod\x00y\x00",
+            [MessageFrame(headers={"content-length": "5"}, body=b"Bod\x00y")],
+        ),
+        # Content-length shorter than actual body (should only read up to content-length)
+        (
+            b"MESSAGE\ncontent-length:4\n\nBody\x00 with extra\x00\n",
+            [MessageFrame(headers={"content-length": "4"}, body=b"Body"), HeartbeatFrame()],
+        ),
+        # Content-length longer than actual body (should wait for more data)
+        (
+            b"MESSAGE\ncontent-length:10\n\nShort",
+            [],
+        ),
+        # Content-length longer than actual body, then more data comes with NULL terminator
+        (
+            b"MESSAGE\ncontent-length:10\n\nShortMOREDATA\x00",
+            [MessageFrame(headers={"content-length": "10"}, body=b"ShortMORED")],
+        ),
     ],
 )
 def test_load_frames(raw_frames: bytes, loaded_frames: list[AnyServerFrame]) -> None:
