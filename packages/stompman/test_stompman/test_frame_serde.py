@@ -41,12 +41,12 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
         # Partial packet
         (
             b"CONNECT\naccept-version:1.0\n\n\x00",
-            [ConnectFrame(headers={"accept-version": "1.0"})],
+            [ConnectFrame(headers={"accept-version": "1.0"})],  # type: ignore[typeddict-item]
         ),
         # Full packet
         (
             b"MESSAGE\naccept-version:1.0\n\nHey dude\x00",
-            [MessageFrame(headers={"accept-version": "1.0"}, body=b"Hey dude")],
+            [MessageFrame(headers={"accept-version": "1.0"}, body=b"Hey dude")],  # type: ignore[typeddict-item]
         ),
         # Long packet
         (
@@ -85,7 +85,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
             ),
             [
                 MessageFrame(
-                    headers={
+                    headers={  # type: ignore[typeddict-unknown-key]
                         "content-length": "14",
                         "expires": "0",
                         "destination": "/topic/xxxxxxxxxxxxxxxxxxxxxxxxxl",
@@ -100,7 +100,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
                 ),
                 HeartbeatFrame(),
                 MessageFrame(
-                    headers={
+                    headers={  # type: ignore[typeddict-unknown-key]
                         "content-length": "12",
                         "expires": "0",
                         "destination": "/topic/xxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -115,7 +115,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
                 ),
                 HeartbeatFrame(),
                 MessageFrame(
-                    headers={
+                    headers={  # type: ignore[typeddict-unknown-key]
                         "content-length": "11",
                         "expires": "0",
                         "destination": "/topic/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -130,7 +130,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
                 ),
                 HeartbeatFrame(),
                 MessageFrame(
-                    headers={
+                    headers={  # type: ignore[typeddict-unknown-key]
                         "content-length": "14",
                         "expires": "0",
                         "destination": "/topic/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -145,7 +145,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
                 ),
                 HeartbeatFrame(),
                 MessageFrame(
-                    headers={
+                    headers={  # type: ignore[typeddict-unknown-key]
                         "content-length": "12",
                         "expires": "0",
                         "destination": "/topic/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -165,7 +165,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
         (
             b"CONNECT\naccept-version:1.0\n\n\x00\nCONNECTED\nversion:1.0\n\n\x00\n",
             [
-                ConnectFrame(headers={"accept-version": "1.0"}),
+                ConnectFrame(headers={"accept-version": "1.0"}),  # type: ignore[typeddict-item]
                 HeartbeatFrame(),
                 ConnectedFrame(headers={"version": "1.0"}),
                 HeartbeatFrame(),
@@ -175,9 +175,9 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
         (
             b"CONNECTED\naccept-version:1.0\n\n\x00\nERROR\nheader:1.0\n\n\xc3\xa7\x00\n",
             [
-                ConnectedFrame(headers={"accept-version": "1.0"}),
+                ConnectedFrame(headers={"accept-version": "1.0"}),  # type: ignore[typeddict-item]
                 HeartbeatFrame(),
-                ErrorFrame(headers={"header": "1.0"}, body="ç".encode()),
+                ErrorFrame(headers={"header": "1.0"}, body="ç".encode()),  # type: ignore[typeddict-item]
                 HeartbeatFrame(),
             ],
         ),
@@ -185,24 +185,24 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
         # Two headers: only first should be accepted
         (
             b"CONNECTED\naccept-version:1.0\naccept-version:1.1\n\n\x00",
-            [ConnectedFrame(headers={"accept-version": "1.0"})],
+            [ConnectedFrame(headers={"accept-version": "1.0"})],  # type: ignore[typeddict-item]
         ),
         # no end of line after command
         (b"CONNECTED", []),
         (b"CONNECTED\n", []),
         (b"CONNECTED\x00", []),
         # \r\n after command
-        (b"CONNECTED\r\n\n\n\x00", [ConnectedFrame(headers={})]),
-        (b"CONNECTED\r\nheader:1.0\n\n\x00", [ConnectedFrame(headers={"header": "1.0"})]),
+        (b"CONNECTED\r\n\n\n\x00", [ConnectedFrame(headers={})]),  # type: ignore[typeddict-item]
+        (b"CONNECTED\r\nheader:1.0\n\n\x00", [ConnectedFrame(headers={"header": "1.0"})]),  # type: ignore[typeddict-item]
         # header without :
-        (b"CONNECTED\nhead\nheader:1.1\n\n\x00", [ConnectedFrame(headers={"header": "1.1"})]),
+        (b"CONNECTED\nhead\nheader:1.1\n\n\x00", [ConnectedFrame(headers={"header": "1.1"})]),  # type: ignore[typeddict-item]
         # empty header :
         (
             b"CONNECTED\nhead:\nheader:1.1\n\n\x00",
-            [ConnectedFrame(headers={"head": "", "header": "1.1"})],
+            [ConnectedFrame(headers={"head": "", "header": "1.1"})],  # type: ignore[typeddict-item]
         ),
         # header value with :
-        (b"CONNECTED\nheader:what:?\n\n\x00", [ConnectedFrame(headers={})]),
+        (b"CONNECTED\nheader:what:?\n\n\x00", [ConnectedFrame(headers={})]),  # type: ignore[typeddict-item]
         # no NULL
         (b"CONNECTED\nheader:what:?\n\nhello", []),
         # header never end
@@ -217,20 +217,20 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
             b"whatever\nWHATEVER\nheader:1.1\n\n\x00CONNECTED\nheader:1.1\n\n\x00\nwhatever\nCONNECTED\nheader:1.2\n\n\x00",
             [
                 HeartbeatFrame(),
-                ConnectedFrame(headers={"header": "1.1"}),
+                ConnectedFrame(headers={"header": "1.1"}),  # type: ignore[typeddict-item]
                 HeartbeatFrame(),
-                ConnectedFrame(headers={"header": "1.2"}),
+                ConnectedFrame(headers={"header": "1.2"}),  # type: ignore[typeddict-item]
             ],
         ),
         # Correct content-length with body containing NULL byte
         (
             b"MESSAGE\ncontent-length:5\n\nBod\x00y\x00",
-            [MessageFrame(headers={"content-length": "5"}, body=b"Bod\x00y")],
+            [MessageFrame(headers={"content-length": "5"}, body=b"Bod\x00y")],  # type: ignore[typeddict-item]
         ),
         # Content-length shorter than actual body (should only read up to content-length)
         (
             b"MESSAGE\ncontent-length:4\n\nBody\x00 with extra\x00\n",
-            [MessageFrame(headers={"content-length": "4"}, body=b"Body"), HeartbeatFrame()],
+            [MessageFrame(headers={"content-length": "4"}, body=b"Body"), HeartbeatFrame()],  # type: ignore[typeddict-item]
         ),
         # Content-length longer than actual body (should wait for more data)
         (
@@ -240,7 +240,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
         # Content-length longer than actual body, then more data comes with NULL terminator
         (
             b"MESSAGE\ncontent-length:10\n\nShortMOREDATA\x00",
-            [MessageFrame(headers={"content-length": "10"}, body=b"ShortMORED")],
+            [MessageFrame(headers={"content-length": "10"}, body=b"ShortMORED")],  # type: ignore[typeddict-item]
         ),
     ],
 )
