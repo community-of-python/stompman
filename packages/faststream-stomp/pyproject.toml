@@ -24,7 +24,7 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["faststream[otel,prometheus]~=0.5", "asgi-lifespan"]
+dev = ["faststream[otel,prometheus]~=0.6", "asgi-lifespan"]
 
 [tool.hatch.version]
 source = "vcs"

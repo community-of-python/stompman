@@ -13,10 +13,10 @@ import stompman
 from asgi_lifespan import LifespanManager
 from faststream import BaseMiddleware, Context, FastStream
 from faststream.asgi import AsgiFastStream
-from faststream.broker.message import gen_cor_id
-from faststream.broker.middlewares.logging import CriticalLogMiddleware
 from faststream.exceptions import AckMessage, NackMessage, RejectMessage
-from faststream_stomp.message import StompStreamMessage
+from faststream.message import gen_cor_id
+from faststream_stomp.models import StompStreamMessage
+from faststream_stomp.router import StompRoutePublisher
 
 if TYPE_CHECKING:
     from faststream_stomp.broker import StompBroker
@@ -45,7 +45,7 @@ async def test_simple(faker: faker.Faker, broker: faststream_stomp.StompBroker) 
     event = asyncio.Event()
 
     @broker.subscriber(destination)
-    def _(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> None:  # noqa: B008
+    def handle_destination(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> None:  # noqa: B008
         assert body == expected_body
         event.set()
 
@@ -67,11 +67,11 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
 
     @broker.subscriber(first_destination)
     @second_publisher
-    def _(body: str) -> str:
+    def handle_first_destination(body: str) -> str:
         return body
 
     @broker.subscriber(second_destination)
-    def _(body: str) -> None:
+    def handle_second_destination(body: str) -> None:
         assert body == expected_body
         event.set()
 
@@ -87,11 +87,15 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
 async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     expected_body, prefix, destination = faker.pystr(), faker.pystr(), faker.pystr()
 
-    def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> None:  # noqa: B008
+    def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> bytes:  # noqa: B008
         assert body == expected_body
         event.set()
+        return message.body
 
-    router = faststream_stomp.StompRouter(prefix=prefix, handlers=(faststream_stomp.StompRoute(route, destination),))
+    router = faststream_stomp.StompRouter(
+        prefix=prefix,
+        handlers=[faststream_stomp.StompRoute(route, destination, publishers=[StompRoutePublisher(faker.pystr())])],
+    )
     publisher = router.publisher(destination)
 
     broker.include_router(router)
@@ -114,7 +118,7 @@ async def test_broker_close(broker: faststream_stomp.StompBroker) -> None:
 
 async def test_subscriber_lifespan(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     @broker.subscriber(faker.pystr())
-    def _() -> None: ...
+    def handle() -> None: ...
 
     await broker.start()
     await broker.stop()
@@ -140,7 +144,7 @@ async def test_ack_nack_reject_exception(
     event = asyncio.Event()
 
     @broker.subscriber(destination := faker.pystr())
-    def _() -> None:
+    def handle_destination() -> None:
         event.set()
         raise exception
 
@@ -159,7 +163,7 @@ async def test_ack_nack_reject_method_call(
     event = asyncio.Event()
 
     @broker.subscriber(destination := faker.pystr())
-    async def _(message: Annotated[StompStreamMessage, Context()]) -> None:
+    async def handle_destination(message: Annotated[StompStreamMessage, Context()]) -> None:
         await getattr(message, method_name)()
         event.set()
 
@@ -175,11 +179,10 @@ class TestLogging:
     ) -> None:
         monkeypatch.delenv("PYTEST_CURRENT_TEST")
         broker: StompBroker = request.getfixturevalue("broker")
-        assert broker.logger
-        broker.logger = mock.Mock(log=(log_mock := mock.Mock()), handlers=[])
+        broker.config.logger.logger = mock.Mock(log=(log_mock := mock.Mock()), handlers=[])
 
         @broker.subscriber(destination := faker.pystr())
-        def some_handler() -> None: ...
+        def handle_destination() -> None: ...
 
         async with broker:
             await broker.start()
@@ -187,7 +190,7 @@ class TestLogging:
         assert log_mock.mock_calls == [
             mock.call(
                 logging.INFO,
-                "`SomeHandler` waiting for messages",
+                "`HandleDestination` waiting for messages",
                 extra={"destination": destination, "message_id": ""},
                 exc_info=None,
             )
@@ -198,9 +201,7 @@ class TestLogging:
     ) -> None:
         monkeypatch.delenv("PYTEST_CURRENT_TEST")
         broker: StompBroker = request.getfixturevalue("broker")
-        assert isinstance(broker._middlewares[0], CriticalLogMiddleware)
-        assert broker._middlewares[0].logger
-        broker._middlewares[0].logger = mock.Mock(log=(log_mock := mock.Mock()))
+        broker.config.broker_config.logger = mock.Mock(log=(log_mock := mock.Mock()))
         event = asyncio.Event()
         message_id: str | None = None
 
@@ -208,7 +209,7 @@ class TestLogging:
         class MyError(Exception): ...
 
         @broker.subscriber(destination := faker.pystr())
-        def some_handler(message_frame: Annotated[stompman.MessageFrame, Context("message.raw_message")]) -> None:
+        def handle_destination(message_frame: Annotated[stompman.MessageFrame, Context("message.raw_message")]) -> None:
             nonlocal message_id
             message_id = message_frame.headers["message-id"]
             event.set()
@@ -223,10 +224,10 @@ class TestLogging:
 
         assert message_id
         extra = {"destination": destination, "message_id": message_id}
-        assert log_mock.mock_calls == [
-            mock.call(logging.INFO, "Received", extra=extra),
-            mock.call(logging.ERROR, "MyError: ", extra=extra, exc_info=MyError()),
-            mock.call(logging.INFO, "Processed", extra=extra),
+        assert log_mock.mock_calls[-3:] == [
+            mock.call("Received", extra=extra),
+            mock.call(message="MyError: ", extra=extra, exc_info=MyError()),
+            mock.call(message="Processed", extra=extra),
         ]
 
 

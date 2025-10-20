@@ -1,142 +1,94 @@
-from collections.abc import Callable, Iterable, Sequence
-from typing import Any, TypedDict, cast
+import asyncio
+from collections.abc import AsyncIterator, Sequence
+from typing import Any, NoReturn
 
 import stompman
-from fast_depends.dependencies import Depends
-from faststream.asyncapi.schema import Channel, CorrelationId, Message, Operation
-from faststream.asyncapi.utils import resolve_payloads
-from faststream.broker.message import StreamMessage, decode_message
-from faststream.broker.publisher.fake import FakePublisher
-from faststream.broker.publisher.proto import ProducerProto
-from faststream.broker.subscriber.usecase import SubscriberUsecase
-from faststream.broker.types import AsyncCallable, BrokerMiddleware, CustomCallable
-from faststream.types import AnyDict, Decorator, LoggerProto
-from faststream.utils.functions import to_async
+from faststream import PublishCommand, StreamMessage
+from faststream._internal.configs import BrokerConfig
+from faststream._internal.endpoint.publisher.fake import FakePublisher
+from faststream._internal.endpoint.subscriber import SubscriberSpecification, SubscriberUsecase
+from faststream._internal.endpoint.subscriber.call_item import CallsCollection
+from faststream._internal.producer import ProducerProto
+from faststream.specification.asyncapi.utils import resolve_payloads
+from faststream.specification.schema import Message, Operation, SubscriberSpec
 
-from faststream_stomp.message import StompStreamMessage
+from faststream_stomp.models import (
+    StompPublishCommand,
+    StompSubscriberSpecificationConfig,
+    StompSubscriberUsecaseConfig,
+)
 
 
-class StompLogContext(TypedDict):
-    destination: str
-    message_id: str
+class StompSubscriberSpecification(SubscriberSpecification[BrokerConfig, StompSubscriberSpecificationConfig]):
+    @property
+    def name(self) -> str:
+        return f"{self._outer_config.prefix}{self.config.destination_without_prefix}:{self.call_name}"
+
+    def get_schema(self) -> dict[str, SubscriberSpec]:
+        return {
+            self.name: SubscriberSpec(
+                description=self.description,
+                operation=Operation(
+                    message=Message(title=f"{self.name}:Message", payload=resolve_payloads(self.get_payloads())),
+                    bindings=None,
+                ),
+                bindings=None,
+            )
+        }
+
+
+class StompFakePublisher(FakePublisher):
+    def __init__(self, *, producer: ProducerProto[Any], reply_to: str) -> None:
+        super().__init__(producer=producer)
+        self.reply_to = reply_to
+
+    def patch_command(self, cmd: PublishCommand | StompPublishCommand) -> StompPublishCommand:
+        cmd = super().patch_command(cmd)
+        real_cmd = StompPublishCommand.from_cmd(cmd)
+        real_cmd.destination = self.reply_to
+        return real_cmd
 
 
 class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
     def __init__(
         self,
         *,
-        destination: str,
-        ack_mode: stompman.AckMode,
-        headers: dict[str, str] | None,
-        retry: bool | int,
-        no_ack: bool,
-        broker_dependencies: Iterable[Depends],
-        broker_middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]],
-        default_parser: AsyncCallable = StompStreamMessage.from_frame,
-        default_decoder: AsyncCallable = to_async(decode_message),  # noqa: B008
-        # AsyncAPI information
-        title_: str | None,
-        description_: str | None,
-        include_in_schema: bool,
+        config: StompSubscriberUsecaseConfig,
+        specification: StompSubscriberSpecification,
+        calls: CallsCollection[stompman.MessageFrame],
     ) -> None:
-        self.destination = destination
-        self.ack_mode = ack_mode
-        self.headers = headers
+        self.config = config
         self._subscription: stompman.ManualAckSubscription | None = None
-
-        super().__init__(
-            no_ack=no_ack or self.ack_mode == "auto",
-            no_reply=True,
-            retry=retry,
-            broker_dependencies=broker_dependencies,
-            broker_middlewares=broker_middlewares,
-            default_parser=default_parser,
-            default_decoder=default_decoder,
-            title_=title_,
-            description_=description_,
-            include_in_schema=include_in_schema,
-        )
-
-    def setup(  # type: ignore[override]
-        self,
-        client: stompman.Client,
-        *,
-        logger: LoggerProto | None,
-        producer: ProducerProto | None,
-        graceful_timeout: float | None,
-        extra_context: AnyDict,
-        broker_parser: CustomCallable | None,
-        broker_decoder: CustomCallable | None,
-        apply_types: bool,
-        is_validate: bool,
-        _get_dependant: Callable[..., Any] | None,
-        _call_decorators: Iterable[Decorator],
-    ) -> None:
-        self.client = client
-        return super().setup(
-            logger=logger,
-            producer=producer,
-            graceful_timeout=graceful_timeout,
-            extra_context=extra_context,
-            broker_parser=broker_parser,
-            broker_decoder=broker_decoder,
-            apply_types=apply_types,
-            is_validate=is_validate,
-            _get_dependant=_get_dependant,
-            _call_decorators=_call_decorators,
-        )
+        super().__init__(config=config, specification=specification, calls=calls)  # type: ignore[arg-type]
 
     async def start(self) -> None:
         await super().start()
-        self._subscription = await self.client.subscribe_with_manual_ack(
-            destination=self.destination,
+        self._subscription = await self.config._outer_config.client.subscribe_with_manual_ack(
+            destination=self.config.full_destination,
             handler=self.consume,
-            ack=self.ack_mode,
-            headers=self.headers,
+            ack=self.config.ack_mode,
+            headers=self.config.headers,
         )
+        self._post_start()
 
     async def stop(self) -> None:
         if self._subscription:
             await self._subscription.unsubscribe()
         await super().stop()
 
-    async def get_one(self, *, timeout: float = 5) -> None: ...
+    async def get_one(self, *, timeout: float = 5) -> NoReturn:
+        raise NotImplementedError
+
+    async def __aiter__(self) -> AsyncIterator[StreamMessage[stompman.MessageFrame]]:  # type: ignore[override, misc]
+        raise NotImplementedError
+        yield  # pragma: no cover
+        await asyncio.sleep(0)  # pragma: no cover
 
     def _make_response_publisher(self, message: StreamMessage[stompman.MessageFrame]) -> Sequence[FakePublisher]:
-        return (  # pragma: no cover
-            (FakePublisher(self._producer.publish, publish_kwargs={"destination": message.reply_to}),)
-            if self._producer
-            else ()
-        )
-
-    def __hash__(self) -> int:
-        return hash(self.destination)
-
-    def add_prefix(self, prefix: str) -> None:
-        self.destination = f"{prefix}{self.destination}"
-
-    def get_name(self) -> str:
-        return f"{self.destination}:{self.call_name}"
-
-    def get_schema(self) -> dict[str, Channel]:
-        payloads = self.get_payloads()
-
-        return {
-            self.name: Channel(
-                description=self.description,
-                subscribe=Operation(
-                    message=Message(
-                        title=f"{self.name}:Message",
-                        payload=resolve_payloads(payloads),
-                        correlationId=CorrelationId(location="$message.header#/correlation_id"),
-                    ),
-                ),
-            )
-        }
+        return (StompFakePublisher(producer=self.config._outer_config.producer, reply_to=message.reply_to),)
 
     def get_log_context(self, message: StreamMessage[stompman.MessageFrame] | None) -> dict[str, str]:
-        log_context: StompLogContext = {
-            "destination": message.raw_message.headers["destination"] if message else self.destination,
+        return {
+            "destination": message.raw_message.headers["destination"] if message else self.config.full_destination,
             "message_id": message.message_id if message else "",
         }
-        return cast("dict[str, str]", log_context)

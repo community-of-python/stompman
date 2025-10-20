@@ -2,11 +2,13 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Any
 
 import stompman
-from fast_depends.dependencies import Depends
-from faststream.broker.router import ArgsContainer, BrokerRouter, SubscriberRoute
-from faststream.broker.types import BrokerMiddleware, CustomCallable, PublisherMiddleware, SubscriberMiddleware
-from faststream.types import SendableMessage
+from fast_depends.dependencies import Dependant
+from faststream._internal.basic_types import SendableMessage
+from faststream._internal.broker.router import ArgsContainer, BrokerRouter, SubscriberRoute
+from faststream._internal.configs import BrokerConfig
+from faststream._internal.types import BrokerMiddleware, CustomCallable, PublisherMiddleware, SubscriberMiddleware
 
+from faststream_stomp.models import StompPublishCommand
 from faststream_stomp.registrator import StompRegistrator
 
 
@@ -20,7 +22,7 @@ class StompRoutePublisher(ArgsContainer):
         self,
         destination: str,
         *,
-        middlewares: Sequence[PublisherMiddleware] = (),
+        middlewares: Sequence[PublisherMiddleware[StompPublishCommand]] = (),
         schema_: Any | None = None,  # noqa: ANN401
         title_: str | None = None,
         description_: str | None = None,
@@ -51,12 +53,10 @@ class StompRoute(SubscriberRoute):
         headers: dict[str, str] | None = None,
         # other args
         publishers: Iterable[StompRoutePublisher] = (),
-        dependencies: Iterable[Depends] = (),
-        no_ack: bool = False,
+        dependencies: Iterable[Dependant] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
         middlewares: Sequence[SubscriberMiddleware[stompman.MessageFrame]] = (),
-        retry: bool = False,
         title: str | None = None,
         description: str | None = None,
         include_in_schema: bool = True,
@@ -68,18 +68,16 @@ class StompRoute(SubscriberRoute):
             headers=headers,
             publishers=publishers,
             dependencies=dependencies,
-            no_ack=no_ack,
             parser=parser,
             decoder=decoder,
             middlewares=middlewares,
-            retry=retry,
             title=title,
             description=description,
             include_in_schema=include_in_schema,
         )
 
 
-class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame]):
+class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame, BrokerConfig]):
     """Includable to StompBroker router."""
 
     def __init__(
@@ -87,18 +85,22 @@ class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame]):
         prefix: str = "",
         handlers: Iterable[StompRoute] = (),
         *,
-        dependencies: Iterable[Depends] = (),
+        dependencies: Iterable[Dependant] = (),
         middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
         include_in_schema: bool | None = None,
+        routers: Sequence[StompRegistrator] = (),
     ) -> None:
         super().__init__(
+            config=BrokerConfig(
+                broker_middlewares=middlewares,
+                broker_dependencies=dependencies,
+                broker_parser=parser,
+                broker_decoder=decoder,
+                include_in_schema=include_in_schema,
+                prefix=prefix,
+            ),
             handlers=handlers,
-            prefix=prefix,
-            dependencies=dependencies,
-            middlewares=middlewares,
-            parser=parser,
-            decoder=decoder,
-            include_in_schema=include_in_schema,
+            routers=routers,
         )
