@@ -20,6 +20,7 @@ from stompman.frames import (
     ReceiptFrame,
     SendFrame,
 )
+from stompman.logger import LOGGER
 from stompman.subscription import AckableMessageFrame, ActiveSubscriptions, AutoAckSubscription, ManualAckSubscription
 from stompman.transaction import Transaction
 
@@ -29,7 +30,9 @@ class Client:
     PROTOCOL_VERSION: ClassVar = "1.2"  # https://stomp.github.io/stomp-specification-1.2.html
 
     servers: list[ConnectionParameters] = field(kw_only=False)
-    on_error_frame: Callable[[ErrorFrame], Any] | None = None
+    on_error_frame: Callable[[ErrorFrame], Any] | None = lambda error_frame: LOGGER.error(
+        "received error frame: %s", error_frame
+    )
 
     heartbeat: Heartbeat = field(default=Heartbeat(1000, 1000))
     ssl: Literal[True] | SSLContext | None = None

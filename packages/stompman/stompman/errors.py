@@ -14,6 +14,8 @@ class Error(Exception):
 class ConnectionLostError(Error):
     """Raised in stompman.AbstractConnection—and handled in stompman.ConnectionManager, therefore is private."""
 
+    reason: Exception | str
+
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ConnectionConfirmationTimeout:

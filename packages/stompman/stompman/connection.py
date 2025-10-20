@@ -37,7 +37,7 @@ def _reraise_connection_lost(*causes: type[Exception]) -> Generator[None, None, 
     try:
         yield
     except causes as exception:
-        raise ConnectionLostError from exception
+        raise ConnectionLostError(reason=exception) from exception
 
 
 @dataclass(kw_only=True, slots=True)
@@ -85,10 +85,8 @@ class Connection(AbstractConnection):
             await self.writer.drain()
 
     async def _read_non_empty_bytes(self, max_chunk_size: int) -> bytes:
-        while (  # noqa: ASYNC110
-            chunk := await self.reader.read(max_chunk_size)
-        ) == b"":  # pragma: no cover (it definitely happens)
-            await asyncio.sleep(0)
+        if (chunk := await self.reader.read(max_chunk_size)) == b"":
+            raise ConnectionLostError(reason="eof")
         return chunk
 
     async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:

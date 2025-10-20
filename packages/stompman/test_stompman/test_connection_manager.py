@@ -132,7 +132,9 @@ async def test_connect_to_any_server_fails() -> None:
 
 
 async def test_get_active_connection_state_lifespan_flaky_ok() -> None:
-    enter = mock.AsyncMock(side_effect=[ConnectionLostError, build_dataclass(EstablishedConnectionResult)])
+    enter = mock.AsyncMock(
+        side_effect=[build_dataclass(ConnectionLostError), build_dataclass(EstablishedConnectionResult)]
+    )
     lifespan_factory = mock.Mock(return_value=mock.Mock(enter=enter))
     manager = EnrichedConnectionManager(lifespan_factory=lifespan_factory, connection_class=BaseMockConnection)
 
@@ -154,7 +156,7 @@ async def test_get_active_connection_state_lifespan_flaky_ok() -> None:
 
 
 async def test_get_active_connection_state_lifespan_flaky_fails() -> None:
-    enter = mock.AsyncMock(side_effect=ConnectionLostError)
+    enter = mock.AsyncMock(side_effect=build_dataclass(ConnectionLostError))
     lifespan_factory = mock.Mock(return_value=mock.Mock(enter=enter))
     manager = EnrichedConnectionManager(lifespan_factory=lifespan_factory, connection_class=BaseMockConnection)
 
@@ -209,8 +211,8 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
 
 async def test_connection_manager_context_connection_lost() -> None:
     async with EnrichedConnectionManager(connection_class=BaseMockConnection) as manager:
-        manager._clear_active_connection_state()
-        manager._clear_active_connection_state()
+        manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
 
 
 async def test_connection_manager_context_lifespan_aexit_raises_connection_lost() -> None:
@@ -218,7 +220,7 @@ async def test_connection_manager_context_lifespan_aexit_raises_connection_lost(
         lifespan_factory=mock.Mock(
             return_value=mock.Mock(
                 enter=mock.AsyncMock(return_value=build_dataclass(EstablishedConnectionResult)),
-                exit=mock.AsyncMock(side_effect=[ConnectionLostError]),
+                exit=mock.AsyncMock(side_effect=[build_dataclass(ConnectionLostError)]),
             )
         ),
         connection_class=BaseMockConnection,
@@ -248,7 +250,13 @@ async def test_connection_manager_context_exits_ok() -> None:
 
 
 async def test_write_heartbeat_reconnecting_raises() -> None:
-    write_heartbeat_mock = mock.Mock(side_effect=[ConnectionLostError, ConnectionLostError, ConnectionLostError])
+    write_heartbeat_mock = mock.Mock(
+        side_effect=[
+            build_dataclass(ConnectionLostError),
+            build_dataclass(ConnectionLostError),
+            build_dataclass(ConnectionLostError),
+        ]
+    )
 
     class MockConnection(BaseMockConnection):
         write_heartbeat = write_heartbeat_mock
@@ -260,7 +268,13 @@ async def test_write_heartbeat_reconnecting_raises() -> None:
 
 
 async def test_write_frame_reconnecting_raises() -> None:
-    write_frame_mock = mock.AsyncMock(side_effect=[ConnectionLostError, ConnectionLostError, ConnectionLostError])
+    write_frame_mock = mock.AsyncMock(
+        side_effect=[
+            build_dataclass(ConnectionLostError),
+            build_dataclass(ConnectionLostError),
+            build_dataclass(ConnectionLostError),
+        ]
+    )
 
     class MockConnection(BaseMockConnection):
         write_frame = write_frame_mock
@@ -271,7 +285,11 @@ async def test_write_frame_reconnecting_raises() -> None:
         await manager.write_frame_reconnecting(build_dataclass(ConnectFrame))
 
 
-SIDE_EFFECTS = [(None,), (ConnectionLostError(), None), (ConnectionLostError(), ConnectionLostError(), None)]
+SIDE_EFFECTS = [
+    (None,),
+    (build_dataclass(ConnectionLostError), None),
+    (build_dataclass(ConnectionLostError), build_dataclass(ConnectionLostError), None),
+]
 
 
 @pytest.mark.parametrize("side_effect", SIDE_EFFECTS)
@@ -318,7 +336,7 @@ async def test_read_frames_reconnecting_ok(side_effect: tuple[ConnectionLostErro
             attempt += 1
             current_effect = side_effect[attempt]
             if isinstance(current_effect, ConnectionLostError):
-                raise ConnectionLostError
+                raise current_effect
             for frame in frames:
                 yield frame
 
@@ -339,7 +357,7 @@ async def test_maybe_write_frame_connection_already_lost() -> None:
 
 async def test_maybe_write_frame_connection_now_lost() -> None:
     class MockConnection(BaseMockConnection):
-        write_frame = mock.AsyncMock(side_effect=[ConnectionLostError])
+        write_frame = mock.AsyncMock(side_effect=[build_dataclass(ConnectionLostError)])
 
     async with EnrichedConnectionManager(connection_class=MockConnection) as manager:
         assert not await manager.maybe_write_frame(build_dataclass(ConnectFrame))

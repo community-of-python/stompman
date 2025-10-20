@@ -5,15 +5,16 @@ version = "0"
 
 [dependency-groups]
 dev = [
-    "anyio==4.9.0",
-    "faker==37.5.3",
-    "hypothesis==6.136.6",
-    "mypy==1.17.1",
-    "polyfactory==2.19.0",
-    "pytest==8.4.1",
-    "pytest-cov==6.0.0",
+    "anyio==4.11.0",
+    "faker==37.8.0",
+    "hypothesis==6.140.2",
+    "mypy==1.18.2",
+    "polyfactory==2.22.2",
+    "pytest==8.4.2",
+    "pytest-cov==7.0.0",
     "pytest-timeout==2.4.0",
-    "ruff==0.9.3",
+    "pytest-rerunfailures==16.0.1",
+    "ruff==0.13.2",
     "uvloop==0.21.0",
 ]
 
@@ -58,7 +59,7 @@ ignore = [
 extend-per-file-ignores = { "*/test_*/*" = ["S101", "SLF001", "ARG", "PLR6301"] }
 
 [tool.pytest.ini_options]
-addopts = "--cov -s -vv"
+addopts = "--cov -s -vv --reruns 4 --only-rerun FailedAllConnectAttemptsError"
 
 [tool.coverage.report]
 skip_covered = true
