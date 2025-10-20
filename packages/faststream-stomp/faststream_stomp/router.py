@@ -102,5 +102,5 @@ class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame, BrokerCo
                 prefix=prefix,
             ),
             handlers=handlers,
-            routers=routers,  # type: ignore[arg-type]
+            routers=routers,
         )
