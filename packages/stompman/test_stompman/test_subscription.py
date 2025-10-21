@@ -410,7 +410,7 @@ async def test_subscription_skips_ack_nack_after_reconnection(
     )
 
     # Set the subscription reconnection count to 0 (before reconnection)
-    subscription._subscription_reconnection_count = 0
+    subscription._bound_reconnection_count = 0
 
     # Add subscription to active subscriptions
     active_subscriptions.add(subscription)
