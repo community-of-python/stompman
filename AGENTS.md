@@ -6,7 +6,7 @@ stompman is a modern, asynchronous Python client for the STOMP (Simple Text Orie
 
 The project consists of two main packages:
 1. `stompman` - The core STOMP client library
-2. `faststream-stomp` - A STOMP broker implementation for the FastStream framework
+2. `faststream-stomp` - A FastStream broker implementation for STOMP
 
 ## Key Features
 
@@ -14,54 +14,60 @@ The project consists of two main packages:
 - Modern, typed API with comprehensive type hints
 - Automatic connection management with reconnection capabilities
 - Support for transactions, subscriptions, and message acknowledgment
-- Integration with FastStream framework
-- Support for both ActiveMQ Artemis and ActiveMQ Classic
-- Implements STOMP 1.2 protocol specification
-- Built-in heartbeat support
+- Built-in heartbeat support for connection health monitoring
+- Integration with FastStream for declarative message handling
+- Compatible with STOMP 1.2 protocol specification
+- Tested with ActiveMQ Artemis and ActiveMQ Classic
 
 ## Project Structure
 
 ```
 stompman/
 ├── packages/
-│   ├── stompman/              # Core STOMP client library
-│   │   ├── stompman/          # Main source code
-│   │   └── test_stompman/     # Unit and integration tests
-│   └── faststream-stomp/      # FastStream integration
+│   ├── stompman/           # Core STOMP client library
+│   │   ├── stompman/       # Main source code
+│   │   └── test_stompman/  # Unit and integration tests
+│   └── faststream-stomp/   # FastStream broker implementation
 │       ├── faststream_stomp/  # Main source code
-│       └── test_faststream_stomp/  # Tests
-├── examples/                  # Usage examples
-├── docker-compose.yml         # Development environment with ActiveMQ instances
-└── Justfile                   # Task runner with common commands
+│       └── test_faststream_stomp/  # Unit and integration tests
+├── examples/               # Usage examples
+├── docker-compose.yml      # Development environment with ActiveMQ containers
+└── Justfile                # Project commands and workflows
 ```
 
 ## Core Components (stompman package)
 
 ### Main Classes
 
-- `Client` - Main entry point for interacting with STOMP servers
+- `Client` - The main entry point for interacting with STOMP servers
 - `ConnectionParameters` - Configuration for connecting to STOMP servers
-- `Heartbeat` - Configuration for heartbeat intervals
-- `Transaction` - Context manager for transactional message sending
-- `AutoAckSubscription` - Subscription with automatic message acknowledgment
-- `ManualAckSubscription` - Subscription with manual message acknowledgment
+- `Heartbeat` - Configuration for connection heartbeats
 
 ### Key Methods
 
 - `Client.send()` - Send messages to destinations
-- `Client.subscribe()` - Subscribe to destinations with auto-acknowledgment
-- `Client.subscribe_with_manual_ack()` - Subscribe with manual acknowledgment
-- `Client.begin()` - Start a transaction context
-- `Client.is_alive()` - Check if the client connection is healthy
+- `Client.subscribe()` - Subscribe to destinations with automatic ACK/NACK handling
+- `Client.subscribe_with_manual_ack()` - Subscribe with manual ACK/NACK control
+- `Client.begin()` - Start a transaction context manager
+- `Client.is_alive()` - Check connection health
+
+### Error Handling
+
+- `FailedAllConnectAttemptsError` - Raised when all connection attempts fail
+- `FailedAllWriteAttemptsError` - Raised when writes fail after all retries
+- Various other specific error types for different failure scenarios
 
 ## FastStream Integration (faststream-stomp package)
 
-Provides a `StompBroker` class that integrates with the FastStream framework, allowing developers to build event-driven applications with STOMP messaging.
+Provides a FastStream broker implementation that allows using FastStream's declarative approach with STOMP:
+
+- `StompBroker` - Main broker class
+- Decorators for subscribers and publishers
+- Testing utilities with `TestStompBroker`
 
 ## Development Environment
 
-The project uses Docker Compose to provide a development environment with ActiveMQ instances:
-
+The project uses Docker Compose to provide a development environment with:
 - ActiveMQ Artemis on port 9000
 - ActiveMQ Classic on port 9001
 
@@ -69,89 +75,98 @@ The project uses Docker Compose to provide a development environment with Active
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11 or newer
 - uv (package manager)
 - Docker and Docker Compose (for development environment)
 
-### Common Commands
-
-Using Just (task runner):
+### Setup
 
 ```bash
 # Install dependencies
 just install
 
-# Run linting
+# Or manually:
+uv lock --upgrade
+uv sync --all-extras --all-packages --frozen
+```
+
+### Running Tests
+
+```bash
+# Run fast tests (unit tests only)
+just test-fast
+
+# Run all tests (including integration tests with Docker)
+just test
+
+# Run tests with specific arguments
+just test-fast -k "test_specific_feature"
+```
+
+### Code Quality
+
+```bash
+# Run linters
 just lint
 
 # Check types
 just check-types
 
-# Run fast tests (excluding integration tests)
-just test-fast
+# Format code
+uv run ruff format .
+```
 
-# Run all tests (requires Docker)
-just test
+### Running Examples
 
-# Run integration environment
+```bash
+# Start ActiveMQ Artemis
 just run-artemis
 
-# Run example consumer
+# Run consumer example
 just run-consumer
 
-# Run example producer
+# Run producer example
 just run-producer
 ```
 
-Using uv directly:
+## Development Conventions
 
-```bash
-# Install dependencies
-uv sync --all-extras --all-packages --frozen
+### Code Style
 
-# Run linting
-uv run ruff check .
-uv run ruff format .
-
-# Check types
-uv run mypy .
-
-# Run tests
-uv run pytest
-```
-
-### Development Workflow
-
-1. Start the development environment: `docker compose up -d`
-2. Install dependencies: `just install`
-3. Run tests: `just test`
-4. Make changes to the code
-5. Run linting and type checking: `just lint && just check-types`
-
-## Testing
-
-The project uses pytest for testing with the following configuration:
-
-- Unit tests are located in `test_stompman/` directories
-- Integration tests require running ActiveMQ instances
-- Tests use both ActiveMQ Artemis and ActiveMQ Classic when possible
-- Code coverage reporting is enabled by default
-
-## Coding Standards
-
-The project follows these coding standards:
-
-- Strict type checking with mypy
-- Code formatting with ruff
+- Strict adherence to type hints with mypy in strict mode
+- Code formatting with ruff (line length 120)
 - Comprehensive unit and integration tests
-- Modern Python features (3.11+)
-- Clean, readable, and well-documented code
+- Modern Python features (3.11+) encouraged
 
-## Examples
+### Testing
 
-The `examples/` directory contains sample code showing how to:
+- Unit tests in `test_stompman/` directory
+- Integration tests that require Docker containers
+- Property-based testing with hypothesis
+- Test coverage reporting enabled
 
-- Create a basic consumer
-- Create a basic producer
-- Use the FastStream integration
-- Implement broadcast messaging patterns
+### CI/CD
+
+- Automated testing on multiple platforms
+- Type checking and linting in CI pipeline
+- Automated publishing to PyPI
+
+## Common Development Tasks
+
+1. **Adding a new feature**:
+   - Implement in the appropriate module under `stompman/`
+   - Add unit tests in `test_stompman/`
+   - Update documentation in docstrings and README if needed
+
+2. **Fixing a bug**:
+   - Write a failing test that reproduces the issue
+   - Fix the implementation
+   - Verify the test now passes
+
+3. **Updating dependencies**:
+   - Modify `pyproject.toml` files
+   - Run `uv lock --upgrade` to update lock files
+
+4. **Running integration tests**:
+   - Ensure Docker is running
+   - Run `just test` to start containers and run tests
