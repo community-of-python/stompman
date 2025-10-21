@@ -11,9 +11,11 @@ from stompman import (
     AckFrame,
     AckMode,
     ConnectedFrame,
+    ConnectionLostError,
     ErrorFrame,
     FailedAllConnectAttemptsError,
     HeartbeatFrame,
+    ManualAckSubscription,
     MessageFrame,
     NackFrame,
     ReceiptFrame,
@@ -21,7 +23,8 @@ from stompman import (
     SubscribeFrame,
     UnsubscribeFrame,
 )
-from stompman.errors import ConnectionLostError
+from stompman.connection_manager import ConnectionManager
+from stompman.subscription import ActiveSubscriptions
 
 from test_stompman.conftest import (
     CONNECT_FRAME,
@@ -377,29 +380,16 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
 async def test_subscription_skips_ack_nack_after_reconnection(
     monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test that subscriptions skip ACK/NACK frames after a reconnection."""
     subscription_id, destination, message_id, ack_id = faker.pystr(), faker.pystr(), faker.pystr(), faker.pystr()
     monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
-
-    # Create a message frame
     message_frame = build_dataclass(
         MessageFrame,
         headers={"destination": destination, "message-id": message_id, "subscription": subscription_id, "ack": ack_id},
     )
-
-    # Create a mock subscription to test our logic directly
-    from stompman.connection_manager import ConnectionManager
-    from stompman.subscription import ActiveSubscriptions, ManualAckSubscription
-
-    # Create mock connection manager with a reconnection count
-    connection_manager = mock.Mock(spec=ConnectionManager)
-    connection_manager._reconnection_count = 1  # Simulate a reconnection happened
-    connection_manager.maybe_write_frame = mock.AsyncMock(return_value=True)
-
-    # Create active subscriptions
+    connection_manager = mock.Mock(
+        spec=ConnectionManager, _reconnection_count=1, maybe_write_frame=mock.AsyncMock(return_value=True)
+    )
     active_subscriptions = ActiveSubscriptions()
-
-    # Create subscription
     subscription = ManualAckSubscription(
         destination=destination,
         handler=mock.AsyncMock(),
@@ -408,22 +398,13 @@ async def test_subscription_skips_ack_nack_after_reconnection(
         _connection_manager=connection_manager,
         _active_subscriptions=active_subscriptions,
     )
-
-    # Set the subscription reconnection count to 0 (before reconnection)
-    subscription._bound_reconnection_count = 0
-
-    # Add subscription to active subscriptions
     active_subscriptions.add(subscription)
 
     with caplog.at_level(logging.DEBUG, logger="stompman"):
-        # Try to send ACK - this should be skipped
         await subscription._ack(message_frame)
-        # Try to send NACK - this should be skipped
         await subscription._nack(message_frame)
 
-    # Check that we logged the skipping messages
     assert any("connection changed since message was received" in msg for msg in caplog.messages)
-    # Check that maybe_write_frame was never called
     connection_manager.maybe_write_frame.assert_not_called()
 
 
