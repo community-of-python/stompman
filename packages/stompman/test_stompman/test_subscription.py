@@ -377,43 +377,26 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
 async def test_subscription_skips_ack_nack_after_reconnection(
     monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test that subscriptions skip ACK/NACK frames after a reconnection using a real client."""
     subscription_id, destination, message_id, ack_id = faker.pystr(), faker.pystr(), faker.pystr(), faker.pystr()
     monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
-
-    # Create a message frame as if it was received before reconnection
     message_frame = build_dataclass(
         MessageFrame,
         headers={"destination": destination, "message-id": message_id, "subscription": subscription_id, "ack": ack_id},
     )
-
-    # Use a spying connection to capture frames
     connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([message_frame]))
-
-    # Track if ack/nack frames were sent
     stored_message = None
 
     async def track_ack_nack_frames(message: stompman.subscription.AckableMessageFrame) -> None:
-        # Store reference to the message for later ACK/NACK after reconnection
         nonlocal stored_message
         stored_message = message
-        # Don't send ack/nack here, we want to test sending them after reconnection
-        # Add a small await to make this a proper async function
         await asyncio.sleep(0)
 
     async with EnrichedClient(connection_class=connection_class) as client:
-        # Subscribe to create a subscription with _subscription_reconnection_count = 0
         subscription = await client.subscribe_with_manual_ack(destination, track_ack_nack_frames)
-        await asyncio.sleep(0)  # Allow message processing
-
-        # Simulate connection loss/reconnection by clearing active connection state
-        # This will increment _reconnection_count to 1
+        await asyncio.sleep(0)
         client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
-
-        # Wait for reconnection
         await asyncio.sleep(0)
 
-        # Try to send ACK/NACK after reconnection - these should be skipped
         with caplog.at_level(logging.DEBUG, logger="stompman"):
             assert stored_message
             await stored_message.ack()
@@ -421,15 +404,10 @@ async def test_subscription_skips_ack_nack_after_reconnection(
 
         await subscription.unsubscribe()
 
-    # Verify that no ACK or NACK frames were sent
-    ack_frames = [frame for frame in collected_frames if isinstance(frame, AckFrame)]
-    nack_frames = [frame for frame in collected_frames if isinstance(frame, NackFrame)]
-    assert len(ack_frames) == 0, "No ACK frames should be sent after reconnection"
-    assert len(nack_frames) == 0, "No NACK frames should be sent after reconnection"
-
-    # Verify that we logged the skipping messages
-    assert any("connection changed since message was received" in msg.lower() for msg in caplog.messages), (
-        "Should log message about connection change"
+    assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
+    assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, NackFrame)]
+    assert any(
+        "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
     )
 
 
