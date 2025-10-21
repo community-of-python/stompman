@@ -55,6 +55,7 @@ class ConnectionManager:
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
     _task_group: asyncio.TaskGroup = field(init=False, default_factory=asyncio.TaskGroup)
     _send_heartbeat_task: asyncio.Task[None] = field(init=False, repr=False)
+    _reconnection_count: int = field(default=0, init=False)
 
     async def __aenter__(self) -> Self:
         await self._task_group.__aenter__()
@@ -171,6 +172,7 @@ class ConnectionManager:
             self._active_connection_state.lifespan.connection_parameters,
         )
         self._active_connection_state = None
+        self._reconnection_count += 1
 
     async def write_heartbeat_reconnecting(self) -> None:
         for _ in range(self.write_retry_attempts):

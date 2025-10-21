@@ -59,6 +59,7 @@ class BaseSubscription:
     ack: AckMode
     _connection_manager: ConnectionManager
     _active_subscriptions: ActiveSubscriptions
+    _subscription_reconnection_count: int = field(default=0, init=False)
 
     async def _subscribe(self) -> None:
         await self._connection_manager.write_frame_reconnecting(
@@ -66,6 +67,8 @@ class BaseSubscription:
                 subscription_id=self.id, destination=self.destination, ack=self.ack, headers=self.headers
             )
         )
+        # Store the current reconnection count when subscribing
+        self._subscription_reconnection_count = self._connection_manager._reconnection_count
         self._active_subscriptions.add(self)  # type: ignore[arg-type]
 
     async def unsubscribe(self) -> None:
@@ -91,6 +94,15 @@ class BaseSubscription:
                 frame.headers.keys(),
             )
             return
+        # Check if the connection is still the same as when the message was received
+        if self._subscription_reconnection_count != self._connection_manager._reconnection_count:
+            LOGGER.debug(
+                "skipping nack for message frame: connection changed since message was received. "
+                "message_id: %s, subscription_id: %s",
+                frame.headers["message-id"],
+                self.id,
+            )
+            return
         await self._connection_manager.maybe_write_frame(NackFrame(headers={"id": ack_id, "subscription": self.id}))
 
     async def _ack(self, frame: MessageFrame) -> None:
@@ -110,6 +122,15 @@ class BaseSubscription:
                 frame.headers["message-id"],
                 self.id,
                 frame.headers.keys(),
+            )
+            return
+        # Check if the connection is still the same as when the message was received
+        if self._subscription_reconnection_count != self._connection_manager._reconnection_count:
+            LOGGER.debug(
+                "skipping ack for message frame: connection changed since message was received. "
+                "message_id: %s, subscription_id: %s",
+                frame.headers["message-id"],
+                self.id,
             )
             return
         await self._connection_manager.maybe_write_frame(AckFrame(headers={"id": ack_id, "subscription": self.id}))
