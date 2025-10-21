@@ -226,7 +226,7 @@ class TestLogging:
         extra = {"destination": destination, "message_id": message_id}
         assert log_mock.mock_calls[-3:] == [
             mock.call("Received", extra=extra),
-            mock.call(message="MyError: ", extra=extra, exc_info=MyError()),
+            mock.call(message="MyError: ", extra=extra, exc_info=MyError(), log_level=logging.ERROR),
             mock.call(message="Processed", extra=extra),
         ]
 

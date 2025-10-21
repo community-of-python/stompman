@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from functools import partial
 from typing import get_args
 from unittest import mock
@@ -10,6 +11,7 @@ from stompman import (
     AckFrame,
     AckMode,
     ConnectedFrame,
+    ConnectionLostError,
     ErrorFrame,
     FailedAllConnectAttemptsError,
     HeartbeatFrame,
@@ -20,7 +22,6 @@ from stompman import (
     SubscribeFrame,
     UnsubscribeFrame,
 )
-from stompman.errors import ConnectionLostError
 
 from test_stompman.conftest import (
     CONNECT_FRAME,
@@ -371,6 +372,43 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
     assert len(inner_inner_group.exceptions) == 1
 
     assert isinstance(inner_inner_group.exceptions[0], FailedAllConnectAttemptsError)
+
+
+async def test_subscription_skips_ack_nack_after_reconnection(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
+) -> None:
+    subscription_id, destination, message_id, ack_id = faker.pystr(), faker.pystr(), faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+    message_frame = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": message_id, "subscription": subscription_id, "ack": ack_id},
+    )
+    connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([message_frame]))
+    stored_message = None
+
+    async def track_ack_nack_frames(message: stompman.subscription.AckableMessageFrame) -> None:
+        nonlocal stored_message
+        stored_message = message
+        await asyncio.sleep(0)
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        subscription = await client.subscribe_with_manual_ack(destination, track_ack_nack_frames)
+        await asyncio.sleep(0)
+        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        await asyncio.sleep(0)
+
+        with caplog.at_level(logging.DEBUG, logger="stompman"):
+            assert stored_message
+            await stored_message.ack()
+            await stored_message.nack()
+
+        await subscription.unsubscribe()
+
+    assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
+    assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, NackFrame)]
+    assert any(
+        "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
+    )
 
 
 def test_make_subscription_id() -> None:
