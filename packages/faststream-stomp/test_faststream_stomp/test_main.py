@@ -1,5 +1,6 @@
 import faker
 import faststream_stomp
+import pydantic
 import pytest
 import stompman
 from faststream import FastStream
@@ -8,6 +9,7 @@ from faststream_stomp.opentelemetry import StompTelemetryMiddleware
 from faststream_stomp.prometheus import StompPrometheusMiddleware
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from polyfactory.factories.pydantic_factory import ModelFactory
 from prometheus_client import CollectorRegistry
 from test_stompman.conftest import build_dataclass
 
@@ -22,6 +24,10 @@ def fake_connection_params() -> stompman.ConnectionParameters:
 @pytest.fixture
 def broker(fake_connection_params: stompman.ConnectionParameters) -> faststream_stomp.StompBroker:
     return faststream_stomp.StompBroker(stompman.Client([fake_connection_params]))
+
+
+class SomePydanticModel(pydantic.BaseModel):
+    foo: str
 
 
 async def test_testing(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
@@ -54,6 +60,8 @@ async def test_testing(faker: faker.Faker, broker: faststream_stomp.StompBroker)
         second_publisher.mock.assert_called_once_with(expected_body)
         assert third_publisher.mock
         third_publisher.mock.assert_called_once_with(expected_body)
+
+        await br.publish(ModelFactory.create_factory(SomePydanticModel).build(), faker.pystr())
 
 
 class TestNotImplemented:
