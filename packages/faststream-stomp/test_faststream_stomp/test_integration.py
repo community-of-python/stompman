@@ -239,7 +239,7 @@ async def test_broker_connect_twice(broker: faststream_stomp.StompBroker) -> Non
         pass
 
 
-async def test_publish_pydantic(broker: faststream_stomp.StompBroker) -> None:
+async def test_publish_pydantic(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     class SomePydanticModel(pydantic.BaseModel):
         foo: str
 
