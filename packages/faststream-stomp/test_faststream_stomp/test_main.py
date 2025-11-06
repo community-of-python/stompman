@@ -7,6 +7,7 @@ from faststream import FastStream
 from faststream.message import gen_cor_id
 from faststream_stomp.opentelemetry import StompTelemetryMiddleware
 from faststream_stomp.prometheus import StompPrometheusMiddleware
+from faststream_stomp.router import StompRouter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from polyfactory.factories.pydantic_factory import ModelFactory
@@ -64,6 +65,18 @@ class TestTesting:
 
         async with faststream_stomp.TestStompBroker(broker) as br:
             await br.publish(ModelFactory.create_factory(SomePydanticModel).build(), faker.pystr())
+
+    async def test_routers(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        router = StompRouter()
+        broker.include_router(router)
+
+        @router.subscriber(destination := faker.pystr())
+        def handle_message(body: str) -> None: ...
+
+        async with faststream_stomp.TestStompBroker(broker):
+            await broker.publish(faker.pystr(), destination)
+            assert handle_message.mock
+            handle_message.mock.assert_called_once()
 
 
 class TestNotImplemented:
