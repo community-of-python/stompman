@@ -1,5 +1,6 @@
 import faker
 import faststream_stomp
+import pydantic
 import pytest
 import stompman
 from faststream import FastStream
@@ -8,6 +9,7 @@ from faststream_stomp.opentelemetry import StompTelemetryMiddleware
 from faststream_stomp.prometheus import StompPrometheusMiddleware
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
+from polyfactory.factories.pydantic_factory import ModelFactory
 from prometheus_client import CollectorRegistry
 from test_stompman.conftest import build_dataclass
 
@@ -24,36 +26,44 @@ def broker(fake_connection_params: stompman.ConnectionParameters) -> faststream_
     return faststream_stomp.StompBroker(stompman.Client([fake_connection_params]))
 
 
-async def test_testing(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    expected_body, first_destination, second_destination, third_destination, correlation_id = (
-        faker.pystr(),
-        faker.pystr(),
-        faker.pystr(),
-        faker.pystr(),
-        gen_cor_id(),
-    )
-    second_publisher = broker.publisher(second_destination)
-    third_publisher = broker.publisher(third_destination)
+class TestTesting:
+    async def test_integration(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        expected_body, first_destination, second_destination, third_destination, correlation_id = (
+            faker.pystr(),
+            faker.pystr(),
+            faker.pystr(),
+            faker.pystr(),
+            gen_cor_id(),
+        )
+        second_publisher = broker.publisher(second_destination)
+        third_publisher = broker.publisher(third_destination)
 
-    @broker.subscriber(first_destination)
-    @second_publisher
-    @third_publisher
-    def first_handle(body: str) -> str:
-        assert body == expected_body
-        return body
+        @broker.subscriber(first_destination)
+        @second_publisher
+        @third_publisher
+        def first_handle(body: str) -> str:
+            assert body == expected_body
+            return body
 
-    @broker.subscriber(second_destination)
-    def second_handle(body: str) -> None:
-        assert body == expected_body
+        @broker.subscriber(second_destination)
+        def second_handle(body: str) -> None:
+            assert body == expected_body
 
-    async with faststream_stomp.TestStompBroker(broker) as br:
-        await br.publish(expected_body, first_destination, correlation_id=correlation_id)
-        assert first_handle.mock
-        first_handle.mock.assert_called_once_with(expected_body)
-        assert second_publisher.mock
-        second_publisher.mock.assert_called_once_with(expected_body)
-        assert third_publisher.mock
-        third_publisher.mock.assert_called_once_with(expected_body)
+        async with faststream_stomp.TestStompBroker(broker) as br:
+            await br.publish(expected_body, first_destination, correlation_id=correlation_id)
+            assert first_handle.mock
+            first_handle.mock.assert_called_once_with(expected_body)
+            assert second_publisher.mock
+            second_publisher.mock.assert_called_once_with(expected_body)
+            assert third_publisher.mock
+            third_publisher.mock.assert_called_once_with(expected_body)
+
+    async def test_publish_pydantic(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        class SomePydanticModel(pydantic.BaseModel):
+            foo: str
+
+        async with faststream_stomp.TestStompBroker(broker) as br:
+            await br.publish(ModelFactory.create_factory(SomePydanticModel).build(), faker.pystr())
 
 
 class TestNotImplemented:

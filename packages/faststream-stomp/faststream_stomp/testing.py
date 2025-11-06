@@ -62,7 +62,7 @@ class FakeStompProducer(StompProducer):
         self.broker = broker
 
     async def publish(self, cmd: StompPublishCommand) -> None:
-        body, content_type = encode_message(cmd.body, serializer=None)
+        body, content_type = encode_message(cmd.body, serializer=self.broker.config.fd_config._serializer)
         all_headers: MessageHeaders = (cmd.headers.copy() if cmd.headers else {}) | {  # type: ignore[assignment]
             "destination": cmd.destination,
             "message-id": str(uuid.uuid4()),

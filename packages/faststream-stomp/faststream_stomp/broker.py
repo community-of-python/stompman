@@ -106,6 +106,7 @@ class StompBroker(
         description: str | None = None,
         tags: Iterable[Tag | TagDict] = (),
     ) -> None:
+        fd_config = FastDependsConfig(use_fastdepends=apply_types)
         broker_config = BrokerConfigWithStompClient(
             broker_middlewares=middlewares,  # type: ignore[arg-type]
             broker_parser=parser,
@@ -115,11 +116,11 @@ class StompBroker(
                 log_level=log_level,
                 default_storage_cls=StompParamsStorage,  # type: ignore[type-abstract]
             ),
-            fd_config=FastDependsConfig(use_fastdepends=apply_types),
+            fd_config=fd_config,
             broker_dependencies=dependencies,
             graceful_timeout=graceful_timeout,
             extra_context={"broker": self},
-            producer=StompProducer(client),
+            producer=StompProducer(client=client, serializer=fd_config._serializer),
             client=client,
         )
         specification = BrokerSpec(

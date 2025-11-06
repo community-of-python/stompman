@@ -8,6 +8,7 @@ from unittest import mock
 
 import faker
 import faststream_stomp
+import pydantic
 import pytest
 import stompman
 from asgi_lifespan import LifespanManager
@@ -17,6 +18,7 @@ from faststream.exceptions import AckMessage, NackMessage, RejectMessage
 from faststream.message import gen_cor_id
 from faststream_stomp.models import StompStreamMessage
 from faststream_stomp.router import StompRoutePublisher
+from polyfactory.factories.pydantic_factory import ModelFactory
 
 if TYPE_CHECKING:
     from faststream_stomp.broker import StompBroker
@@ -235,3 +237,11 @@ async def test_broker_connect_twice(broker: faststream_stomp.StompBroker) -> Non
     app = AsgiFastStream(broker, on_startup=[broker.connect])
     async with LifespanManager(app):
         pass
+
+
+async def test_publish_pydantic(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+    class SomePydanticModel(pydantic.BaseModel):
+        foo: str
+
+    async with broker:
+        await broker.publish(ModelFactory.create_factory(SomePydanticModel).build(), faker.pystr())
