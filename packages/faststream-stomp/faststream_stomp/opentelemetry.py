@@ -43,7 +43,7 @@ class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageF
         return cmd.destination
 
 
-class StompTelemetryMiddleware(TelemetryMiddleware):
+class StompTelemetryMiddleware(TelemetryMiddleware[StompPublishCommand]):
     def __init__(
         self,
         *,
@@ -52,7 +52,7 @@ class StompTelemetryMiddleware(TelemetryMiddleware):
         meter: Meter | None = None,
     ) -> None:
         super().__init__(
-            settings_provider_factory=lambda _: StompTelemetrySettingsProvider(),  # type: ignore[arg-type,return-value]
+            settings_provider_factory=lambda _: StompTelemetrySettingsProvider(),
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
             meter=meter,
