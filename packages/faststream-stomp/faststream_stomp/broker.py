@@ -8,7 +8,7 @@ from typing import Any
 import anyio
 import stompman
 from fast_depends.dependencies import Dependant
-from faststream import ContextRepo, PublishType
+from faststream import BaseMiddleware, ContextRepo, PublishType
 from faststream._internal.basic_types import LoggerProto, SendableMessage
 from faststream._internal.broker import BrokerUsecase
 from faststream._internal.broker.registrator import Registrator
@@ -47,7 +47,8 @@ def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
     except asyncio.CancelledError:
         return
     if isinstance(task_exception, ExceptionGroup) and isinstance(
-        task_exception.exceptions[0], stompman.FailedAllConnectAttemptsError
+        task_exception.exceptions[0],
+        stompman.FailedAllConnectAttemptsError,
     ):
         raise SystemExit(1)
 
@@ -94,7 +95,7 @@ class StompBroker(
         decoder: CustomCallable | None = None,
         parser: CustomCallable | None = None,
         dependencies: Iterable[Dependant] = (),
-        middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame, StompPublishCommand]] = (),
+        middlewares: Sequence[type[BaseMiddleware] | BrokerMiddleware[stompman.MessageFrame, StompPublishCommand]] = (),
         graceful_timeout: float | None = 15.0,
         routers: Sequence[Registrator[stompman.MessageFrame]] = (),
         # Logging args
