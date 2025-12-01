@@ -235,7 +235,7 @@ async def test_client_listen_ack_with_no_ack_header(
     monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
 
     message_frame = build_dataclass(MessageFrame, headers={"subscription": subscription_id})
-    message_frame.headers.pop("ack")
+    message_frame.headers.pop("ack", None)
 
     connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([message_frame]))
     message_handler = mock.AsyncMock(side_effect=side_effect)
