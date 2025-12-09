@@ -1,3 +1,4 @@
+import copy
 import typing
 import uuid
 from collections.abc import Generator, Iterator
@@ -76,3 +77,10 @@ class FakeStompProducer(StompProducer):
         for handler in self.broker.subscribers:
             if typing.cast("StompSubscriber", handler).config.full_destination == cmd.destination:
                 await handler.process_message(frame)
+
+    async def publish_batch(self, cmd: StompPublishCommand) -> None:
+        for one_body in cmd.batch_bodies:
+            new_cmd = copy.deepcopy(cmd)
+            new_cmd.body = one_body
+            new_cmd.extra_bodies = ()
+            await self.publish(new_cmd)
