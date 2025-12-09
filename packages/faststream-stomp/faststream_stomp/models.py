@@ -46,8 +46,10 @@ class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
 class StompPublishCommand(BatchPublishCommand):
     @classmethod
     def from_cmd(cls, cmd: PublishCommand, *, batch: bool = False) -> Self:  # noqa: ARG003
+        messages = cmd.batch_bodies
         return cls(
-            *cmd.batch_bodies,
+            messages[0],
+            *messages[1:] if len(messages) > 1 else (),
             _publish_type=cmd.publish_type,
             reply_to=cmd.reply_to,
             destination=cmd.destination,
