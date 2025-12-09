@@ -59,7 +59,7 @@ ignore = [
 extend-per-file-ignores = { "*/test_*/*" = ["S101", "SLF001", "ARG", "PLR6301"] }
 
 [tool.pytest.ini_options]
-addopts = "--cov -s -vv --reruns 4 --only-rerun FailedAllConnectAttemptsError"
+addopts = "--cov -s -vv --reruns 6 --only-rerun FailedAllConnectAttemptsError"
 
 [tool.coverage.report]
 skip_covered = true
