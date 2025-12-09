@@ -78,17 +78,24 @@ class TestTesting:
             assert handle_message.mock
             handle_message.mock.assert_called_once()
 
+    async def test_batch(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+        messages_count = faker.pyint(min_value=3, max_value=20)
+
+        @broker.subscriber(destination := faker.pystr())
+        def handle_message(body: str) -> None: ...
+
+        async with faststream_stomp.TestStompBroker(broker):
+            await broker.publish_batch(*(faker.pystr() for _ in range(messages_count)), destination=destination)
+
+            assert handle_message.mock
+            assert handle_message.mock.call_count == messages_count
+
 
 class TestNotImplemented:
     async def test_broker_request(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
         async with faststream_stomp.TestStompBroker(broker):
             with pytest.raises(NotImplementedError):
                 await broker.request(faker.pystr(), faker.pystr())
-
-    async def test_broker_publish_batch(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-        async with faststream_stomp.TestStompBroker(broker):
-            with pytest.raises(NotImplementedError):
-                await broker.publish_batch(faker.pystr(), destination=faker.pystr())
 
     async def test_publisher_request(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
         async with faststream_stomp.TestStompBroker(broker):

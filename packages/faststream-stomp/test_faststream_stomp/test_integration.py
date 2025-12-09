@@ -1,9 +1,10 @@
 import asyncio
 import logging
+import typing
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, assert_never
 from unittest import mock
 
 import faker
@@ -40,24 +41,43 @@ async def run_faststream_app(application: FastStream) -> AsyncGenerator[None, No
         await asyncio.wait([run_task])
 
 
-async def test_simple(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+@pytest.mark.parametrize("publish_method", ["publisher_regular", "broker_regular", "broker_batch"])
+async def test_simple_publish(
+    faker: faker.Faker,
+    broker: faststream_stomp.StompBroker,
+    publish_method: typing.Literal["publisher_regular", "broker_regular", "broker_batch"],
+) -> None:
     app = FastStream(broker)
-    expected_body, destination = faker.pystr(), faker.pystr()
+    destination = faker.pystr()
     publisher = broker.publisher(destination)
     event = asyncio.Event()
+    sent_bodies = [faker.pystr() for _ in range(faker.pyint(min_value=3, max_value=10))]
+    received_bodies = []
 
     @broker.subscriber(destination)
     def handle_destination(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> None:  # noqa: B008
-        assert body == expected_body
-        event.set()
+        received_bodies.append(body)
+        if len(received_bodies) == len(sent_bodies):
+            event.set()
 
     @app.after_startup
     async def _() -> None:
         await broker.connect()
-        await publisher.publish(expected_body.encode(), correlation_id=gen_cor_id())
+        match publish_method:
+            case "publisher_regular":
+                for one_body in sent_bodies:
+                    await publisher.publish(one_body.encode(), correlation_id=gen_cor_id())
+            case "broker_regular":
+                for one_body in sent_bodies:
+                    await broker.publish(one_body.encode(), destination, correlation_id=gen_cor_id())
+            case "broker_batch":
+                await broker.publish_batch(*sent_bodies, destination=destination, correlation_id=gen_cor_id())
+            case _:  # pragma: no cover
+                assert_never(publish_method)
 
     async with asyncio.timeout(10), run_faststream_app(app):
         await event.wait()
+    assert sorted(received_bodies) == sorted(sent_bodies)
 
 
 async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:

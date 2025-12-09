@@ -30,17 +30,26 @@ class StompProducer(ProducerProto[StompPublishCommand]):
 
     async def publish(self, cmd: StompPublishCommand) -> None:
         body, content_type = encode_message(cmd.body, serializer=self.serializer)
-        all_headers = cmd.headers.copy() if cmd.headers else {}
-        if cmd.correlation_id:
-            all_headers["correlation-id"] = cmd.correlation_id
-        await self.client.send(body, cmd.destination, content_type=content_type, headers=all_headers)
+        await self.client.send(body, cmd.destination, content_type=content_type, headers=_make_headers_for_publish(cmd))
 
     async def request(self, cmd: StompPublishCommand) -> NoReturn:
         msg = "`StompProducer` can be used only to publish a response for `reply-to` or `RPC` messages."
         raise NotImplementedError(msg)
 
-    async def publish_batch(self, cmd: StompPublishCommand) -> NoReturn:
-        raise NotImplementedError
+    async def publish_batch(self, cmd: StompPublishCommand) -> None:
+        async with self.client.begin() as transaction:
+            for one_body in cmd.batch_bodies:
+                body, content_type = encode_message(one_body, serializer=self.serializer)
+                await transaction.send(
+                    body, cmd.destination, content_type=content_type, headers=_make_headers_for_publish(cmd)
+                )
+
+
+def _make_headers_for_publish(cmd: StompPublishCommand) -> dict[str, str]:
+    all_headers = cmd.headers.copy()
+    if cmd.correlation_id:
+        all_headers["correlation-id"] = cmd.correlation_id
+    return all_headers
 
 
 class StompPublisherSpecification(PublisherSpecification[BrokerConfig, StompPublisherSpecificationConfig]):

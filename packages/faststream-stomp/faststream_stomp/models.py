@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Self, cast
 
 import stompman
-from faststream import AckPolicy, PublishCommand, StreamMessage
+from faststream import AckPolicy, BatchPublishCommand, PublishCommand, StreamMessage
 from faststream._internal.configs import (
     BrokerConfig,
     PublisherSpecificationConfig,
@@ -43,10 +43,18 @@ class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
         )
 
 
-class StompPublishCommand(PublishCommand):
+class StompPublishCommand(BatchPublishCommand):
     @classmethod
-    def from_cmd(cls, cmd: PublishCommand) -> Self:
-        return cmd  # type: ignore[return-value]
+    def from_cmd(cls, cmd: PublishCommand, *, batch: bool = False) -> Self:  # noqa: ARG003
+        messages = cmd.batch_bodies
+        return cls(
+            *messages,
+            _publish_type=cmd.publish_type,
+            reply_to=cmd.reply_to,
+            destination=cmd.destination,
+            correlation_id=cmd.correlation_id,
+            headers=cmd.headers,
+        )
 
 
 @dataclass(kw_only=True)

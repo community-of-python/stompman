@@ -213,13 +213,13 @@ class StompBroker(
 
     async def publish_batch(  # type: ignore[override]
         self,
-        *_messages: SendableMessage,
+        *messages: SendableMessage,
         destination: str,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
-            "",
+            *messages,
             _publish_type=PublishType.PUBLISH,
             destination=destination,
             correlation_id=correlation_id,
