@@ -219,12 +219,10 @@ class StompBroker(
         headers: dict[str, str] | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
-            messages[0],
-            *messages[1:] if len(messages) > 1 else (),
+            *messages,
             _publish_type=PublishType.PUBLISH,
             destination=destination,
             correlation_id=correlation_id,
             headers=headers,
         )
-        # breakpoint()
         return typing.cast("None", await self._basic_publish_batch(publish_command, producer=self.config.producer))
