@@ -41,11 +41,11 @@ async def run_faststream_app(application: FastStream) -> AsyncGenerator[None, No
         await asyncio.wait([run_task])
 
 
-@pytest.mark.parametrize("publish_method", ["publisher_regular", "broker_regular", "broker_batch"])
+@pytest.mark.parametrize("publish_method", ["regular", "batch", "broker_regular", "broker_batch"])
 async def test_simple_publish(
     faker: faker.Faker,
     broker: faststream_stomp.StompBroker,
-    publish_method: typing.Literal["publisher_regular", "broker_regular", "broker_batch"],
+    publish_method: typing.Literal["regular", "batch", "broker_regular", "broker_batch"],
 ) -> None:
     app = FastStream(broker)
     destination = faker.pystr()
@@ -64,9 +64,11 @@ async def test_simple_publish(
     async def _() -> None:
         await broker.connect()
         match publish_method:
-            case "publisher_regular":
+            case "regular":
                 for one_body in sent_bodies:
                     await publisher.publish(one_body.encode(), correlation_id=gen_cor_id())
+            case "batch":
+                await publisher.publish_batch(*sent_bodies, correlation_id=gen_cor_id())
             case "broker_regular":
                 for one_body in sent_bodies:
                     await broker.publish(one_body.encode(), destination, correlation_id=gen_cor_id())
