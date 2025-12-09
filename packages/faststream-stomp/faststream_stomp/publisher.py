@@ -117,3 +117,20 @@ class StompPublisher(PublisherUsecase):
             headers=headers,
         )
         return await self._basic_request(publish_command, producer=self.config._outer_config.producer)
+
+    async def publish_batch(
+        self, *messages: SendableMessage, correlation_id: str | None = None, headers: dict[str, str] | None = None
+    ) -> None:
+        publish_command = StompPublishCommand(
+            *messages,
+            _publish_type=PublishType.PUBLISH,
+            destination=self.config.full_destination,
+            correlation_id=correlation_id,
+            headers=headers,
+        )
+        return typing.cast(
+            "None",
+            await self._basic_publish_batch(
+                publish_command, producer=self.config._outer_config.producer, _extra_middlewares=()
+            ),
+        )
