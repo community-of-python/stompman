@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing
 from typing import TYPE_CHECKING
 
 import stompman
@@ -40,6 +41,7 @@ class StompPrometheusMiddleware(PrometheusMiddleware[StompPublishCommand, stompm
         app_name: str = EMPTY,
         metrics_prefix: str = "faststream",
         received_messages_size_buckets: Sequence[float] | None = None,
+        **_kwargs: typing.Any,  # noqa: ANN401
     ) -> None:
         super().__init__(
             settings_provider_factory=lambda _: StompMetricsSettingsProvider(),

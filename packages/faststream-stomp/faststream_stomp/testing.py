@@ -1,3 +1,4 @@
+import typing
 import uuid
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
@@ -28,7 +29,6 @@ class TestStompBroker(TestBroker[StompBroker]):
             if handler.config.full_destination == publisher.config.full_destination:
                 subscriber = handler
                 break
-
         if subscriber is None:
             is_real = False
             subscriber = broker.subscriber(publisher.config.full_destination)
@@ -62,7 +62,7 @@ class FakeStompProducer(StompProducer):
         self.broker = broker
 
     async def publish(self, cmd: StompPublishCommand) -> None:
-        body, content_type = encode_message(cmd.body, serializer=None)
+        body, content_type = encode_message(cmd.body, serializer=self.broker.config.fd_config._serializer)
         all_headers: MessageHeaders = (cmd.headers.copy() if cmd.headers else {}) | {  # type: ignore[assignment]
             "destination": cmd.destination,
             "message-id": str(uuid.uuid4()),
@@ -73,6 +73,6 @@ class FakeStompProducer(StompProducer):
         if content_type:
             all_headers["content-type"] = content_type
         frame = FakeAckableMessageFrame(headers=all_headers, body=body, _subscription=mock.AsyncMock())
-        for handler in self.broker._subscribers:
-            if handler.config.full_destination == cmd.destination:
+        for handler in self.broker.subscribers:
+            if typing.cast("StompSubscriber", handler).config.full_destination == cmd.destination:
                 await handler.process_message(frame)

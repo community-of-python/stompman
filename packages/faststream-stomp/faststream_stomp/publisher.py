@@ -2,6 +2,7 @@ import typing
 from typing import Any, NoReturn
 
 import stompman
+from fast_depends.library.serializer import SerializerProto
 from faststream import PublishCommand, PublishType
 from faststream._internal.basic_types import SendableMessage
 from faststream._internal.configs import BrokerConfig
@@ -23,11 +24,12 @@ class StompProducer(ProducerProto[StompPublishCommand]):
     _parser: AsyncCallable
     _decoder: AsyncCallable
 
-    def __init__(self, client: stompman.Client) -> None:
+    def __init__(self, *, client: stompman.Client, serializer: SerializerProto | None) -> None:
         self.client = client
+        self.serializer = serializer
 
     async def publish(self, cmd: StompPublishCommand) -> None:
-        body, content_type = encode_message(cmd.body, serializer=None)
+        body, content_type = encode_message(cmd.body, serializer=self.serializer)
         all_headers = cmd.headers.copy() if cmd.headers else {}
         if cmd.correlation_id:
             all_headers["correlation-id"] = cmd.correlation_id
