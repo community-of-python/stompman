@@ -36,8 +36,13 @@ class StompProducer(ProducerProto[StompPublishCommand]):
         msg = "`StompProducer` can be used only to publish a response for `reply-to` or `RPC` messages."
         raise NotImplementedError(msg)
 
-    async def publish_batch(self, cmd: StompPublishCommand) -> NoReturn:
-        raise NotImplementedError
+    async def publish_batch(self, cmd: StompPublishCommand) -> None:
+        async with self.client.begin() as transaction:
+            for one_body in cmd.batch_bodies:
+                body, content_type = encode_message(one_body, serializer=self.serializer)
+                await transaction.send(
+                    body, cmd.destination, content_type=content_type, headers=_make_headers_for_publish(cmd)
+                )
 
 
 def _make_headers_for_publish(cmd: StompPublishCommand) -> dict[str, str]:
@@ -45,6 +50,7 @@ def _make_headers_for_publish(cmd: StompPublishCommand) -> dict[str, str]:
     if cmd.correlation_id:
         all_headers["correlation-id"] = cmd.correlation_id
     return all_headers
+
 
 class StompPublisherSpecification(PublisherSpecification[BrokerConfig, StompPublisherSpecificationConfig]):
     @property
