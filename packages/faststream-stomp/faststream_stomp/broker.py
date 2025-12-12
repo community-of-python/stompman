@@ -54,7 +54,7 @@ def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
 
 
 class StompParamsStorage(DefaultLoggerStorage):
-    __max_msg_id_ln = 10
+    __max_msg_id_ln = -1
     _max_channel_name = 4
 
     def get_logger(self, *, context: ContextRepo) -> LoggerProto:
