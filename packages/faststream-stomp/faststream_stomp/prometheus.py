@@ -33,7 +33,7 @@ class StompMetricsSettingsProvider(MetricsSettingsProvider[stompman.MessageFrame
         return cmd.destination
 
 
-class StompPrometheusMiddleware(PrometheusMiddleware[StompPublishCommand, stompman.MessageFrame]):
+class StompPrometheusMiddleware(PrometheusMiddleware[stompman.MessageFrame, StompPublishCommand]):
     def __init__(
         self,
         *,

@@ -48,8 +48,7 @@ class TestStompBroker(TestBroker[StompBroker]):
         with mock.patch.object(broker.config, "client", new_callable=AsyncMock), super()._patch_broker(broker):
             yield
 
-    @staticmethod
-    async def _fake_connect(broker: StompBroker, *args: Any, **kwargs: Any) -> None: ...  # noqa: ANN401
+    async def _fake_connect(self, broker: StompBroker, *args: Any, **kwargs: Any) -> None: ...  # noqa: ANN401
 
 
 class FakeAckableMessageFrame(stompman.AckableMessageFrame):
