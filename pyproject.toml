@@ -6,15 +6,15 @@ version = "0"
 [dependency-groups]
 dev = [
     "anyio==4.12.0",
-    "faker==38.2.0",
-    "hypothesis==6.148.4",
-    "mypy==1.19.0",
-    "polyfactory==3.1.0",
-    "pytest==9.0.1",
+    "faker==40.1.0",
+    "hypothesis==6.148.8",
+    "mypy==1.19.1",
+    "polyfactory==3.2.0",
+    "pytest==9.0.2",
     "pytest-cov==7.0.0",
     "pytest-timeout==2.4.0",
     "pytest-rerunfailures==16.1",
-    "ruff==0.14.7",
+    "ruff==0.14.10",
     "uvloop==0.22.1",
 ]
 
