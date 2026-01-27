@@ -5,3 +5,4 @@ dist
 uv.lock
 .vscode
 __pycache__
+.idea
