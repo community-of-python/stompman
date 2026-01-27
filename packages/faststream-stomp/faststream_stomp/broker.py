@@ -135,6 +135,7 @@ class StompBroker(
 
         super().__init__(config=broker_config, specification=specification, routers=routers)
         self._attempted_to_connect = False
+        self._stopping = False
 
     async def _connect(self) -> stompman.Client:
         if self._attempted_to_connect:
@@ -154,13 +155,19 @@ class StompBroker(
         exc_val: BaseException | None = None,
         exc_tb: types.TracebackType | None = None,
     ) -> None:
+        self._stopping = True
         for sub in self.subscribers:
             await sub.stop()
         if self._connection:
             await self._connection.__aexit__(exc_type, exc_val, exc_tb)
+        self._stopping = False
         self.running = False
 
     async def ping(self, timeout: float | None = None) -> bool:
+        # broker can be stuck in stopping state
+        if self._stopping:
+            return False
+
         sleep_time = (timeout or 10) / 10
         with anyio.move_on_after(timeout) as cancel_scope:
             if self._connection is None:
