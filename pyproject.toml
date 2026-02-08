@@ -16,6 +16,8 @@ dev = [
     "pytest-rerunfailures==16.1",
     "ruff==0.14.10",
     "uvloop==0.22.1",
+]
+ws = [
     "websockets==16.0",
 ]
 
