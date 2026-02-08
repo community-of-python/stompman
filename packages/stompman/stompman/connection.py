@@ -25,6 +25,7 @@ class AbstractConnection(Protocol):
         timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
+        uri_path: str = "",
     ) -> Self | None: ...
     async def close(self) -> None: ...
     def write_heartbeat(self) -> None: ...
@@ -33,7 +34,7 @@ class AbstractConnection(Protocol):
 
 
 @contextmanager
-def _reraise_connection_lost(*causes: type[Exception]) -> Generator[None, None, None]:
+def reraise_connection_lost(*causes: type[Exception]) -> Generator[None, None, None]:
     try:
         yield
     except causes as exception:
@@ -56,8 +57,10 @@ class Connection(AbstractConnection):
         timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
+        uri_path: str = "",
     ) -> Self | None:
         try:
+            assert uri_path == "", "only stompman.connection_ws.WebSocketConnection supports uri_path argument"
             reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port, ssl=ssl), timeout=timeout)
         except (TimeoutError, ConnectionError, socket.gaierror):
             return None
@@ -75,13 +78,13 @@ class Connection(AbstractConnection):
             await self.writer.wait_closed()
 
     def write_heartbeat(self) -> None:
-        with _reraise_connection_lost(RuntimeError):
+        with reraise_connection_lost(RuntimeError):
             return self.writer.write(NEWLINE)
 
     async def write_frame(self, frame: AnyClientFrame) -> None:
-        with _reraise_connection_lost(RuntimeError):
+        with reraise_connection_lost(RuntimeError):
             self.writer.write(dump_frame(frame))
-        with _reraise_connection_lost(ConnectionError):
+        with reraise_connection_lost(ConnectionError):
             await self.writer.drain()
 
     async def _read_non_empty_bytes(self, max_chunk_size: int) -> bytes:
@@ -93,7 +96,7 @@ class Connection(AbstractConnection):
         parser = FrameParser()
 
         while True:
-            with _reraise_connection_lost(ConnectionError):
+            with reraise_connection_lost(ConnectionError):
                 raw_frames = await self._read_non_empty_bytes(self.read_max_chunk_size)
             self.last_read_time = time.time()
 

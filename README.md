@@ -44,6 +44,22 @@ async with stompman.Client(
     ...
 ```
 
+Initialize a client with a custom connection class, for example, connecting to a stomp producer
+over websocket:
+
+```python
+from stompman.connection_ws import WebSocketConnection
+
+async with stompman.Client(
+    servers=[
+        stompman.ConnectionParameters(host="171.0.0.1", port=8080, login="", passcode="", uri_path="/ws/path"),
+    ],
+    connection_class=WebSocketConnection,
+    ...
+) as client:
+    ...
+```
+
 ### Sending Messages
 
 To send a message, use the following code:
