@@ -160,7 +160,6 @@ class StompBroker(
             await sub.stop()
         if self._connection:
             await self._connection.__aexit__(exc_type, exc_val, exc_tb)
-        self._stopping = False
         self.running = False
 
     async def ping(self, timeout: float | None = None) -> bool:
