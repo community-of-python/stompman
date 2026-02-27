@@ -29,10 +29,11 @@ class WebSocketConnection(AbstractConnection):
         timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
-        ws_uri_path: str,
+        ws_uri_path: str | None,
     ) -> Self | None:
         try:
-            uri = f"ws://{host}:{port}/{ws_uri_path.strip('/')}"
+            path = f"{ws_uri_path.strip('/')}" if ws_uri_path else ""
+            uri = f"ws://{host}:{port}/{path}"
             websocket = await asyncio.wait_for(
                 websockets.connect(uri=uri, ssl=ssl, max_size=read_max_chunk_size), timeout=timeout
             )
