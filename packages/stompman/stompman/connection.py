@@ -25,7 +25,7 @@ class AbstractConnection(Protocol):
         timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
-        uri_path: str = "",
+        ws_uri_path: str = "",
     ) -> Self | None: ...
     async def close(self) -> None: ...
     def write_heartbeat(self) -> None: ...
@@ -57,10 +57,12 @@ class Connection(AbstractConnection):
         timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
-        uri_path: str = "",
+        ws_uri_path: str = "",
     ) -> Self | None:
         try:
-            assert uri_path == "", "only stompman.connection_ws.WebSocketConnection supports uri_path argument"
+            if ws_uri_path:
+                msg = "only stompman.connection_ws.WebSocketConnection supports ws_uri_path argument"
+                raise AssertionError(msg)
             reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port, ssl=ssl), timeout=timeout)
         except (TimeoutError, ConnectionError, socket.gaierror):
             return None

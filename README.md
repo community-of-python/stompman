@@ -52,7 +52,7 @@ from stompman.connection_ws import WebSocketConnection
 
 async with stompman.Client(
     servers=[
-        stompman.ConnectionParameters(host="171.0.0.1", port=8080, login="", passcode="", uri_path="/ws/path"),
+        stompman.ConnectionParameters(host="171.0.0.1", port=8080, login="", passcode="", ws_uri_path="/ws/path"),
     ],
     connection_class=WebSocketConnection,
     ...

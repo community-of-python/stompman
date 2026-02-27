@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from ssl import SSLContext
 from typing import Literal, Self, cast
 
-from websockets.asyncio.client import ClientConnection as WSClientConnection
-from websockets.asyncio.client import connect as ws_connect
+import websockets
 from websockets.exceptions import WebSocketException
 
 from stompman.connection import AbstractConnection, reraise_connection_lost
@@ -17,7 +16,7 @@ from stompman.serde import NEWLINE, FrameParser, dump_frame
 
 @dataclass(kw_only=True)
 class WebSocketConnection(AbstractConnection):
-    websocket: WSClientConnection
+    websocket: websockets.ClientConnection
     read_max_chunk_size: int
     ssl: Literal[True] | SSLContext | None
 
@@ -30,14 +29,14 @@ class WebSocketConnection(AbstractConnection):
         timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
-        uri_path: str,
+        ws_uri_path: str,
     ) -> Self | None:
         try:
-            uri = f"ws://{host}:{port}/{uri_path.strip('/')}"
+            uri = f"ws://{host}:{port}/{ws_uri_path.strip('/')}"
             websocket = await asyncio.wait_for(
-                ws_connect(uri=uri, ssl=ssl, max_size=read_max_chunk_size), timeout=timeout
+                websockets.connect(uri=uri, ssl=ssl, max_size=read_max_chunk_size), timeout=timeout
             )
-        except (TimeoutError, WebSocketException):
+        except (TimeoutError, OSError, WebSocketException):
             return None
         else:
             return cls(websocket=websocket, read_max_chunk_size=read_max_chunk_size, ssl=ssl)
@@ -47,18 +46,18 @@ class WebSocketConnection(AbstractConnection):
             await self.websocket.close()
 
     def write_heartbeat(self) -> None:
-        with reraise_connection_lost(RuntimeError, WebSocketException):
+        with reraise_connection_lost(RuntimeError, OSError, WebSocketException):
             asyncio.run_coroutine_threadsafe(self.websocket.send(NEWLINE, text=True), loop=asyncio.get_running_loop())
 
     async def write_frame(self, frame: AnyClientFrame) -> None:
-        with reraise_connection_lost(RuntimeError, WebSocketException):
+        with reraise_connection_lost(RuntimeError, OSError, WebSocketException):
             await self.websocket.send(dump_frame(frame), text=True)
 
     async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:
         parser = FrameParser()
 
         while True:
-            with reraise_connection_lost(WebSocketException):
+            with reraise_connection_lost(RuntimeError, OSError, WebSocketException):
                 raw_frames = await self.websocket.recv(decode=False)
             self.last_read_time = time.time()
 

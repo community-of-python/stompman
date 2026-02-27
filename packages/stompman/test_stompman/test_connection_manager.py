@@ -43,7 +43,7 @@ async def test_connect_attempts_ok(ok_on_attempt: int, monkeypatch: pytest.Monke
             timeout: int,
             read_max_chunk_size: int,
             ssl: Literal[True] | SSLContext | None,
-            uri_path: str = "",
+            ws_uri_path: str = "",
         ) -> Self | None:
             assert (host, port) == (manager.servers[0].host, manager.servers[0].port)
             nonlocal attempts
@@ -88,7 +88,7 @@ async def test_connect_to_any_server_ok() -> None:
             timeout: int,
             read_max_chunk_size: int,
             ssl: Literal[True] | SSLContext | None,
-            uri_path: str = "",
+            ws_uri_path: str = "",
         ) -> Self | None:
             return (
                 await super().connect(

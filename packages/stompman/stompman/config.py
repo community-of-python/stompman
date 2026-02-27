@@ -30,7 +30,7 @@ class ConnectionParameters:
     port: int
     login: str
     passcode: str = field(repr=False)
-    uri_path: str = ""
+    ws_uri_path: str = ""
 
     @property
     def unescaped_passcode(self) -> str:
