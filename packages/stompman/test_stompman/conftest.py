@@ -35,6 +35,7 @@ class BaseMockConnection(AbstractConnection):
         timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
+        ws_uri_path: str | None = None,
     ) -> Self | None:
         return cls()
 

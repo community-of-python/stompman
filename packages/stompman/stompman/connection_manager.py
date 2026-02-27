@@ -99,6 +99,7 @@ class ConnectionManager:
             timeout=self.connect_timeout,
             read_max_chunk_size=self.read_max_chunk_size,
             ssl=self.ssl,
+            ws_uri_path=server.ws_uri_path,
         ):
             return (connection, server)
         return None

@@ -17,6 +17,9 @@ dev = [
     "ruff==0.14.14",
     "uvloop==0.22.1",
 ]
+ws = [
+    "websockets==16.0",
+]
 
 [tool.uv]
 package = false
