@@ -95,10 +95,10 @@ async def test_connection_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     await connection.close()
 
     MockReader.close.assert_called_once_with()
-    assert MockReader.recv.mock_calls == [mock.call(mock.ANY)] * len(read_bytes)
+    assert MockReader.recv.mock_calls == [mock.call(decode=False)] * len(read_bytes)
     assert MockReader.send.mock_calls == [
-        mock.call(NEWLINE, mock.ANY),
-        mock.call(b"COMMIT\ntransaction:transaction\n\n\x00", mock.ANY),
+        mock.call(NEWLINE, text=True),
+        mock.call(b"COMMIT\ntransaction:transaction\n\n\x00", text=True),
     ]
 
 
