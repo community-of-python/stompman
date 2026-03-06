@@ -15,11 +15,11 @@ from stompman import (
 )
 from stompman.serde import NEWLINE
 
-pytestmark = pytest.mark.anyio
+pytest.importorskip("stompman.connection_ws")
+from stompman.connection_ws import WebSocketConnection
+from websockets.exceptions import WebSocketException
 
-WSConnection = pytest.importorskip("stompman.connection_ws")
-WebSocketConnection = WSConnection.WebSocketConnection
-WebSocketException = WSConnection.WebSocketException
+pytestmark = pytest.mark.anyio
 
 
 async def make_connection_ws() -> WebSocketConnection | None:
@@ -29,10 +29,6 @@ async def make_connection_ws() -> WebSocketConnection | None:
 
 
 async def make_mocked_connection(monkeypatch: pytest.MonkeyPatch, connection_mock: object) -> WebSocketConnection:
-    # websocket connect class is awaitable that returns self, but AsyncMock
-    # class cannot do this, so wrap it in an asyncio.Future
-    fut = asyncio.Future()
-    fut.set_result(connection_mock)
     monkeypatch.setattr("websockets.connect", mock.AsyncMock(return_value=connection_mock))
     connection = await make_connection_ws()
     assert connection
@@ -99,10 +95,10 @@ async def test_connection_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     await connection.close()
 
     MockReader.close.assert_called_once_with()
-    assert MockReader.recv.mock_calls == [mock.call(decode=False)] * len(read_bytes)
+    assert MockReader.recv.mock_calls == [mock.call(mock.ANY)] * len(read_bytes)
     assert MockReader.send.mock_calls == [
-        mock.call(NEWLINE, text=True),
-        mock.call(b"COMMIT\ntransaction:transaction\n\n\x00", text=True),
+        mock.call(NEWLINE, mock.ANY),
+        mock.call(b"COMMIT\ntransaction:transaction\n\n\x00", mock.ANY),
     ]
 
 
