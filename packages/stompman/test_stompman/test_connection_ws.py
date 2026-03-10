@@ -17,7 +17,7 @@ from stompman.serde import NEWLINE
 
 pytest.importorskip("stompman.connection_ws")
 from stompman.connection_ws import WebSocketConnection
-from websockets.exceptions import WebSocketException
+from websockets.exceptions import WebSocketException  # type: ignore[import-not-found,unused-ignore]
 
 pytestmark = pytest.mark.anyio
 

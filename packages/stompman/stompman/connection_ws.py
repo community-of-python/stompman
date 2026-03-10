@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from ssl import SSLContext
 from typing import Literal, Self, cast
 
-import websockets
-from websockets.exceptions import WebSocketException
+import websockets  # type: ignore[import-not-found,unused-ignore]
 
 from stompman.connection import AbstractConnection, reraise_connection_lost
 from stompman.frames import AnyClientFrame, AnyServerFrame
@@ -37,28 +36,28 @@ class WebSocketConnection(AbstractConnection):
             websocket = await asyncio.wait_for(
                 websockets.connect(uri=uri, ssl=ssl, max_size=read_max_chunk_size), timeout=timeout
             )
-        except (TimeoutError, OSError, WebSocketException):
+        except (TimeoutError, OSError, websockets.WebSocketException):
             return None
         else:
             return cls(websocket=websocket, read_max_chunk_size=read_max_chunk_size, ssl=ssl)
 
     async def close(self) -> None:
-        with suppress(WebSocketException):
+        with suppress(websockets.WebSocketException):
             await self.websocket.close()
 
     def write_heartbeat(self) -> None:
-        with reraise_connection_lost(RuntimeError, OSError, WebSocketException):
+        with reraise_connection_lost(RuntimeError, OSError, websockets.WebSocketException):
             asyncio.run_coroutine_threadsafe(self.websocket.send(NEWLINE, text=True), loop=asyncio.get_running_loop())
 
     async def write_frame(self, frame: AnyClientFrame) -> None:
-        with reraise_connection_lost(RuntimeError, OSError, WebSocketException):
+        with reraise_connection_lost(RuntimeError, OSError, websockets.WebSocketException):
             await self.websocket.send(dump_frame(frame), text=True)
 
     async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:
         parser = FrameParser()
 
         while True:
-            with reraise_connection_lost(RuntimeError, OSError, WebSocketException):
+            with reraise_connection_lost(RuntimeError, OSError, websockets.WebSocketException):
                 raw_frames = await self.websocket.recv(decode=False)
             self.last_read_time = time.time()
 
