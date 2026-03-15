@@ -8,7 +8,8 @@ A Python client for STOMP asynchronous messaging protocol that is:
 
 ## How To Use
 
-Before you start using stompman, make sure you have it installed:
+Before you start using stompman, make sure you have it installed. If you optionally want to use
+stompman over a websocket, you can install with `stompman[ws]` instead of `stompman`:
 
 ```sh
 uv add stompman
@@ -40,6 +41,23 @@ async with stompman.Client(
     disconnect_confirmation_timeout=2,
     write_retry_attempts=3,
     check_server_alive_interval_factor=3,
+) as client:
+    ...
+```
+
+Initialize a client with a custom connection class, for example, connecting to a stomp producer
+over websocket:
+
+```python
+# uv/poetry add stompman[ws] to get WebScoketConnection support
+from stompman.connection_ws import WebSocketConnection
+
+async with stompman.Client(
+    servers=[
+        stompman.ConnectionParameters(host="171.0.0.1", port=8080, login="", passcode="", ws_uri_path="/ws/path"),
+    ],
+    connection_class=WebSocketConnection,
+    ...
 ) as client:
     ...
 ```
