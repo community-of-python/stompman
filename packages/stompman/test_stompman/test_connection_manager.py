@@ -379,11 +379,13 @@ async def test_no_message_restart_triggers_reconnect(monkeypatch: pytest.MonkeyP
     async with EnrichedConnectionManager(
         connection_class=BaseMockConnection, no_message_restart_interval=timedelta(seconds=10)
     ) as manager:
-        initial_reconnection_count = manager._reconnection_count
         frozen_time[0] += 11
         for _ in range(10):
             await asyncio.sleep(0)
-        assert manager._reconnection_count > initial_reconnection_count
+        assert manager._reconnection_count >= 1
+        old_monitor_task = manager._monitor_no_message_task
+        await manager._get_active_connection_state()
+        assert manager._monitor_no_message_task is not old_monitor_task
 
 
 async def test_no_message_restart_does_not_trigger_when_messages_flow(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -401,7 +403,15 @@ async def test_no_message_restart_does_not_trigger_when_messages_flow(monkeypatc
         assert manager._reconnection_count == initial_reconnection_count
 
 
-async def test_no_message_restart_disabled_by_default() -> None:
-    async with EnrichedConnectionManager(connection_class=BaseMockConnection) as manager:
-        assert manager.no_message_restart_interval is None
+async def test_no_message_restart_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen_time = [time.time()]
+    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+
+    async with EnrichedConnectionManager(
+        connection_class=BaseMockConnection, no_message_restart_interval=None
+    ) as manager:
         assert manager._monitor_no_message_task is None
+        frozen_time[0] += 99999
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert manager._reconnection_count == 0
