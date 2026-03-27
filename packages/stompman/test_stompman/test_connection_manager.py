@@ -1,5 +1,7 @@
 import asyncio
+import time
 from collections.abc import AsyncGenerator, AsyncIterable
+from datetime import timedelta
 from ssl import SSLContext
 from typing import Literal, Self
 from unittest import mock
@@ -147,12 +149,12 @@ async def test_get_active_connection_state_lifespan_flaky_ok() -> None:
         mock.call(
             connection=BaseMockConnection(),
             connection_parameters=manager.servers[0],
-            set_heartbeat_interval=manager._restart_heartbeat_tasks,
+            set_heartbeat_interval=manager._restart_background_tasks,
         ),
         mock.call(
             connection=BaseMockConnection(),
             connection_parameters=manager.servers[0],
-            set_heartbeat_interval=manager._restart_heartbeat_tasks,
+            set_heartbeat_interval=manager._restart_background_tasks,
         ),
     ]
 
@@ -368,3 +370,38 @@ async def test_maybe_write_frame_connection_now_lost() -> None:
 async def test_maybe_write_frame_ok() -> None:
     async with EnrichedConnectionManager(connection_class=BaseMockConnection) as manager:
         assert await manager.maybe_write_frame(build_dataclass(ConnectFrame))
+
+
+async def test_no_message_restart_triggers_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen_time = [time.time()]
+    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+
+    async with EnrichedConnectionManager(
+        connection_class=BaseMockConnection, no_message_restart_interval=timedelta(seconds=10)
+    ) as manager:
+        initial_reconnection_count = manager._reconnection_count
+        frozen_time[0] += 11
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert manager._reconnection_count > initial_reconnection_count
+
+
+async def test_no_message_restart_does_not_trigger_when_messages_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen_time = [time.time()]
+    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+
+    async with EnrichedConnectionManager(
+        connection_class=BaseMockConnection, no_message_restart_interval=timedelta(seconds=10)
+    ) as manager:
+        initial_reconnection_count = manager._reconnection_count
+        frozen_time[0] += 5
+        manager._last_message_received_time = frozen_time[0]
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert manager._reconnection_count == initial_reconnection_count
+
+
+async def test_no_message_restart_disabled_by_default() -> None:
+    async with EnrichedConnectionManager(connection_class=BaseMockConnection) as manager:
+        assert manager.no_message_restart_interval is None
+        assert manager._monitor_no_message_task is None
