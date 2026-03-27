@@ -1,7 +1,9 @@
 import asyncio
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from functools import partial
 from ssl import SSLContext
 from types import TracebackType
@@ -45,6 +47,8 @@ class Client:
     disconnect_confirmation_timeout: int = 2
     check_server_alive_interval_factor: int = 3
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
+    no_message_restart_interval: timedelta | None = timedelta(hours=1)
+    """Force reconnect if no messages received within this interval. None to disable."""
 
     connection_class: type[AbstractConnection] = Connection
 
@@ -74,6 +78,7 @@ class Client:
             read_max_chunk_size=self.read_max_chunk_size,
             write_retry_attempts=self.write_retry_attempts,
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
+            no_message_restart_interval=self.no_message_restart_interval,
             ssl=self.ssl,
         )
 
@@ -99,6 +104,7 @@ class Client:
             async for frame in self._connection_manager.read_frames_reconnecting():
                 match frame:
                     case MessageFrame():
+                        self._connection_manager._last_message_received_time = time.time()
                         if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
                             task_group.create_task(
                                 subscription._run_handler(frame=frame)

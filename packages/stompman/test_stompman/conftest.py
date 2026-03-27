@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from ssl import SSLContext
 from typing import Any, Literal, Self, TypeVar
 
@@ -53,6 +54,7 @@ class EnrichedClient(stompman.Client):
     servers: list[stompman.ConnectionParameters] = field(
         default_factory=lambda: [stompman.ConnectionParameters("localhost", 12345, "login", "passcode")], kw_only=False
     )
+    no_message_restart_interval: timedelta | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -80,6 +82,7 @@ class EnrichedConnectionManager(ConnectionManager):
     write_retry_attempts: int = 3
     ssl: Literal[True] | SSLContext | None = None
     check_server_alive_interval_factor: int = 3
+    no_message_restart_interval: timedelta | None = None
 
 
 DataclassType = TypeVar("DataclassType")

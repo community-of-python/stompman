@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from datetime import timedelta
 from ssl import SSLContext
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Self
@@ -50,12 +51,15 @@ class ConnectionManager:
     read_max_chunk_size: int
     write_retry_attempts: int
     check_server_alive_interval_factor: int
+    no_message_restart_interval: timedelta | None
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
     _task_group: asyncio.TaskGroup = field(init=False, default_factory=asyncio.TaskGroup)
     _send_heartbeat_task: asyncio.Task[None] = field(init=False, repr=False)
+    _monitor_no_message_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _reconnection_count: int = field(default=0, init=False)
+    _last_message_received_time: float = field(init=False, default_factory=time.time)
 
     async def __aenter__(self) -> Self:
         await self._task_group.__aenter__()
@@ -67,7 +71,11 @@ class ConnectionManager:
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
     ) -> None:
         self._send_heartbeat_task.cancel()
-        await asyncio.wait([self._send_heartbeat_task])
+        tasks = [self._send_heartbeat_task]
+        if self._monitor_no_message_task is not None:
+            self._monitor_no_message_task.cancel()
+            tasks.append(self._monitor_no_message_task)
+        await asyncio.wait(tasks)
         await self._task_group.__aexit__(exc_type, exc_value, traceback)
 
         if not self._active_connection_state:
@@ -78,17 +86,43 @@ class ConnectionManager:
             return
         await self._active_connection_state.connection.close()
 
-    def _restart_heartbeat_tasks(self, server_heartbeat: Heartbeat) -> None:
+    def _restart_background_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
         self._send_heartbeat_task = self._task_group.create_task(
             self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
         )
+
+    def _restart_no_message_monitor(self) -> None:
+        if self._monitor_no_message_task is not None:
+            self._monitor_no_message_task.cancel()
+        if self.no_message_restart_interval is not None:
+            self._monitor_no_message_task = self._task_group.create_task(
+                self._monitor_no_message_timeout(self.no_message_restart_interval)
+            )
 
     async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
         send_heartbeat_interval_seconds = send_heartbeat_interval_ms / 1000
         while True:
             await self.write_heartbeat_reconnecting()
             await asyncio.sleep(send_heartbeat_interval_seconds)
+
+    async def _monitor_no_message_timeout(self, interval: timedelta) -> None:
+        interval_seconds = interval.total_seconds()
+        while True:
+            elapsed = time.time() - self._last_message_received_time
+            if (remaining := interval_seconds - elapsed) > 0:
+                await asyncio.sleep(remaining)
+            else:
+                if connection_state := self._active_connection_state:
+                    LOGGER.warning(
+                        "no messages received for %s seconds, forcing reconnect",
+                        interval_seconds,
+                    )
+                    self._clear_active_connection_state(
+                        ConnectionLostError(reason="no messages received within timeout")
+                    )
+                    await connection_state.connection.close()
+                await asyncio.sleep(interval_seconds)
 
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters
@@ -121,7 +155,7 @@ class ConnectionManager:
         lifespan = self.lifespan_factory(
             connection=connection,
             connection_parameters=connection_parameters,
-            set_heartbeat_interval=self._restart_heartbeat_tasks,
+            set_heartbeat_interval=self._restart_background_tasks,
         )
 
         try:
@@ -152,6 +186,8 @@ class ConnectionManager:
 
                 if isinstance(connection_result, ActiveConnectionState):
                     self._active_connection_state = connection_result
+                    self._last_message_received_time = time.time()
+                    self._restart_no_message_monitor()
                     if not is_initial_call:
                         LOGGER.warning(
                             "reconnected after connection failure. connection_parameters: %s",
