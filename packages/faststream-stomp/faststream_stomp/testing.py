@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 import stompman
 from faststream._internal.testing.broker import TestBroker, change_producer
 from faststream.message import encode_message
+from stompman.frames import SendFrame
+from stompman.serde import dump_frame
 
 from faststream_stomp.broker import StompBroker
 from faststream_stomp.models import StompPublishCommand
@@ -72,6 +74,16 @@ class FakeStompProducer(StompProducer):
             all_headers["correlation-id"] = cmd.correlation_id  # type: ignore[typeddict-unknown-key]
         if content_type:
             all_headers["content-type"] = content_type
+        dump_frame(
+            SendFrame.build(
+                body=body,
+                destination=cmd.destination,
+                transaction=None,
+                content_type=content_type,
+                add_content_length=False,
+                headers=cmd.headers,
+            )
+        )
         frame = FakeAckableMessageFrame(headers=all_headers, body=body, _subscription=mock.AsyncMock())
         for handler in self.broker.subscribers:
             if typing.cast("StompSubscriber", handler).config.full_destination == cmd.destination:

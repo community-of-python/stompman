@@ -1,3 +1,5 @@
+import typing
+
 import faker
 import faststream_stomp
 import pydantic
@@ -58,6 +60,19 @@ class TestTesting:
             second_publisher.mock.assert_called_once_with(expected_body)
             assert third_publisher.mock
             third_publisher.mock.assert_called_once_with(expected_body)
+
+    async def test_non_string_header_values_raise_type_error(
+        self, faker: faker.Faker, broker: faststream_stomp.StompBroker
+    ) -> None:
+        # gotcha: dict[str, typing.Any] is easily happily into dict[str, str]
+        headers: dict[str, typing.Any] = {"key": 123}
+
+        @broker.subscriber(destination := faker.pystr())
+        def handle(body: str) -> None: ...
+
+        async with faststream_stomp.TestStompBroker(broker) as br:
+            with pytest.raises(TypeError):
+                await br.publish(faker.pystr(), destination, headers=headers)
 
     async def test_publish_pydantic(self, faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
         class SomePydanticModel(pydantic.BaseModel):
