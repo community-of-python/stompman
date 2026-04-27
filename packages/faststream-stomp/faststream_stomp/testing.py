@@ -84,7 +84,9 @@ class FakeStompProducer(StompProducer):
                 headers=cmd.headers,
             )
         )
-        frame = FakeAckableMessageFrame(headers=all_headers, body=body, _subscription=mock.AsyncMock())
+        frame = FakeAckableMessageFrame(
+            headers=all_headers, body=body, _subscription=mock.AsyncMock(), _received_at_reconnection_count=0
+        )
         for handler in self.broker.subscribers:
             if typing.cast("StompSubscriber", handler).config.full_destination == cmd.destination:
                 await handler.process_message(frame)

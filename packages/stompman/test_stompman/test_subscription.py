@@ -374,6 +374,42 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
     assert isinstance(inner_inner_group.exceptions[0], FailedAllConnectAttemptsError)
 
 
+async def test_subscription_sends_ack_for_message_received_after_reconnection(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker
+) -> None:
+    subscription_id, destination, message_id, ack_id = faker.pystr(), faker.pystr(), faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+    message_frame = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": message_id, "subscription": subscription_id, "ack": ack_id},
+    )
+    connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([CONNECTED_FRAME], []))
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        subscription = await client.subscribe_with_manual_ack(destination, noop_message_handler)
+        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        await client.send(b"trigger-reconnect", destination=destination)
+        message_after_reconnect = stompman.subscription.AckableMessageFrame(
+            headers=message_frame.headers,
+            body=message_frame.body,
+            _subscription=subscription,
+            _received_at_reconnection_count=client._connection_manager._reconnection_count,
+        )
+        await message_after_reconnect.ack()
+        await message_after_reconnect.nack()
+        await subscription.unsubscribe()
+
+    assert client._connection_manager._reconnection_count == 1, "reconnect should have happened"
+    ack_frames = [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
+    nack_frames = [one_frame for one_frame in collected_frames if isinstance(one_frame, NackFrame)]
+    assert ack_frames == [AckFrame(headers={"subscription": subscription_id, "id": ack_id})], (
+        "ack must be sent for messages received on the new connection after reconnect"
+    )
+    assert nack_frames == [NackFrame(headers={"subscription": subscription_id, "id": ack_id})], (
+        "nack must be sent for messages received on the new connection after reconnect"
+    )
+
+
 async def test_subscription_skips_ack_nack_after_reconnection(
     monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -105,13 +105,20 @@ class Client:
                 match frame:
                     case MessageFrame():
                         self._connection_manager._last_message_received_time = time.time()
+                        received_at_reconnection_count = self._connection_manager._reconnection_count
                         if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
                             task_group.create_task(
-                                subscription._run_handler(frame=frame)
+                                subscription._run_handler(
+                                    frame=frame,
+                                    received_at_reconnection_count=received_at_reconnection_count,
+                                )
                                 if isinstance(subscription, AutoAckSubscription)
                                 else subscription.handler(
                                     AckableMessageFrame(
-                                        headers=frame.headers, body=frame.body, _subscription=subscription
+                                        headers=frame.headers,
+                                        body=frame.body,
+                                        _subscription=subscription,
+                                        _received_at_reconnection_count=received_at_reconnection_count,
                                     )
                                 )
                             )

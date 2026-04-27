@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from itertools import starmap
 from typing import Final
 from uuid import uuid4
@@ -26,6 +27,50 @@ DESTINATION: Final = "DLQ"
 async def create_client(connection_parameters: stompman.ConnectionParameters) -> AsyncGenerator[stompman.Client, None]:
     async with stompman.Client(servers=[connection_parameters], connection_confirmation_timeout=10) as client:
         yield client
+
+
+@pytest.mark.anyio
+async def test_consumption_survives_forced_reconnects(
+    connection_parameters: stompman.ConnectionParameters,
+) -> None:
+    iterations = 3
+    received: list[bytes] = []
+    received_event = asyncio.Event()
+
+    async def handle_message(frame: stompman.MessageFrame) -> None:  # noqa: RUF029
+        received.append(frame.body)
+        received_event.set()
+
+    async with (
+        stompman.Client(
+            servers=[connection_parameters],
+            connection_confirmation_timeout=10,
+            no_message_restart_interval=timedelta(milliseconds=300),
+        ) as consumer,
+        stompman.Client(servers=[connection_parameters], connection_confirmation_timeout=10) as producer,
+    ):
+        subscription = await consumer.subscribe(
+            destination=DESTINATION, handler=handle_message, on_suppressed_exception=print
+        )
+        try:
+            for index in range(iterations):
+                initial_reconnection_count = consumer._connection_manager._reconnection_count
+                await asyncio.sleep(0.6)
+                assert consumer._connection_manager._reconnection_count > initial_reconnection_count, (
+                    f"iteration {index}: expected forced reconnect to fire"
+                )
+                payload = f"msg-{index}-{uuid4()}".encode()
+                received_event.clear()
+                await producer.send(body=payload, destination=DESTINATION)
+                await asyncio.wait_for(received_event.wait(), timeout=5)
+                assert payload in received, f"iteration {index}: {payload!r} not delivered"
+        finally:
+            await subscription.unsubscribe()
+
+    assert len(received) == iterations, (
+        f"expected exactly {iterations} deliveries, got {len(received)}: {received}. "
+        "prior-acked messages are being redelivered after every forced reconnect"
+    )
 
 
 @pytest.mark.anyio
