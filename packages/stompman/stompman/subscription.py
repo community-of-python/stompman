@@ -59,7 +59,6 @@ class BaseSubscription:
     ack: AckMode
     _connection_manager: ConnectionManager
     _active_subscriptions: ActiveSubscriptions
-    _bound_reconnection_count: int = field(init=False)
 
     async def _subscribe(self) -> None:
         await self._connection_manager.write_frame_reconnecting(
@@ -67,14 +66,13 @@ class BaseSubscription:
                 subscription_id=self.id, destination=self.destination, ack=self.ack, headers=self.headers
             )
         )
-        self._bound_reconnection_count = self._connection_manager._reconnection_count
         self._active_subscriptions.add(self)  # type: ignore[arg-type]
 
     async def unsubscribe(self) -> None:
         self._active_subscriptions.delete_by_id(self.id)
         await self._connection_manager.maybe_write_frame(UnsubscribeFrame(headers={"id": self.id}))
 
-    async def _nack(self, frame: MessageFrame) -> None:
+    async def _nack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
         if not self._active_subscriptions.contains_by_id(self.id):
             LOGGER.warning(
                 "failed to nack message frame: subscription is not active. "
@@ -93,19 +91,20 @@ class BaseSubscription:
                 frame.headers.keys(),
             )
             return
-        if self._bound_reconnection_count != self._connection_manager._reconnection_count:
+        if received_at_reconnection_count != self._connection_manager._reconnection_count:
             LOGGER.debug(
                 "skipping nack for message frame: connection changed since message was received. "
-                "message_id: %s, subscription_id: %s, bound_reconnection_count: %s, current_reconnection_count: %s",
+                "message_id: %s, subscription_id: %s, received_at_reconnection_count: %s, "
+                "current_reconnection_count: %s",
                 frame.headers["message-id"],
                 self.id,
-                self._bound_reconnection_count,
+                received_at_reconnection_count,
                 self._connection_manager._reconnection_count,
             )
             return
         await self._connection_manager.maybe_write_frame(NackFrame(headers={"id": ack_id, "subscription": self.id}))
 
-    async def _ack(self, frame: MessageFrame) -> None:
+    async def _ack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
         if not self._active_subscriptions.contains_by_id(self.id):
             LOGGER.warning(
                 "failed to ack message frame: subscription is not active. "
@@ -124,13 +123,14 @@ class BaseSubscription:
                 frame.headers.keys(),
             )
             return
-        if self._bound_reconnection_count != self._connection_manager._reconnection_count:
+        if received_at_reconnection_count != self._connection_manager._reconnection_count:
             LOGGER.debug(
                 "skipping ack for message frame: connection changed since message was received. "
-                "message_id: %s, subscription_id: %s, bound_reconnection_count: %s, current_reconnection_count: %s",
+                "message_id: %s, subscription_id: %s, received_at_reconnection_count: %s, "
+                "current_reconnection_count: %s",
                 frame.headers["message-id"],
                 self.id,
-                self._bound_reconnection_count,
+                received_at_reconnection_count,
                 self._connection_manager._reconnection_count,
             )
             return
@@ -147,16 +147,16 @@ class AutoAckSubscription(BaseSubscription):
     def __post_init__(self) -> None:
         self._should_handle_ack_nack = self.ack in {"client", "client-individual"}
 
-    async def _run_handler(self, *, frame: MessageFrame) -> None:
+    async def _run_handler(self, *, frame: MessageFrame, received_at_reconnection_count: int) -> None:
         try:
             await self.handler(frame)
         except self.suppressed_exception_classes as exception:
             if self._should_handle_ack_nack:
-                await self._nack(frame)
+                await self._nack(frame, received_at_reconnection_count=received_at_reconnection_count)
             self.on_suppressed_exception(exception, frame)
         else:
             if self._should_handle_ack_nack:
-                await self._ack(frame)
+                await self._ack(frame, received_at_reconnection_count=received_at_reconnection_count)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -167,12 +167,13 @@ class ManualAckSubscription(BaseSubscription):
 @dataclass(frozen=True, kw_only=True, slots=True)
 class AckableMessageFrame(MessageFrame):
     _subscription: ManualAckSubscription
+    _received_at_reconnection_count: int
 
     async def ack(self) -> None:
-        await self._subscription._ack(self)
+        await self._subscription._ack(self, received_at_reconnection_count=self._received_at_reconnection_count)
 
     async def nack(self) -> None:
-        await self._subscription._nack(self)
+        await self._subscription._nack(self, received_at_reconnection_count=self._received_at_reconnection_count)
 
 
 def _make_subscription_id() -> str:
