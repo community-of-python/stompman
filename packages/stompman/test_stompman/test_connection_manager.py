@@ -345,13 +345,14 @@ async def test_read_frames_reconnecting_ok(side_effect: tuple[ConnectionLostErro
                 yield frame
 
     manager = EnrichedConnectionManager(connection_class=MockConnection)
+    expected_epoch = sum(1 for effect in side_effect if isinstance(effect, ConnectionLostError))
 
-    async def take_all_frames() -> AsyncIterable[AnyServerFrame]:
+    async def take_all_frames() -> AsyncIterable[tuple[AnyServerFrame, int]]:
         iterator = manager.read_frames_reconnecting()
         for _ in frames:
             yield await anext(iterator)
 
-    assert frames == [frame async for frame in take_all_frames()]
+    assert [(frame, expected_epoch) for frame in frames] == [item async for item in take_all_frames()]
 
 
 async def test_maybe_write_frame_connection_already_lost() -> None:
