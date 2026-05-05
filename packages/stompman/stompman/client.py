@@ -101,11 +101,11 @@ class Client:
 
     async def _listen_to_frames(self) -> None:
         async with asyncio.TaskGroup() as task_group:
-            async for frame in self._connection_manager.read_frames_reconnecting():
+            async for frame, epoch in self._connection_manager.read_frames_reconnecting():
                 match frame:
                     case MessageFrame():
                         self._connection_manager._last_message_received_time = time.time()
-                        received_at_reconnection_count = self._connection_manager._reconnection_count
+                        received_at_reconnection_count = epoch
                         if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
                             task_group.create_task(
                                 subscription._run_handler(

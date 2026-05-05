@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
 from functools import partial
-from typing import get_args
+from typing import Final, Self, get_args
 from unittest import mock
 
 import faker
@@ -26,6 +27,7 @@ from stompman import (
 from test_stompman.conftest import (
     CONNECT_FRAME,
     CONNECTED_FRAME,
+    BaseMockConnection,
     EnrichedClient,
     SomeError,
     build_dataclass,
@@ -442,6 +444,80 @@ async def test_subscription_skips_ack_nack_after_reconnection(
 
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, NackFrame)]
+    assert any(
+        "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
+    )
+
+
+async def test_subscription_skips_ack_for_message_consumed_after_concurrent_clear(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
+) -> None:
+    subscription_id, destination, message_id, ack_id = faker.pystr(), faker.pystr(), faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+    message_frame = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": message_id, "subscription": subscription_id, "ack": ack_id},
+    )
+
+    gate = asyncio.Event()
+    received_messages: list[stompman.subscription.AckableMessageFrame] = []
+    collected_frames: list[stompman.AnyClientFrame | stompman.AnyServerFrame] = []
+    next_connection_id = 0
+    listener_read_call_index: Final = 2
+
+    async def store_message_handler(message: stompman.subscription.AckableMessageFrame) -> None:  # noqa: RUF029
+        received_messages.append(message)
+
+    class GatedConnection(BaseMockConnection):
+        connection_id: int
+        read_call: int
+
+        @classmethod
+        async def connect(cls, **_kwargs: object) -> Self:
+            nonlocal next_connection_id
+            next_connection_id += 1
+            instance = cls()
+            instance.connection_id = next_connection_id
+            instance.read_call = 0
+            return instance
+
+        async def write_frame(self, frame: stompman.AnyClientFrame) -> None:
+            collected_frames.append(frame)
+
+        async def read_frames(self) -> AsyncGenerator[stompman.AnyServerFrame, None]:  # type: ignore[override]
+            self.read_call += 1
+            # gate the listener's read on the first connection so a concurrent task can clear state
+            # while the listener is mid-iteration on its read_frames generator
+            if self.connection_id == 1 and self.read_call == listener_read_call_index:
+                await gate.wait()
+                collected_frames.append(message_frame)
+                yield message_frame
+                await asyncio.Future()
+                return
+            collected_frames.append(CONNECTED_FRAME)
+            yield CONNECTED_FRAME
+            await asyncio.Future()
+
+    async with EnrichedClient(connection_class=GatedConnection) as client:
+        subscription = await client.subscribe_with_manual_ack(destination, store_message_handler)
+        await asyncio.sleep(0)
+        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        assert client._connection_manager._reconnection_count == 1
+        await client.send(b"trigger-reconnect", destination=destination)
+        assert client._connection_manager._active_connection_state is not None
+        gate.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if received_messages:
+                break
+        assert received_messages
+
+        with caplog.at_level(logging.DEBUG, logger="stompman"):
+            await received_messages[0].ack()
+
+        await subscription.unsubscribe()
+
+    assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
     assert any(
         "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
     )
