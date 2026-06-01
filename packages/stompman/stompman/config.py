@@ -31,6 +31,7 @@ class ConnectionParameters:
     login: str
     passcode: str = field(repr=False)
     ws_uri_path: str | None = None
+    connect_headers: dict[str, str] = field(default_factory=dict, repr=False)
 
     @property
     def unescaped_passcode(self) -> str:
