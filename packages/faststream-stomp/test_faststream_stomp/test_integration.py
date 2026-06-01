@@ -29,16 +29,20 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 def broker(first_server_connection_parameters: stompman.ConnectionParameters) -> faststream_stomp.StompBroker:
-    return faststream_stomp.StompBroker(stompman.Client([first_server_connection_parameters]))
+    return faststream_stomp.StompBroker(
+        stompman.Client([first_server_connection_parameters], connect_retry_attempts=10)
+    )
 
 
 @asynccontextmanager
 async def run_faststream_app(application: FastStream) -> AsyncGenerator[None, None]:
     async with asyncio.TaskGroup() as task_group:
         run_task = task_group.create_task(application.run())
-        yield
-        application.exit()
-        await asyncio.wait([run_task])
+        try:
+            yield
+        finally:
+            application.exit()
+            await asyncio.wait([run_task])
 
 
 @pytest.mark.parametrize("publish_method", ["regular", "batch", "broker_regular", "broker_batch"])

@@ -49,10 +49,8 @@ async def test_consumption_survives_forced_reconnects(
         ) as consumer,
         stompman.Client(servers=[connection_parameters], connection_confirmation_timeout=10) as producer,
     ):
-        subscription = await consumer.subscribe(
-            destination=DESTINATION, handler=handle_message, on_suppressed_exception=print
-        )
-        try:
+
+        async def consume_after_reconnects() -> None:
             for index in range(iterations):
                 initial_reconnection_count = consumer._connection_manager._reconnection_count
                 await asyncio.sleep(0.6)
@@ -64,6 +62,12 @@ async def test_consumption_survives_forced_reconnects(
                 await producer.send(body=payload, destination=DESTINATION)
                 await asyncio.wait_for(received_event.wait(), timeout=5)
                 assert payload in received, f"iteration {index}: {payload!r} not delivered"
+
+        subscription = await consumer.subscribe(
+            destination=DESTINATION, handler=handle_message, on_suppressed_exception=print
+        )
+        try:
+            await consume_after_reconnects()
         finally:
             await subscription.unsubscribe()
 
