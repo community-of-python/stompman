@@ -1,7 +1,17 @@
 from dataclasses import dataclass
-from typing import Literal, NotRequired, Self, TypeAlias, TypedDict
+from typing import Literal, NotRequired, Self, TypedDict
 
-ConnectHeaders: TypeAlias = dict[str, str]
+ConnectHeaders = TypedDict(
+    "ConnectHeaders",
+    {
+        "accept-version": str,
+        "host": str,
+        "login": NotRequired[str],
+        "passcode": NotRequired[str],
+        "heart-beat": NotRequired[str],
+        "content-length": NotRequired[str],
+    },
+)
 ConnectedHeaders = TypedDict(
     "ConnectedHeaders",
     {
