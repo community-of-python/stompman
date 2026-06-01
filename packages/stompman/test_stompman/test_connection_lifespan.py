@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator, Coroutine
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import faker
@@ -55,6 +55,34 @@ async def test_client_connection_lifespan_ok(monkeypatch: pytest.MonkeyPatch, fa
         }
     )
     assert collected_frames == [connect_frame, connected_frame, disconnect_frame, receipt_frame]
+
+
+async def test_client_connection_lifespan_adds_custom_connect_headers() -> None:
+    connected_frame = build_dataclass(
+        ConnectedFrame,
+        headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"},
+    )
+    connection_class, collected_frames = create_spying_connection(
+        [connected_frame], [], [build_dataclass(ReceiptFrame)]
+    )
+
+    async with EnrichedClient(
+        [
+            ConnectionParameters(
+                "localhost",
+                10,
+                "login",
+                "passcode",
+                connect_headers={"client-id": "client-1"},
+            )
+        ],
+        connection_class=connection_class,
+    ):
+        await asyncio.sleep(0)
+
+    connect_frame = collected_frames[0]
+    assert isinstance(connect_frame, ConnectFrame)
+    assert cast("dict[str, str]", connect_frame.headers)["client-id"] == "client-1"
 
 
 @pytest.mark.usefixtures("mock_sleep")
