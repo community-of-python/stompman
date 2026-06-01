@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator, Coroutine
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import faker
@@ -82,7 +82,7 @@ async def test_client_connection_lifespan_adds_custom_connect_headers() -> None:
 
     connect_frame = collected_frames[0]
     assert isinstance(connect_frame, ConnectFrame)
-    assert connect_frame.headers["client-id"] == "client-1"
+    assert cast("dict[str, str]", connect_frame.headers)["client-id"] == "client-1"
 
 
 @pytest.mark.usefixtures("mock_sleep")

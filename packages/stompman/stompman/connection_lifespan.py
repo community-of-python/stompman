@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from stompman.config import ConnectionParameters, Heartbeat
@@ -11,6 +11,7 @@ from stompman.errors import ConnectionConfirmationTimeout, StompProtocolConnecti
 from stompman.frames import (
     ConnectedFrame,
     ConnectFrame,
+    ConnectHeaders,
     DisconnectFrame,
     ReceiptFrame,
 )
@@ -47,18 +48,18 @@ class ConnectionLifespan(AbstractConnectionLifespan):
     set_heartbeat_interval: Callable[[Heartbeat], Any]
 
     async def _establish_connection(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
-        await self.connection.write_frame(
-            ConnectFrame(
-                headers={
-                    **self.connection_parameters.connect_headers,
-                    "accept-version": self.protocol_version,
-                    "heart-beat": self.client_heartbeat.to_header(),
-                    "host": self.connection_parameters.host,
-                    "login": self.connection_parameters.login,
-                    "passcode": self.connection_parameters.unescaped_passcode,
-                },
-            )
+        connect_headers = cast(
+            "ConnectHeaders",
+            self.connection_parameters.connect_headers
+            | {
+                "accept-version": self.protocol_version,
+                "heart-beat": self.client_heartbeat.to_header(),
+                "host": self.connection_parameters.host,
+                "login": self.connection_parameters.login,
+                "passcode": self.connection_parameters.unescaped_passcode,
+            },
         )
+        await self.connection.write_frame(ConnectFrame(headers=connect_headers))
         collected_frames = []
 
         async def take_connected_frame_and_collect_other_frames() -> ConnectedFrame:
