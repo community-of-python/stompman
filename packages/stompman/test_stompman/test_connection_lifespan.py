@@ -57,6 +57,28 @@ async def test_client_connection_lifespan_ok(monkeypatch: pytest.MonkeyPatch, fa
     assert collected_frames == [connect_frame, connected_frame, disconnect_frame, receipt_frame]
 
 
+async def test_client_connection_lifespan_adds_custom_connect_headers() -> None:
+    connected_frame = build_dataclass(ConnectedFrame, headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"})
+    connection_class, collected_frames = create_spying_connection([connected_frame], [], [build_dataclass(ReceiptFrame)])
+
+    async with EnrichedClient(
+        [
+            ConnectionParameters(
+                "localhost",
+                10,
+                "login",
+                "passcode",
+                connect_headers={"client-id": "client-1"},
+            )
+        ],
+        connection_class=connection_class,
+    ):
+        await asyncio.sleep(0)
+
+    assert isinstance(collected_frames[0], ConnectFrame)
+    assert collected_frames[0].headers["client-id"] == "client-1"
+
+
 @pytest.mark.usefixtures("mock_sleep")
 async def test_client_connection_lifespan_connection_not_confirmed(
     monkeypatch: pytest.MonkeyPatch, faker: faker.Faker
