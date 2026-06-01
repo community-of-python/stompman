@@ -58,8 +58,13 @@ async def test_client_connection_lifespan_ok(monkeypatch: pytest.MonkeyPatch, fa
 
 
 async def test_client_connection_lifespan_adds_custom_connect_headers() -> None:
-    connected_frame = build_dataclass(ConnectedFrame, headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"})
-    connection_class, collected_frames = create_spying_connection([connected_frame], [], [build_dataclass(ReceiptFrame)])
+    connected_frame = build_dataclass(
+        ConnectedFrame,
+        headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"},
+    )
+    connection_class, collected_frames = create_spying_connection(
+        [connected_frame], [], [build_dataclass(ReceiptFrame)]
+    )
 
     async with EnrichedClient(
         [
@@ -75,8 +80,9 @@ async def test_client_connection_lifespan_adds_custom_connect_headers() -> None:
     ):
         await asyncio.sleep(0)
 
-    assert isinstance(collected_frames[0], ConnectFrame)
-    assert collected_frames[0].headers["client-id"] == "client-1"
+    connect_frame = collected_frames[0]
+    assert isinstance(connect_frame, ConnectFrame)
+    assert connect_frame.headers["client-id"] == "client-1"
 
 
 @pytest.mark.usefixtures("mock_sleep")
