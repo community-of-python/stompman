@@ -1,16 +1,16 @@
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from typing import Any
 
 import stompman
 from fast_depends.dependencies import Dependant
 from faststream._internal.broker.registrator import Registrator
 from faststream._internal.endpoint.subscriber.call_item import CallsCollection
-from faststream._internal.types import CustomCallable, PublisherMiddleware, SubscriberMiddleware
+from faststream._internal.parser import CodecProto
+from faststream._internal.types import CustomCallable
 from typing_extensions import override
 
 from faststream_stomp.models import (
     BrokerConfigWithStompClient,
-    StompPublishCommand,
     StompPublisherSpecificationConfig,
     StompPublisherUsecaseConfig,
     StompSubscriberSpecificationConfig,
@@ -32,7 +32,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         dependencies: Iterable[Dependant] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
-        middlewares: Sequence[SubscriberMiddleware[stompman.MessageFrame]] = (),
+        codec: CodecProto | None = None,
         title: str | None = None,
         description: str | None = None,
         include_in_schema: bool = True,
@@ -62,7 +62,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
             parser_=parser or self._parser,
             decoder_=decoder or self._decoder,
             dependencies_=dependencies,
-            middlewares_=middlewares,
+            codec_=codec,
         )
 
     @override
@@ -70,7 +70,6 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         self,
         destination: str,
         *,
-        middlewares: Sequence[PublisherMiddleware[StompPublishCommand]] = (),
         schema_: Any | None = None,
         title_: str | None = None,
         description_: str | None = None,
@@ -78,7 +77,6 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
     ) -> StompPublisher:
         usecase_config = StompPublisherUsecaseConfig(
             _outer_config=self.config,  # type: ignore[arg-type]
-            middlewares=middlewares,
             destination_without_prefix=destination,
         )
         specification = StompPublisherSpecification(

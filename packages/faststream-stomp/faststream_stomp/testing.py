@@ -61,6 +61,7 @@ class FakeAckableMessageFrame(stompman.AckableMessageFrame):
 
 class FakeStompProducer(StompProducer):
     def __init__(self, broker: StompBroker) -> None:
+        super().__init__(client=broker.config.broker_config.client, serializer=broker.config.fd_config._serializer)
         self.broker = broker
 
     async def publish(self, cmd: StompPublishCommand) -> None:

@@ -7,6 +7,7 @@ from faststream import PublishCommand, PublishType
 from faststream._internal.basic_types import SendableMessage
 from faststream._internal.configs import BrokerConfig
 from faststream._internal.endpoint.publisher import PublisherSpecification, PublisherUsecase
+from faststream._internal.parser import DefaultCodec
 from faststream._internal.producer import ProducerProto
 from faststream._internal.types import AsyncCallable, PublisherMiddleware
 from faststream.message import encode_message
@@ -27,6 +28,7 @@ class StompProducer(ProducerProto[StompPublishCommand]):
     def __init__(self, *, client: stompman.Client, serializer: SerializerProto | None) -> None:
         self.client = client
         self.serializer = serializer
+        self.codec = DefaultCodec()
 
     async def publish(self, cmd: StompPublishCommand) -> None:
         body, content_type = encode_message(cmd.body, serializer=self.serializer)
