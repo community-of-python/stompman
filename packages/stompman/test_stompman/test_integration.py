@@ -20,7 +20,7 @@ from stompman.serde import (
 
 
 def make_destination(name: str) -> str:
-    return f"/queue/stompman-{name}-{uuid4()}"
+    return f"stompman-{name}-{uuid4()}"
 
 
 async def wait_for_reconnect(client: stompman.Client, initial_reconnection_count: int) -> None:

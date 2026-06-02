@@ -29,7 +29,7 @@ pytestmark = pytest.mark.anyio
 
 
 def make_destination(name: str) -> str:
-    return f"/queue/faststream-stomp-{name}-{uuid4()}"
+    return f"faststream-stomp-{name}-{uuid4()}"
 
 
 @pytest.fixture
@@ -121,7 +121,7 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
 
 async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     expected_body = faker.pystr()
-    prefix = f"/queue/faststream-stomp-router-{uuid4()}-"
+    prefix = f"faststream-stomp-router-{uuid4()}-"
     destination = "input"
 
     def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> bytes:  # noqa: B008
