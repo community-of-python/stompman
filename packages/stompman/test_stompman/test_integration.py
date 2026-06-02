@@ -93,6 +93,7 @@ async def test_consumption_survives_forced_reconnects(
 @pytest.mark.anyio
 async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
     async def produce(destination: str) -> None:
+        await subscribed_event.wait()
         for message in messages[200:]:
             await producer.send(body=message, destination=destination, headers={"hello": "from outside transaction"})
 
@@ -112,6 +113,7 @@ async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
         subscription = await consumer.subscribe(
             destination=destination, handler=handle_message, on_suppressed_exception=print
         )
+        subscribed_event.set()
         await asyncio.wait_for(event.wait(), timeout=5)
         await subscription.unsubscribe()
 
@@ -119,6 +121,7 @@ async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
 
     messages = [str(uuid4()).encode() for _ in range(1000)]
     destination = make_destination("bulk")
+    subscribed_event = asyncio.Event()
 
     async with (
         create_client(connection_parameters) as consumer,
