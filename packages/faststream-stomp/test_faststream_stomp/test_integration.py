@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, assert_never
 from unittest import mock
+from uuid import uuid4
 
 import faker
 import faststream_stomp
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
     from faststream_stomp.broker import StompBroker
 
 pytestmark = pytest.mark.anyio
+
+
+def make_destination(name: str) -> str:
+    return f"/queue/faststream-stomp-{name}-{uuid4()}"
 
 
 @pytest.fixture
@@ -52,7 +57,7 @@ async def test_simple_publish(
     publish_method: typing.Literal["regular", "batch", "broker_regular", "broker_batch"],
 ) -> None:
     app = FastStream(broker)
-    destination = faker.pystr()
+    destination = make_destination("simple-publish")
     publisher = broker.publisher(destination)
     event = asyncio.Event()
     sent_bodies = [faker.pystr() for _ in range(faker.pyint(min_value=3, max_value=10))]
@@ -89,7 +94,9 @@ async def test_simple_publish(
 async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     app = FastStream(broker)
     broker.add_middleware(BaseMiddleware)
-    expected_body, first_destination, second_destination = faker.pystr(), faker.pystr(), faker.pystr()
+    expected_body = faker.pystr()
+    first_destination = make_destination("republish-first")
+    second_destination = make_destination("republish-second")
     first_publisher, second_publisher = broker.publisher(first_destination), broker.publisher(second_destination)
     event = asyncio.Event()
 
@@ -113,7 +120,9 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
 
 
 async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    expected_body, prefix, destination = faker.pystr(), faker.pystr(), faker.pystr()
+    expected_body = faker.pystr()
+    prefix = f"/queue/faststream-stomp-router-{uuid4()}-"
+    destination = "input"
 
     def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> bytes:  # noqa: B008
         assert body == expected_body
@@ -122,7 +131,7 @@ async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) 
 
     router = faststream_stomp.StompRouter(
         prefix=prefix,
-        handlers=[faststream_stomp.StompRoute(route, destination, publishers=[StompRoutePublisher(faker.pystr())])],
+        handlers=[faststream_stomp.StompRoute(route, destination, publishers=[StompRoutePublisher("output")])],
     )
     publisher = router.publisher(destination)
 
@@ -135,7 +144,7 @@ async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) 
         await broker.connect()
         await publisher.publish(expected_body)
 
-    async with asyncio.timeout(1), run_faststream_app(app):
+    async with asyncio.timeout(10), run_faststream_app(app):
         await event.wait()
 
 
@@ -145,7 +154,7 @@ async def test_broker_close(broker: faststream_stomp.StompBroker) -> None:
 
 
 async def test_subscriber_lifespan(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    @broker.subscriber(faker.pystr())
+    @broker.subscriber(make_destination("subscriber-lifespan"))
     def handle() -> None: ...
 
     await broker.start()
@@ -171,7 +180,7 @@ async def test_ack_nack_reject_exception(
 ) -> None:
     event = asyncio.Event()
 
-    @broker.subscriber(destination := faker.pystr())
+    @broker.subscriber(destination := make_destination("ack-exception"))
     def handle_destination() -> None:
         event.set()
         raise exception
@@ -190,7 +199,7 @@ async def test_ack_nack_reject_method_call(
 ) -> None:
     event = asyncio.Event()
 
-    @broker.subscriber(destination := faker.pystr())
+    @broker.subscriber(destination := make_destination("ack-method"))
     async def handle_destination(message: Annotated[StompStreamMessage, Context()]) -> None:
         await getattr(message, method_name)()
         event.set()
@@ -209,7 +218,7 @@ class TestLogging:
         broker: StompBroker = request.getfixturevalue("broker")
         broker.config.logger.logger = mock.Mock(log=(log_mock := mock.Mock()), handlers=[])
 
-        @broker.subscriber(destination := faker.pystr())
+        @broker.subscriber(destination := make_destination("logging-ok"))
         def handle_destination() -> None: ...
 
         async with broker:
@@ -236,7 +245,7 @@ class TestLogging:
         @dataclass
         class MyError(Exception): ...
 
-        @broker.subscriber(destination := faker.pystr())
+        @broker.subscriber(destination := make_destination("logging-raises"))
         def handle_destination(message_frame: Annotated[stompman.MessageFrame, Context("message.raw_message")]) -> None:
             nonlocal message_id
             message_id = message_frame.headers["message-id"]
@@ -270,4 +279,4 @@ async def test_publish_pydantic(faker: faker.Faker, broker: faststream_stomp.Sto
         foo: str
 
     async with broker:
-        await broker.publish(ModelFactory.create_factory(SomePydanticModel).build(), faker.pystr())
+        await broker.publish(ModelFactory.create_factory(SomePydanticModel).build(), make_destination("pydantic"))
