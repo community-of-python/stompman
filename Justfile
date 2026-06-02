@@ -20,6 +20,7 @@ test *args:
     #!/bin/bash
     trap 'echo; docker compose logs && docker compose down --remove-orphans' EXIT
     docker compose up -d
+    python3 scripts/wait_for_stomp_brokers.py
     uv run pytest {{args}}
 
 run-artemis:
