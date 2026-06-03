@@ -2,7 +2,7 @@
 name = "faststream-stomp"
 description = "FastStream STOMP broker"
 authors = [{ name = "Lev Vereshchagin", email = "mail@vrslev.com" }]
-dependencies = ["faststream~=0.6", "stompman>=3.11.1"]
+dependencies = ["faststream~=0.7", "stompman>=3.11.1"]
 requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
@@ -24,7 +24,7 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["faststream[otel,prometheus]~=0.6", "asgi-lifespan"]
+dev = ["faststream[otel,prometheus]~=0.7", "asgi-lifespan"]
 
 [tool.hatch.version]
 source = "vcs"

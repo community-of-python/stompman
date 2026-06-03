@@ -6,9 +6,8 @@ from fast_depends.dependencies import Dependant
 from faststream._internal.basic_types import SendableMessage
 from faststream._internal.broker.router import ArgsContainer, BrokerRouter, SubscriberRoute
 from faststream._internal.configs import BrokerConfig
-from faststream._internal.types import BrokerMiddleware, CustomCallable, PublisherMiddleware, SubscriberMiddleware
+from faststream._internal.types import BrokerMiddleware, CustomCallable
 
-from faststream_stomp.models import StompPublishCommand
 from faststream_stomp.registrator import StompRegistrator
 
 
@@ -22,7 +21,6 @@ class StompRoutePublisher(ArgsContainer):
         self,
         destination: str,
         *,
-        middlewares: Sequence[PublisherMiddleware[StompPublishCommand]] = (),
         schema_: Any | None = None,  # noqa: ANN401
         title_: str | None = None,
         description_: str | None = None,
@@ -30,7 +28,6 @@ class StompRoutePublisher(ArgsContainer):
     ) -> None:
         super().__init__(
             destination=destination,
-            middlewares=middlewares,
             schema_=schema_,
             title_=title_,
             description_=description_,
@@ -56,7 +53,6 @@ class StompRoute(SubscriberRoute):
         dependencies: Iterable[Dependant] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
-        middlewares: Sequence[SubscriberMiddleware[stompman.MessageFrame]] = (),
         title: str | None = None,
         description: str | None = None,
         include_in_schema: bool = True,
@@ -70,7 +66,6 @@ class StompRoute(SubscriberRoute):
             dependencies=dependencies,
             parser=parser,
             decoder=decoder,
-            middlewares=middlewares,
             title=title,
             description=description,
             include_in_schema=include_in_schema,

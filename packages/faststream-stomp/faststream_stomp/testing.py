@@ -8,6 +8,7 @@ from unittest import mock
 from unittest.mock import AsyncMock
 
 import stompman
+from faststream._internal.parser import DefaultCodec
 from faststream._internal.testing.broker import TestBroker, change_producer
 from faststream.message import encode_message
 from stompman.frames import SendFrame
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
 
 
 class TestStompBroker(TestBroker[StompBroker]):
+    async def __aenter__(self) -> StompBroker:
+        return typing.cast("StompBroker", await super().__aenter__())
+
     @staticmethod
     def create_publisher_fake_subscriber(
         broker: StompBroker, publisher: StompPublisher
@@ -62,6 +66,7 @@ class FakeAckableMessageFrame(stompman.AckableMessageFrame):
 class FakeStompProducer(StompProducer):
     def __init__(self, broker: StompBroker) -> None:
         self.broker = broker
+        self.codec = DefaultCodec()
 
     async def publish(self, cmd: StompPublishCommand) -> None:
         body, content_type = encode_message(cmd.body, serializer=self.broker.config.fd_config._serializer)
