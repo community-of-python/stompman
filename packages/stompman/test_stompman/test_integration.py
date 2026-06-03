@@ -19,10 +19,6 @@ from stompman.serde import (
 )
 
 
-def make_destination(name: str) -> str:
-    return f"/queue/stompman-{name}-{uuid4()}"
-
-
 async def wait_for_reconnect(client: stompman.Client, initial_reconnection_count: int) -> None:
     def is_reconnected() -> bool:
         return (
@@ -61,7 +57,7 @@ async def test_consumption_survives_forced_reconnects(
         await frame.ack()
         received_event.set()
 
-    destination = make_destination("forced-reconnect")
+    destination = "DLQ"
 
     async with (
         stompman.Client(servers=[connection_parameters], connection_confirmation_timeout=10) as consumer,
