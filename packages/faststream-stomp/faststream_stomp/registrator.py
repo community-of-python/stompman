@@ -1,3 +1,4 @@
+import inspect
 from collections.abc import Iterable
 from typing import Any
 
@@ -5,7 +6,6 @@ import stompman
 from fast_depends.dependencies import Dependant
 from faststream._internal.broker.registrator import Registrator
 from faststream._internal.endpoint.subscriber.call_item import CallsCollection
-from faststream._internal.parser import CodecProto
 from faststream._internal.types import CustomCallable
 from typing_extensions import override
 
@@ -32,7 +32,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         dependencies: Iterable[Dependant] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
-        codec: CodecProto | None = None,
+        codec: Any | None = None,
         title: str | None = None,
         description: str | None = None,
         include_in_schema: bool = True,
@@ -58,12 +58,17 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         )
         subscriber = StompSubscriber(config=usecase_config, specification=specification, calls=calls)
         super().subscriber(subscriber)
-        return subscriber.add_call(
-            parser_=parser or self._parser,
-            decoder_=decoder or self._decoder,
-            dependencies_=dependencies,
-            codec_=codec,
-        )
+        add_call_options: dict[str, Any] = {
+            "parser_": parser or self._parser,
+            "decoder_": decoder or self._decoder,
+            "dependencies_": dependencies,
+        }
+        add_call_parameters = inspect.signature(subscriber.add_call).parameters
+        if "middlewares_" in add_call_parameters:
+            add_call_options["middlewares_"] = ()
+        if "codec_" in add_call_parameters:
+            add_call_options["codec_"] = codec
+        return subscriber.add_call(**add_call_options)
 
     @override
     def publisher(  # type: ignore[override]

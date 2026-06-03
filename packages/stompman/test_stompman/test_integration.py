@@ -56,8 +56,9 @@ async def test_consumption_survives_forced_reconnects(
     received: list[bytes] = []
     received_event = asyncio.Event()
 
-    async def handle_message(frame: stompman.MessageFrame) -> None:  # noqa: RUF029
+    async def handle_message(frame: stompman.AckableMessageFrame) -> None:
         received.append(frame.body)
+        await frame.ack()
         received_event.set()
 
     destination = make_destination("forced-reconnect")
@@ -76,9 +77,7 @@ async def test_consumption_survives_forced_reconnects(
                 await asyncio.wait_for(received_event.wait(), timeout=5)
                 assert payload in received, f"iteration {index}: {payload!r} not delivered"
 
-        subscription = await consumer.subscribe(
-            destination=destination, handler=handle_message, on_suppressed_exception=print
-        )
+        subscription = await consumer.subscribe_with_manual_ack(destination=destination, handler=handle_message)
         try:
             await consume_after_reconnects()
         finally:
