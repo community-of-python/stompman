@@ -546,7 +546,7 @@ async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
         headers={"destination": destination, "message-id": "b", "subscription": subscription_id, "ack": ack_id_b},
     )
 
-    class Boom(BaseException):  # not Exception: NOT in suppressed_exception_classes
+    class BoomError(Exception):  # not in suppressed_exception_classes
         pass
 
     handled: list[str] = []
@@ -556,7 +556,7 @@ async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
     async def handler(frame: MessageFrame) -> None:  # noqa: RUF029
         handled.append(frame.headers["message-id"])
         if frame.headers["message-id"] == "a":
-            raise Boom
+            raise BoomError
 
     connection_class, _collected_frames = create_spying_connection(
         *get_read_frames_with_lifespan([message_a, message_b])

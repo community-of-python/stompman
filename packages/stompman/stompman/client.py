@@ -30,9 +30,7 @@ from stompman.transaction import Transaction
 async def _run_handler_with_safety_net(coro: Coroutine[Any, Any, Any]) -> None:
     try:
         await coro
-    except asyncio.CancelledError:
-        raise
-    except BaseException:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         LOGGER.exception("unhandled exception in message handler")
 
 
