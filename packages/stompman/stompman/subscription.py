@@ -92,7 +92,7 @@ class BaseSubscription:
             )
             return
         if received_at_reconnection_count != self._connection_manager._reconnection_count:
-            LOGGER.debug(
+            LOGGER.error(
                 "skipping nack for message frame: connection changed since message was received. "
                 "message_id: %s, subscription_id: %s, received_at_reconnection_count: %s, "
                 "current_reconnection_count: %s",
@@ -124,7 +124,7 @@ class BaseSubscription:
             )
             return
         if received_at_reconnection_count != self._connection_manager._reconnection_count:
-            LOGGER.debug(
+            LOGGER.warning(
                 "skipping ack for message frame: connection changed since message was received. "
                 "message_id: %s, subscription_id: %s, received_at_reconnection_count: %s, "
                 "current_reconnection_count: %s",

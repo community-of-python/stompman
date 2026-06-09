@@ -435,18 +435,25 @@ async def test_subscription_skips_ack_nack_after_reconnection(
         client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
         await asyncio.sleep(0)
 
-        with caplog.at_level(logging.DEBUG, logger="stompman"):
+        with caplog.at_level(logging.WARNING, logger="stompman"):
             assert stored_message
             await stored_message.ack()
+        ack_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("connection changed since message was received" in r.message.lower() for r in ack_records), (
+            "ack skip must log at WARNING"
+        )
+
+        with caplog.at_level(logging.ERROR, logger="stompman"):
             await stored_message.nack()
+        nack_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("connection changed since message was received" in r.message.lower() for r in nack_records), (
+            "nack skip must log at ERROR"
+        )
 
         await subscription.unsubscribe()
 
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, NackFrame)]
-    assert any(
-        "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
-    )
 
 
 async def test_subscription_skips_ack_for_message_consumed_after_concurrent_clear(
@@ -512,15 +519,16 @@ async def test_subscription_skips_ack_for_message_consumed_after_concurrent_clea
                 break
         assert received_messages
 
-        with caplog.at_level(logging.DEBUG, logger="stompman"):
+        with caplog.at_level(logging.WARNING, logger="stompman"):
             await received_messages[0].ack()
+        ack_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("connection changed since message was received" in r.message.lower() for r in ack_records), (
+            "ack skip must log at WARNING"
+        )
 
         await subscription.unsubscribe()
 
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
-    assert any(
-        "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
-    )
 
 
 async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
