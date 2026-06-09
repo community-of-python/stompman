@@ -570,6 +570,43 @@ async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
     assert any("unhandled exception in message handler" in m.lower() for m in caplog.messages)
 
 
+async def test_manual_ack_handler_unhandled_exception_does_not_kill_listener(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
+) -> None:
+    subscription_id, destination = faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+
+    message_a = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": "a", "subscription": subscription_id, "ack": faker.pystr()},
+    )
+    message_b = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": "b", "subscription": subscription_id, "ack": faker.pystr()},
+    )
+
+    handled: list[str] = []
+
+    async def handler(frame: stompman.subscription.AckableMessageFrame) -> None:
+        handled.append(frame.headers["message-id"])
+        if frame.headers["message-id"] == "a":
+            raise RuntimeError("boom")
+
+    connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([message_a, message_b]))
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        with caplog.at_level(logging.ERROR, logger="stompman"):
+            subscription = await client.subscribe_with_manual_ack(destination, handler)
+            for _ in range(20):
+                await asyncio.sleep(0)
+                if len(handled) == 2:
+                    break
+            await subscription.unsubscribe()
+
+    assert handled == ["a", "b"]
+    assert any("unhandled exception in message handler" in m.lower() for m in caplog.messages)
+
+
 def test_make_subscription_id() -> None:
     stompman.subscription._make_subscription_id()
 
