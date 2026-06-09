@@ -41,6 +41,7 @@ class StompSecurity(BaseSecurity):
 
 
 def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
+    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
     try:
         task_exception = listen_task.exception()
     except asyncio.CancelledError:
