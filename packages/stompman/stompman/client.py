@@ -27,6 +27,15 @@ from stompman.subscription import AckableMessageFrame, ActiveSubscriptions, Auto
 from stompman.transaction import Transaction
 
 
+async def _run_handler_with_safety_net(coro: Coroutine[Any, Any, Any]) -> None:
+    try:
+        await coro
+    except asyncio.CancelledError:
+        raise
+    except BaseException:  # noqa: BLE001
+        LOGGER.exception("unhandled exception in message handler")
+
+
 @dataclass(kw_only=True, slots=True)
 class Client:
     PROTOCOL_VERSION: ClassVar = "1.2"  # https://stomp.github.io/stomp-specification-1.2.html
@@ -107,7 +116,7 @@ class Client:
                         self._connection_manager._last_message_received_time = time.time()
                         received_at_reconnection_count = epoch
                         if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
-                            task_group.create_task(
+                            handler_coro = (
                                 subscription._run_handler(
                                     frame=frame,
                                     received_at_reconnection_count=received_at_reconnection_count,
@@ -122,6 +131,7 @@ class Client:
                                     )
                                 )
                             )
+                            task_group.create_task(_run_handler_with_safety_net(handler_coro))
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)
