@@ -41,16 +41,20 @@ class StompSecurity(BaseSecurity):
 
 
 def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
-    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
     try:
         task_exception = listen_task.exception()
     except asyncio.CancelledError:
+        return
+    if task_exception is None:
         return
     if isinstance(task_exception, ExceptionGroup) and isinstance(
         task_exception.exceptions[0],
         stompman.FailedAllConnectAttemptsError,
     ):
         raise SystemExit(1)
+    logging.getLogger("faststream.stomp").error(
+        "listen task exited with unhandled exception", exc_info=task_exception
+    )
 
 
 class StompParamsStorage(DefaultLoggerStorage):

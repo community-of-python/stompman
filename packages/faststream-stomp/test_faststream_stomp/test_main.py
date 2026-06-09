@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import logging
 import typing
 
 import faker
@@ -159,3 +162,27 @@ async def test_prometheus_publish(faker: faker.Faker, broker: faststream_stomp.S
     async with faststream_stomp.TestStompBroker(broker):
         await broker.start()
         await broker.publish(faker.pystr(), destination, correlation_id=gen_cor_id())
+
+
+def test_handle_listen_task_done_logs_unhandled_exception(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from faststream_stomp.broker import _handle_listen_task_done
+
+    # faststream parent logger has propagate=False, which would block caplog (attached to root)
+    monkeypatch.setattr(logging.getLogger("faststream"), "propagate", True)
+
+    async def run() -> None:
+        async def boom() -> None:
+            raise RuntimeError("kaboom")
+
+        task: asyncio.Task[None] = asyncio.create_task(boom())
+        with contextlib.suppress(RuntimeError):
+            await task
+
+        with caplog.at_level(logging.ERROR):
+            _handle_listen_task_done(task)
+
+    asyncio.run(run())
+
+    assert any("listen task exited" in m.lower() for m in caplog.messages)
