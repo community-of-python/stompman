@@ -52,9 +52,7 @@ def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
         stompman.FailedAllConnectAttemptsError,
     ):
         raise SystemExit(1)
-    logging.getLogger("faststream.stomp").error(
-        "listen task exited with unhandled exception", exc_info=task_exception
-    )
+    logging.getLogger("faststream.stomp").error("listen task exited with unhandled exception", exc_info=task_exception)
 
 
 class StompParamsStorage(DefaultLoggerStorage):

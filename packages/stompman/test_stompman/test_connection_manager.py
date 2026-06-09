@@ -431,10 +431,7 @@ async def test_maybe_write_frame_logs_dropped_nack_at_error(
     with caplog.at_level(logging.ERROR, logger="stompman"):
         wrote = await manager.maybe_write_frame(stompman.NackFrame(headers={"id": "a", "subscription": "s"}))
     assert wrote is False
-    assert any(
-        r.levelno == logging.ERROR and "dropping nack" in r.message.lower()
-        for r in caplog.records
-    )
+    assert any(r.levelno == logging.ERROR and "dropping nack" in r.message.lower() for r in caplog.records)
 
 
 async def test_maybe_write_frame_logs_dropped_ack_at_warning(
@@ -444,10 +441,7 @@ async def test_maybe_write_frame_logs_dropped_ack_at_warning(
     with caplog.at_level(logging.WARNING, logger="stompman"):
         wrote = await manager.maybe_write_frame(stompman.AckFrame(headers={"id": "a", "subscription": "s"}))
     assert wrote is False
-    assert any(
-        r.levelno == logging.WARNING and "dropping ack" in r.message.lower()
-        for r in caplog.records
-    )
+    assert any(r.levelno == logging.WARNING and "dropping ack" in r.message.lower() for r in caplog.records)
 
 
 async def test_maybe_write_frame_logs_dropped_unsubscribe_at_info(
@@ -457,7 +451,4 @@ async def test_maybe_write_frame_logs_dropped_unsubscribe_at_info(
     with caplog.at_level(logging.INFO, logger="stompman"):
         wrote = await manager.maybe_write_frame(stompman.UnsubscribeFrame(headers={"id": "s"}))
     assert wrote is False
-    assert any(
-        r.levelno == logging.INFO and "dropping unsubscribeframe" in r.message.lower()
-        for r in caplog.records
-    )
+    assert any(r.levelno == logging.INFO and "dropping unsubscribeframe" in r.message.lower() for r in caplog.records)

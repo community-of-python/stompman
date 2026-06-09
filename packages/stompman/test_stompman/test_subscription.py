@@ -551,7 +551,9 @@ async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
 
     handled: list[str] = []
 
-    async def handler(frame: MessageFrame) -> None:
+    expected_handled = 2
+
+    async def handler(frame: MessageFrame) -> None:  # noqa: RUF029
         handled.append(frame.headers["message-id"])
         if frame.headers["message-id"] == "a":
             raise Boom
@@ -570,7 +572,7 @@ async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
             )
             for _ in range(20):
                 await asyncio.sleep(0)
-                if len(handled) == 2:
+                if len(handled) == expected_handled:
                     break
             await subscription.unsubscribe()
 
@@ -594,11 +596,13 @@ async def test_manual_ack_handler_unhandled_exception_does_not_kill_listener(
     )
 
     handled: list[str] = []
+    expected_handled = 2
 
-    async def handler(frame: stompman.subscription.AckableMessageFrame) -> None:
+    async def handler(frame: stompman.subscription.AckableMessageFrame) -> None:  # noqa: RUF029
         handled.append(frame.headers["message-id"])
         if frame.headers["message-id"] == "a":
-            raise RuntimeError("boom")
+            msg = "boom"
+            raise RuntimeError(msg)
 
     connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([message_a, message_b]))
 
@@ -607,7 +611,7 @@ async def test_manual_ack_handler_unhandled_exception_does_not_kill_listener(
             subscription = await client.subscribe_with_manual_ack(destination, handler)
             for _ in range(20):
                 await asyncio.sleep(0)
-                if len(handled) == 2:
+                if len(handled) == expected_handled:
                     break
             await subscription.unsubscribe()
 
@@ -664,7 +668,7 @@ async def test_max_concurrent_handlers_bounds_in_flight_handlers(
     subscription_id, destination = faker.pystr(), faker.pystr()
     monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
 
-    messages = [
+    messages: list[stompman.AnyServerFrame] = [
         build_dataclass(
             MessageFrame,
             headers={
@@ -680,8 +684,9 @@ async def test_max_concurrent_handlers_bounds_in_flight_handlers(
     release = asyncio.Event()
     in_flight = 0
     peak = 0
+    max_concurrent = 2
 
-    async def handler(frame: MessageFrame) -> None:  # noqa: ARG001
+    async def handler(frame: MessageFrame) -> None:
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)
@@ -692,7 +697,7 @@ async def test_max_concurrent_handlers_bounds_in_flight_handlers(
 
     connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan(messages))
 
-    async with EnrichedClient(connection_class=connection_class, max_concurrent_handlers=2) as client:
+    async with EnrichedClient(connection_class=connection_class, max_concurrent_handlers=max_concurrent) as client:
         subscription = await client.subscribe(
             destination,
             handler,
@@ -701,9 +706,9 @@ async def test_max_concurrent_handlers_bounds_in_flight_handlers(
         # let the listener queue up to the semaphore limit
         for _ in range(50):
             await asyncio.sleep(0)
-            if peak >= 2:
+            if peak >= max_concurrent:
                 break
-        assert peak == 2, f"expected peak in-flight 2, got {peak}"
+        assert peak == max_concurrent, f"expected peak in-flight {max_concurrent}, got {peak}"
         release.set()
         for _ in range(50):
             await asyncio.sleep(0)
@@ -711,4 +716,4 @@ async def test_max_concurrent_handlers_bounds_in_flight_handlers(
                 break
         await subscription.unsubscribe()
 
-    assert peak == 2
+    assert peak == max_concurrent

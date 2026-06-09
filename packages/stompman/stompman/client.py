@@ -141,7 +141,11 @@ class Client:
                             task = task_group.create_task(_run_handler_with_safety_net(handler_coro))
                             if self._handler_semaphore is not None:
                                 semaphore = self._handler_semaphore
-                                task.add_done_callback(lambda _t, s=semaphore: s.release())
+
+                                def _release(_t: asyncio.Task[None], s: asyncio.Semaphore = semaphore) -> None:
+                                    s.release()
+
+                                task.add_done_callback(_release)
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)
