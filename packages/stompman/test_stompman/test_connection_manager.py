@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterable
 from datetime import timedelta
@@ -7,6 +8,7 @@ from typing import Literal, Self
 from unittest import mock
 
 import pytest
+import stompman
 from stompman import (
     AnyServerFrame,
     ConnectedFrame,
@@ -419,3 +421,43 @@ async def test_no_message_restart_disabled(monkeypatch: pytest.MonkeyPatch) -> N
         for _ in range(10):
             await asyncio.sleep(0)
         assert manager._reconnection_count == 0
+
+
+async def test_maybe_write_frame_logs_dropped_nack_at_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = EnrichedConnectionManager(connection_class=BaseMockConnection)
+    # no active connection state -> drop path 1
+    with caplog.at_level(logging.ERROR, logger="stompman"):
+        wrote = await manager.maybe_write_frame(stompman.NackFrame(headers={"id": "a", "subscription": "s"}))
+    assert wrote is False
+    assert any(
+        r.levelno == logging.ERROR and "dropping nack" in r.message.lower()
+        for r in caplog.records
+    )
+
+
+async def test_maybe_write_frame_logs_dropped_ack_at_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = EnrichedConnectionManager(connection_class=BaseMockConnection)
+    with caplog.at_level(logging.WARNING, logger="stompman"):
+        wrote = await manager.maybe_write_frame(stompman.AckFrame(headers={"id": "a", "subscription": "s"}))
+    assert wrote is False
+    assert any(
+        r.levelno == logging.WARNING and "dropping ack" in r.message.lower()
+        for r in caplog.records
+    )
+
+
+async def test_maybe_write_frame_logs_dropped_unsubscribe_at_info(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager = EnrichedConnectionManager(connection_class=BaseMockConnection)
+    with caplog.at_level(logging.INFO, logger="stompman"):
+        wrote = await manager.maybe_write_frame(stompman.UnsubscribeFrame(headers={"id": "s"}))
+    assert wrote is False
+    assert any(
+        r.levelno == logging.INFO and "dropping unsubscribeframe" in r.message.lower()
+        for r in caplog.records
+    )

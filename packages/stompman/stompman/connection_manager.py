@@ -17,7 +17,7 @@ from stompman.errors import (
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
 )
-from stompman.frames import AnyClientFrame, AnyServerFrame
+from stompman.frames import AckFrame, AnyClientFrame, AnyServerFrame, NackFrame
 from stompman.logger import LOGGER
 
 if TYPE_CHECKING:
@@ -39,6 +39,15 @@ class ActiveConnectionState:
         if (last_read_time := self.connection.last_read_time) is None:
             return (now - self.connected_at) < threshold_seconds
         return (now - last_read_time) < threshold_seconds
+
+
+def _log_dropped_frame(frame: AnyClientFrame, *, reason: str) -> None:
+    if isinstance(frame, NackFrame):
+        LOGGER.error("dropping NACK: %s. headers=%s", reason, frame.headers)
+    elif isinstance(frame, AckFrame):
+        LOGGER.warning("dropping ACK: %s. headers=%s", reason, frame.headers)
+    else:
+        LOGGER.info("dropping %s: %s", type(frame).__name__, reason)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -248,10 +257,12 @@ class ConnectionManager:
 
     async def maybe_write_frame(self, frame: AnyClientFrame) -> bool:
         if not self._active_connection_state:
+            _log_dropped_frame(frame, reason="no active connection")
             return False
         try:
             await self._active_connection_state.connection.write_frame(frame)
         except ConnectionLostError as error:
+            _log_dropped_frame(frame, reason="connection lost mid-write")
             self._clear_active_connection_state(error)
             return False
         return True
