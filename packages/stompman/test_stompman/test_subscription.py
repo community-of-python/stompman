@@ -648,3 +648,59 @@ async def test_client_exits_when_subscriptions_are_unsubscribed(
         UnsubscribeFrame(headers={"id": first_id}),
         UnsubscribeFrame(headers={"id": second_id}),
     )
+
+
+async def test_max_concurrent_handlers_bounds_in_flight_handlers(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker
+) -> None:
+    subscription_id, destination = faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+
+    messages = [
+        build_dataclass(
+            MessageFrame,
+            headers={
+                "destination": destination,
+                "message-id": str(i),
+                "subscription": subscription_id,
+                "ack": faker.pystr(),
+            },
+        )
+        for i in range(5)
+    ]
+
+    release = asyncio.Event()
+    in_flight = 0
+    peak = 0
+
+    async def handler(frame: MessageFrame) -> None:  # noqa: ARG001
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            await release.wait()
+        finally:
+            in_flight -= 1
+
+    connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan(messages))
+
+    async with EnrichedClient(connection_class=connection_class, max_concurrent_handlers=2) as client:
+        subscription = await client.subscribe(
+            destination,
+            handler,
+            on_suppressed_exception=noop_error_handler,
+        )
+        # let the listener queue up to the semaphore limit
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if peak >= 2:
+                break
+        assert peak == 2, f"expected peak in-flight 2, got {peak}"
+        release.set()
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if in_flight == 0:
+                break
+        await subscription.unsubscribe()
+
+    assert peak == 2

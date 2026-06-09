@@ -58,6 +58,8 @@ class Client:
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
     no_message_restart_interval: timedelta | None = timedelta(hours=1)
     """Force reconnect if no messages received within this interval. None to disable."""
+    max_concurrent_handlers: int | None = None
+    """Cap on concurrently-running message handlers. None means unbounded (current behavior)."""
 
     connection_class: type[AbstractConnection] = Connection
 
@@ -67,6 +69,7 @@ class Client:
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
     _listen_task: asyncio.Task[None] = field(init=False, repr=False)
     _task_group: asyncio.TaskGroup = field(init=False, repr=False)
+    _handler_semaphore: asyncio.Semaphore | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._connection_manager = ConnectionManager(
@@ -90,6 +93,8 @@ class Client:
             no_message_restart_interval=self.no_message_restart_interval,
             ssl=self.ssl,
         )
+        if self.max_concurrent_handlers is not None:
+            self._handler_semaphore = asyncio.Semaphore(self.max_concurrent_handlers)
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
@@ -116,6 +121,8 @@ class Client:
                         self._connection_manager._last_message_received_time = time.time()
                         received_at_reconnection_count = epoch
                         if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
+                            if self._handler_semaphore is not None:
+                                await self._handler_semaphore.acquire()
                             handler_coro = (
                                 subscription._run_handler(
                                     frame=frame,
@@ -131,7 +138,10 @@ class Client:
                                     )
                                 )
                             )
-                            task_group.create_task(_run_handler_with_safety_net(handler_coro))
+                            task = task_group.create_task(_run_handler_with_safety_net(handler_coro))
+                            if self._handler_semaphore is not None:
+                                semaphore = self._handler_semaphore
+                                task.add_done_callback(lambda _t, s=semaphore: s.release())
                     case ErrorFrame():
                         if self.on_error_frame:
                             self.on_error_frame(frame)
