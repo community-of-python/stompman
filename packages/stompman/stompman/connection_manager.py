@@ -32,12 +32,13 @@ class ActiveConnectionState:
     connected_at: float
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
-        if not (last_read_time := self.connection.last_read_time):
-            return True
-
-        return (self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor) > (
-            time.time() - last_read_time
+        threshold_seconds = (
+            self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor
         )
+        now = time.time()
+        if (last_read_time := self.connection.last_read_time) is None:
+            return (now - self.connected_at) < threshold_seconds
+        return (now - last_read_time) < threshold_seconds
 
 
 @dataclass(kw_only=True, slots=True)
