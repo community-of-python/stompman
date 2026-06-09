@@ -56,8 +56,8 @@ class Client:
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
     no_message_restart_interval: timedelta | None = timedelta(hours=1)
     """Force reconnect if no messages received within this interval. None to disable."""
-    max_concurrent_handlers: int | None = None
-    """Cap on concurrently-running message handlers. None means unbounded (current behavior)."""
+    max_concurrent_handlers: int | None = 100
+    """Cap on concurrently-running message handlers. Set to None to disable the cap."""
 
     connection_class: type[AbstractConnection] = Connection
 
