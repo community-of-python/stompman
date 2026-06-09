@@ -17,7 +17,7 @@ from stompman.errors import (
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
 )
-from stompman.frames import AnyClientFrame, AnyServerFrame
+from stompman.frames import AckFrame, AnyClientFrame, AnyServerFrame, NackFrame
 from stompman.logger import LOGGER
 
 if TYPE_CHECKING:
@@ -29,14 +29,23 @@ class ActiveConnectionState:
     connection: AbstractConnection
     lifespan: "AbstractConnectionLifespan"
     server_heartbeat: Heartbeat
+    connected_at: float
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
-        if not (last_read_time := self.connection.last_read_time):
-            return True
+        threshold_seconds = self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor
+        now = time.time()
+        if (last_read_time := self.connection.last_read_time) is None:
+            return (now - self.connected_at) < threshold_seconds
+        return (now - last_read_time) < threshold_seconds
 
-        return (self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor) > (
-            time.time() - last_read_time
-        )
+
+def _log_dropped_frame(frame: AnyClientFrame, *, reason: str) -> None:
+    if isinstance(frame, NackFrame):
+        LOGGER.error("dropping NACK: %s. headers=%s", reason, frame.headers)
+    elif isinstance(frame, AckFrame):
+        LOGGER.warning("dropping ACK: %s. headers=%s", reason, frame.headers)
+    else:
+        LOGGER.info("dropping %s: %s", type(frame).__name__, reason)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -165,7 +174,10 @@ class ConnectionManager:
 
         return (
             ActiveConnectionState(
-                connection=connection, lifespan=lifespan, server_heartbeat=connection_result.server_heartbeat
+                connection=connection,
+                lifespan=lifespan,
+                server_heartbeat=connection_result.server_heartbeat,
+                connected_at=time.time(),
             )
             if isinstance(connection_result, EstablishedConnectionResult)
             else connection_result
@@ -243,10 +255,12 @@ class ConnectionManager:
 
     async def maybe_write_frame(self, frame: AnyClientFrame) -> bool:
         if not self._active_connection_state:
+            _log_dropped_frame(frame, reason="no active connection")
             return False
         try:
             await self._active_connection_state.connection.write_frame(frame)
         except ConnectionLostError as error:
+            _log_dropped_frame(frame, reason="connection lost mid-write")
             self._clear_active_connection_state(error)
             return False
         return True

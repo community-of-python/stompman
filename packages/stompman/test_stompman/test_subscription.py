@@ -435,18 +435,25 @@ async def test_subscription_skips_ack_nack_after_reconnection(
         client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
         await asyncio.sleep(0)
 
-        with caplog.at_level(logging.DEBUG, logger="stompman"):
+        with caplog.at_level(logging.WARNING, logger="stompman"):
             assert stored_message
             await stored_message.ack()
+        ack_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("connection changed since message was received" in r.message.lower() for r in ack_records), (
+            "ack skip must log at WARNING"
+        )
+
+        with caplog.at_level(logging.ERROR, logger="stompman"):
             await stored_message.nack()
+        nack_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("connection changed since message was received" in r.message.lower() for r in nack_records), (
+            "nack skip must log at ERROR"
+        )
 
         await subscription.unsubscribe()
 
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, NackFrame)]
-    assert any(
-        "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
-    )
 
 
 async def test_subscription_skips_ack_for_message_consumed_after_concurrent_clear(
@@ -512,15 +519,104 @@ async def test_subscription_skips_ack_for_message_consumed_after_concurrent_clea
                 break
         assert received_messages
 
-        with caplog.at_level(logging.DEBUG, logger="stompman"):
+        with caplog.at_level(logging.WARNING, logger="stompman"):
             await received_messages[0].ack()
+        ack_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("connection changed since message was received" in r.message.lower() for r in ack_records), (
+            "ack skip must log at WARNING"
+        )
 
         await subscription.unsubscribe()
 
     assert not [one_frame for one_frame in collected_frames if isinstance(one_frame, AckFrame)]
-    assert any(
-        "connection changed since message was received" in one_message.lower() for one_message in caplog.messages
+
+
+async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
+) -> None:
+    subscription_id, destination, ack_id_a, ack_id_b = faker.pystr(), faker.pystr(), faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+
+    message_a = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": "a", "subscription": subscription_id, "ack": ack_id_a},
     )
+    message_b = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": "b", "subscription": subscription_id, "ack": ack_id_b},
+    )
+
+    class BoomError(Exception):  # not in suppressed_exception_classes
+        pass
+
+    handled: list[str] = []
+
+    expected_handled = 2
+
+    async def handler(frame: MessageFrame) -> None:  # noqa: RUF029
+        handled.append(frame.headers["message-id"])
+        if frame.headers["message-id"] == "a":
+            raise BoomError
+
+    connection_class, _collected_frames = create_spying_connection(
+        *get_read_frames_with_lifespan([message_a, message_b])
+    )
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        with caplog.at_level(logging.ERROR, logger="stompman"):
+            subscription = await client.subscribe(
+                destination,
+                handler,
+                on_suppressed_exception=noop_error_handler,
+                suppressed_exception_classes=(),  # nothing suppressed
+            )
+            for _ in range(20):
+                await asyncio.sleep(0)
+                if len(handled) == expected_handled:
+                    break
+            await subscription.unsubscribe()
+
+    assert handled == ["a", "b"], "second message must be handled after first one crashed"
+    assert any("unhandled exception in message handler" in m.lower() for m in caplog.messages)
+
+
+async def test_manual_ack_handler_unhandled_exception_does_not_kill_listener(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker, caplog: pytest.LogCaptureFixture
+) -> None:
+    subscription_id, destination = faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+
+    message_a = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": "a", "subscription": subscription_id, "ack": faker.pystr()},
+    )
+    message_b = build_dataclass(
+        MessageFrame,
+        headers={"destination": destination, "message-id": "b", "subscription": subscription_id, "ack": faker.pystr()},
+    )
+
+    handled: list[str] = []
+    expected_handled = 2
+
+    async def handler(frame: stompman.subscription.AckableMessageFrame) -> None:  # noqa: RUF029
+        handled.append(frame.headers["message-id"])
+        if frame.headers["message-id"] == "a":
+            msg = "boom"
+            raise RuntimeError(msg)
+
+    connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([message_a, message_b]))
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        with caplog.at_level(logging.ERROR, logger="stompman"):
+            subscription = await client.subscribe_with_manual_ack(destination, handler)
+            for _ in range(20):
+                await asyncio.sleep(0)
+                if len(handled) == expected_handled:
+                    break
+            await subscription.unsubscribe()
+
+    assert handled == ["a", "b"]
+    assert any("unhandled exception in message handler" in m.lower() for m in caplog.messages)
 
 
 def test_make_subscription_id() -> None:
@@ -564,3 +660,60 @@ async def test_client_exits_when_subscriptions_are_unsubscribed(
         UnsubscribeFrame(headers={"id": first_id}),
         UnsubscribeFrame(headers={"id": second_id}),
     )
+
+
+async def test_max_concurrent_handlers_bounds_in_flight_handlers(
+    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker
+) -> None:
+    subscription_id, destination = faker.pystr(), faker.pystr()
+    monkeypatch.setattr(stompman.subscription, "_make_subscription_id", mock.Mock(return_value=subscription_id))
+
+    messages: list[stompman.AnyServerFrame] = [
+        build_dataclass(
+            MessageFrame,
+            headers={
+                "destination": destination,
+                "message-id": str(i),
+                "subscription": subscription_id,
+                "ack": faker.pystr(),
+            },
+        )
+        for i in range(5)
+    ]
+
+    release = asyncio.Event()
+    in_flight = 0
+    peak = 0
+    max_concurrent = 2
+
+    async def handler(frame: MessageFrame) -> None:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            await release.wait()
+        finally:
+            in_flight -= 1
+
+    connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan(messages))
+
+    async with EnrichedClient(connection_class=connection_class, max_concurrent_handlers=max_concurrent) as client:
+        subscription = await client.subscribe(
+            destination,
+            handler,
+            on_suppressed_exception=noop_error_handler,
+        )
+        # let the listener queue up to the semaphore limit
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if peak >= max_concurrent:
+                break
+        assert peak == max_concurrent, f"expected peak in-flight {max_concurrent}, got {peak}"
+        release.set()
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if in_flight == 0:
+                break
+        await subscription.unsubscribe()
+
+    assert peak == max_concurrent
