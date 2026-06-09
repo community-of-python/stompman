@@ -202,7 +202,10 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
         == third_state
         == fourth_state
         == ActiveConnectionState(
-            connection=BaseMockConnection(), lifespan=lifespan_factory.return_value, server_heartbeat=server_heartbeat
+            connection=BaseMockConnection(),
+            lifespan=lifespan_factory.return_value,
+            server_heartbeat=server_heartbeat,
+            connected_at=first_state.connected_at,
         )
     )
     assert first_state is second_state is third_state is fourth_state

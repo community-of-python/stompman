@@ -29,6 +29,7 @@ class ActiveConnectionState:
     connection: AbstractConnection
     lifespan: "AbstractConnectionLifespan"
     server_heartbeat: Heartbeat
+    connected_at: float
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
         if not (last_read_time := self.connection.last_read_time):
@@ -165,7 +166,10 @@ class ConnectionManager:
 
         return (
             ActiveConnectionState(
-                connection=connection, lifespan=lifespan, server_heartbeat=connection_result.server_heartbeat
+                connection=connection,
+                lifespan=lifespan,
+                server_heartbeat=connection_result.server_heartbeat,
+                connected_at=time.time(),
             )
             if isinstance(connection_result, EstablishedConnectionResult)
             else connection_result
