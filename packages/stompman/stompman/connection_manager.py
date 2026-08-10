@@ -61,6 +61,7 @@ class ConnectionManager:
     write_retry_attempts: int
     check_server_alive_interval_factor: int
     no_message_restart_interval: timedelta | None
+    keep_alive_on_connection_failure: bool = False
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
@@ -85,15 +86,23 @@ class ConnectionManager:
             self._monitor_no_message_task.cancel()
             tasks.append(self._monitor_no_message_task)
         await asyncio.wait(tasks)
-        await self._task_group.__aexit__(exc_type, exc_value, traceback)
+        try:
+            await self._task_group.__aexit__(exc_type, exc_value, traceback)
+        finally:
+            await self._close_active_connection_state()
 
-        if not self._active_connection_state:
+    async def _close_active_connection_state(self) -> None:
+        connection_state = self._active_connection_state
+        if connection_state is None:
             return
         try:
-            await self._active_connection_state.lifespan.exit()
+            await connection_state.lifespan.exit()
         except ConnectionLostError:
-            return
-        await self._active_connection_state.connection.close()
+            pass
+        finally:
+            if self._active_connection_state is connection_state:
+                self._active_connection_state = None
+            await connection_state.connection.close()
 
     def _restart_background_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
@@ -112,8 +121,15 @@ class ConnectionManager:
     async def _send_heartbeats_forever(self, send_heartbeat_interval_ms: int) -> None:
         send_heartbeat_interval_seconds = send_heartbeat_interval_ms / 1000
         while True:
-            await self.write_heartbeat_reconnecting()
-            await asyncio.sleep(send_heartbeat_interval_seconds)
+            try:
+                await self.write_heartbeat_reconnecting()
+            except (FailedAllConnectAttemptsError, FailedAllWriteAttemptsError) as error:
+                if not self.keep_alive_on_connection_failure:
+                    raise
+                LOGGER.warning("background heartbeat recovery exhausted; keeping client alive. error: %r", error)
+                await asyncio.sleep(self.connect_retry_interval)
+            else:
+                await asyncio.sleep(send_heartbeat_interval_seconds)
 
     async def _monitor_no_message_timeout(self, interval: timedelta) -> None:
         interval_seconds = interval.total_seconds()
@@ -127,10 +143,10 @@ class ConnectionManager:
                         "no messages received for %s seconds, forcing reconnect",
                         interval_seconds,
                     )
-                    self._clear_active_connection_state(
-                        ConnectionLostError(reason="no messages received within timeout")
+                    await self._discard_failed_connection_state(
+                        connection_state,
+                        ConnectionLostError(reason="no messages received within timeout"),
                     )
-                    await connection_state.connection.close()
                 await asyncio.sleep(interval_seconds)
 
     async def _create_connection_to_one_server(
@@ -156,7 +172,7 @@ class ConnectionManager:
         return None
 
     async def _connect_to_any_server(self) -> ActiveConnectionState | AnyConnectionIssue:
-        from stompman.connection_lifespan import EstablishedConnectionResult  # noqa: PLC0415
+        from stompman.connection_lifespan import EstablishedConnectionResult  # ruff: ignore[import-outside-top-level]
 
         if not (connection_and_server := await self._create_connection_to_any_server()):
             return AllServersUnavailable(servers=self.servers, timeout=self.connect_timeout)
@@ -167,21 +183,25 @@ class ConnectionManager:
             set_heartbeat_interval=self._restart_background_tasks,
         )
 
+        connection_established = False
         try:
-            connection_result = await lifespan.enter()
-        except ConnectionLostError:
-            return ConnectionLostOnLifespanEnter()
+            try:
+                connection_result = await lifespan.enter()
+            except ConnectionLostError:
+                return ConnectionLostOnLifespanEnter()
 
-        return (
-            ActiveConnectionState(
-                connection=connection,
-                lifespan=lifespan,
-                server_heartbeat=connection_result.server_heartbeat,
-                connected_at=time.time(),
-            )
-            if isinstance(connection_result, EstablishedConnectionResult)
-            else connection_result
-        )
+            if isinstance(connection_result, EstablishedConnectionResult):
+                connection_established = True
+                return ActiveConnectionState(
+                    connection=connection,
+                    lifespan=lifespan,
+                    server_heartbeat=connection_result.server_heartbeat,
+                    connected_at=time.time(),
+                )
+            return connection_result
+        finally:
+            if not connection_established:
+                await connection.close()
 
     async def _get_active_connection_state(self, *, is_initial_call: bool = False) -> ActiveConnectionState:
         if self._active_connection_state:
@@ -212,16 +232,21 @@ class ConnectionManager:
 
         raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=connection_issues)
 
-    def _clear_active_connection_state(self, error_reason: ConnectionLostError) -> None:
-        if not self._active_connection_state:
+    async def _discard_failed_connection_state(
+        self,
+        connection_state: ActiveConnectionState,
+        error_reason: ConnectionLostError,
+    ) -> None:
+        if self._active_connection_state is not connection_state:
             return
         LOGGER.warning(
             "connection lost. reason: %r, connection_parameters: %s",
             error_reason.reason,
-            self._active_connection_state.lifespan.connection_parameters,
+            connection_state.lifespan.connection_parameters,
         )
         self._active_connection_state = None
         self._reconnection_count += 1
+        await connection_state.connection.close()
 
     async def write_heartbeat_reconnecting(self) -> None:
         for _ in range(self.write_retry_attempts):
@@ -229,7 +254,7 @@ class ConnectionManager:
             try:
                 return connection_state.connection.write_heartbeat()
             except ConnectionLostError as error:
-                self._clear_active_connection_state(error)
+                await self._discard_failed_connection_state(connection_state, error)
 
         raise FailedAllWriteAttemptsError(retry_attempts=self.write_retry_attempts)
 
@@ -239,28 +264,35 @@ class ConnectionManager:
             try:
                 return await connection_state.connection.write_frame(frame)
             except ConnectionLostError as error:
-                self._clear_active_connection_state(error)
+                await self._discard_failed_connection_state(connection_state, error)
 
         raise FailedAllWriteAttemptsError(retry_attempts=self.write_retry_attempts)
 
     async def read_frames_reconnecting(self) -> AsyncGenerator[tuple[AnyServerFrame, int], None]:
         while True:
-            connection_state = await self._get_active_connection_state()
+            try:
+                connection_state = await self._get_active_connection_state()
+            except FailedAllConnectAttemptsError as error:
+                if not self.keep_alive_on_connection_failure:
+                    raise
+                LOGGER.warning("background read recovery exhausted; keeping client alive. error: %r", error)
+                await asyncio.sleep(self.connect_retry_interval)
+                continue
             epoch = self._reconnection_count
             try:
                 async for frame in connection_state.connection.read_frames():
                     yield frame, epoch
             except ConnectionLostError as error:
-                self._clear_active_connection_state(error)
+                await self._discard_failed_connection_state(connection_state, error)
 
     async def maybe_write_frame(self, frame: AnyClientFrame) -> bool:
-        if not self._active_connection_state:
+        if not (connection_state := self._active_connection_state):
             _log_dropped_frame(frame, reason="no active connection")
             return False
         try:
-            await self._active_connection_state.connection.write_frame(frame)
+            await connection_state.connection.write_frame(frame)
         except ConnectionLostError as error:
             _log_dropped_frame(frame, reason="connection lost mid-write")
-            self._clear_active_connection_state(error)
+            await self._discard_failed_connection_state(connection_state, error)
             return False
         return True

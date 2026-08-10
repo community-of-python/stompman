@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Coroutine
-from typing import Any, cast
+from ssl import SSLContext
+from typing import TYPE_CHECKING, Any, Literal, Self, cast
 from unittest import mock
 
 import faker
@@ -12,11 +13,14 @@ from stompman import (
     ConnectedFrame,
     ConnectFrame,
     ConnectionConfirmationTimeout,
+    ConnectionLostError,
     ConnectionParameters,
     DisconnectFrame,
     ErrorFrame,
     FailedAllConnectAttemptsError,
+    Heartbeat,
     ReceiptFrame,
+    SendFrame,
     UnsupportedProtocolVersion,
 )
 
@@ -27,6 +31,9 @@ from test_stompman.conftest import (
     create_spying_connection,
     get_read_frames_with_lifespan,
 )
+
+if TYPE_CHECKING:
+    from stompman.connection import AbstractConnection
 
 pytestmark = pytest.mark.anyio
 
@@ -178,6 +185,89 @@ async def test_client_heartbeats_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert sleep_calls == [0, 1, 1, 1]
     assert write_heartbeat_mock.mock_calls == [mock.call(), mock.call(), mock.call(), mock.call()]
+
+
+async def test_client_recovers_after_heartbeat_failure_when_keep_alive_enabled() -> None:  # ruff: ignore[complex-structure]
+    expected_connection_count = 2
+    heartbeat_failed = asyncio.Event()
+    second_connection_established = asyncio.Event()
+    sent_connection_numbers: list[int] = []
+    closed_connection_numbers: list[int] = []
+    connection_count = 0
+
+    class RecoveringConnection:
+        last_read_time: float | None = None
+
+        def __init__(self) -> None:
+            nonlocal connection_count
+            connection_count += 1
+            self.connection_number = connection_count
+            self.closed = asyncio.Event()
+            self.disconnect_sent = False
+            self.read_count = 0
+
+        @classmethod
+        async def connect(
+            cls,
+            *,
+            host: str,
+            port: int,
+            timeout: int,
+            read_max_chunk_size: int,
+            ssl: Literal[True] | SSLContext | None,
+            ws_uri_path: str | None = None,
+        ) -> Self:
+            del host, port, timeout, read_max_chunk_size, ssl, ws_uri_path
+            return cls()
+
+        async def close(self) -> None:
+            if self.closed.is_set():
+                return
+            closed_connection_numbers.append(self.connection_number)
+            self.closed.set()
+
+        def write_heartbeat(self) -> None:
+            if self.connection_number == 1 and not heartbeat_failed.is_set():
+                heartbeat_failed.set()
+                raise ConnectionLostError(reason="induced heartbeat failure")
+
+        async def write_frame(self, frame: stompman.AnyClientFrame) -> None:
+            if isinstance(frame, DisconnectFrame):
+                self.disconnect_sent = True
+            elif isinstance(frame, SendFrame):
+                sent_connection_numbers.append(self.connection_number)
+
+        async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:
+            self.read_count += 1
+            if self.read_count == 1:
+                if self.connection_number == expected_connection_count:
+                    second_connection_established.set()
+                yield ConnectedFrame(headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"})
+                return
+            if self.disconnect_sent:
+                yield ReceiptFrame(headers={"receipt-id": "receipt-id-1"})
+                return
+            await self.closed.wait()
+            raise ConnectionLostError(reason="closed")
+
+    async with EnrichedClient(
+        connection_class=cast("type[AbstractConnection]", RecoveringConnection),
+        heartbeat=Heartbeat(will_send_interval_ms=1, want_to_receive_interval_ms=1),
+        connect_retry_attempts=1,
+        connect_retry_interval=0,
+        write_retry_attempts=1,
+        keep_alive_on_connection_failure=True,
+    ) as client:
+        await asyncio.wait_for(heartbeat_failed.wait(), timeout=1)
+        await asyncio.wait_for(second_connection_established.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        await client.send(b"payload", destination="queue")
+
+        assert not client._listen_task.done()
+        assert sent_connection_numbers == [expected_connection_count]
+
+    assert closed_connection_numbers == [1, expected_connection_count]
 
 
 def test_make_receipt_id(monkeypatch: pytest.MonkeyPatch) -> None:

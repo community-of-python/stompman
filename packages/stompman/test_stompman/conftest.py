@@ -26,6 +26,15 @@ async def noop_message_handler(frame: stompman.MessageFrame) -> None: ...
 def noop_error_handler(exception: Exception, frame: stompman.MessageFrame) -> None: ...
 
 
+async def drop_active_connection(client: stompman.Client) -> None:
+    connection_state = client._connection_manager._active_connection_state
+    assert connection_state is not None
+    await client._connection_manager._discard_failed_connection_state(
+        connection_state,
+        stompman.ConnectionLostError(reason="test connection loss"),
+    )
+
+
 class BaseMockConnection(AbstractConnection):
     @classmethod
     async def connect(
@@ -83,12 +92,13 @@ class EnrichedConnectionManager(ConnectionManager):
     ssl: Literal[True] | SSLContext | None = None
     check_server_alive_interval_factor: int = 3
     no_message_restart_interval: timedelta | None = None
+    keep_alive_on_connection_failure: bool = False
 
 
 DataclassType = TypeVar("DataclassType")
 
 
-def build_dataclass(dataclass: type[DataclassType], **kwargs: Any) -> DataclassType:  # noqa: ANN401
+def build_dataclass(dataclass: type[DataclassType], **kwargs: Any) -> DataclassType:  # ruff: ignore[any-type]
     return DataclassFactory.create_factory(dataclass).build(**kwargs)
 
 
