@@ -12,7 +12,6 @@ from stompman import (
     AckFrame,
     AckMode,
     ConnectedFrame,
-    ConnectionLostError,
     ErrorFrame,
     FailedAllConnectAttemptsError,
     HeartbeatFrame,
@@ -32,6 +31,7 @@ from test_stompman.conftest import (
     SomeError,
     build_dataclass,
     create_spying_connection,
+    drop_active_connection,
     enrich_expected_frames,
     get_read_frames_with_lifespan,
     noop_error_handler,
@@ -56,7 +56,7 @@ async def test_client_subscriptions_lifespan_resubscribe(ack: AckMode, faker: fa
             headers=sub_extra_headers,
             on_suppressed_exception=noop_error_handler,
         )
-        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        await drop_active_connection(client)
         await client.send(message_body, destination=message_destination)
         await subscription.unsubscribe()
         await asyncio.sleep(0)
@@ -124,14 +124,14 @@ async def test_client_subscriptions_lifespan_with_active_subs_in_aexit(
     connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([]))
 
     if direct_error:
-        with pytest.raises(SomeError):  # noqa: PT012
+        with pytest.raises(SomeError):  # ruff: ignore[pytest-raises-with-multiple-statements]
             async with EnrichedClient(connection_class=connection_class) as client:
                 await client.subscribe(
                     destination, handler=noop_message_handler, on_suppressed_exception=noop_error_handler
                 )
                 await SomeError.raise_after_tick()
     else:
-        with pytest.raises(ExceptionGroup) as exc_info:  # noqa: PT012
+        with pytest.raises(ExceptionGroup) as exc_info:  # ruff: ignore[pytest-raises-with-multiple-statements]
             async with asyncio.TaskGroup() as task_group, EnrichedClient(connection_class=connection_class) as client:
                 await client.subscribe(
                     destination, handler=noop_message_handler, on_suppressed_exception=noop_error_handler
@@ -356,9 +356,9 @@ async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, fa
 
     async def close_connection_soon(client: stompman.Client) -> None:
         await asyncio.sleep(0)
-        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        await drop_active_connection(client)
 
-    with pytest.raises(ExceptionGroup) as exc_info:  # noqa: PT012
+    with pytest.raises(ExceptionGroup) as exc_info:  # ruff: ignore[pytest-raises-with-multiple-statements]
         async with asyncio.TaskGroup() as task_group, EnrichedClient(connection_class=connection_class) as client:
             await client.subscribe(faker.pystr(), noop_message_handler, on_suppressed_exception=noop_error_handler)
             task_group.create_task(close_connection_soon(client))
@@ -389,7 +389,7 @@ async def test_subscription_sends_ack_for_message_received_after_reconnection(
 
     async with EnrichedClient(connection_class=connection_class) as client:
         subscription = await client.subscribe_with_manual_ack(destination, noop_message_handler)
-        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        await drop_active_connection(client)
         await client.send(b"trigger-reconnect", destination=destination)
         message_after_reconnect = stompman.subscription.AckableMessageFrame(
             headers=message_frame.headers,
@@ -432,7 +432,7 @@ async def test_subscription_skips_ack_nack_after_reconnection(
     async with EnrichedClient(connection_class=connection_class) as client:
         subscription = await client.subscribe_with_manual_ack(destination, track_ack_nack_frames)
         await asyncio.sleep(0)
-        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        await drop_active_connection(client)
         await asyncio.sleep(0)
 
         with caplog.at_level(logging.WARNING, logger="stompman"):
@@ -472,7 +472,7 @@ async def test_subscription_skips_ack_for_message_consumed_after_concurrent_clea
     next_connection_id = 0
     listener_read_call_index: Final = 2
 
-    async def store_message_handler(message: stompman.subscription.AckableMessageFrame) -> None:  # noqa: RUF029
+    async def store_message_handler(message: stompman.subscription.AckableMessageFrame) -> None:  # ruff: ignore[unused-async]
         received_messages.append(message)
 
     class GatedConnection(BaseMockConnection):
@@ -508,7 +508,7 @@ async def test_subscription_skips_ack_for_message_consumed_after_concurrent_clea
     async with EnrichedClient(connection_class=GatedConnection) as client:
         subscription = await client.subscribe_with_manual_ack(destination, store_message_handler)
         await asyncio.sleep(0)
-        client._connection_manager._clear_active_connection_state(build_dataclass(ConnectionLostError))
+        await drop_active_connection(client)
         assert client._connection_manager._reconnection_count == 1
         await client.send(b"trigger-reconnect", destination=destination)
         assert client._connection_manager._active_connection_state is not None
@@ -553,7 +553,7 @@ async def test_auto_ack_handler_unhandled_exception_does_not_kill_listener(
 
     expected_handled = 2
 
-    async def handler(frame: MessageFrame) -> None:  # noqa: RUF029
+    async def handler(frame: MessageFrame) -> None:  # ruff: ignore[unused-async]
         handled.append(frame.headers["message-id"])
         if frame.headers["message-id"] == "a":
             raise BoomError
@@ -598,7 +598,7 @@ async def test_manual_ack_handler_unhandled_exception_does_not_kill_listener(
     handled: list[str] = []
     expected_handled = 2
 
-    async def handler(frame: stompman.subscription.AckableMessageFrame) -> None:  # noqa: RUF029
+    async def handler(frame: stompman.subscription.AckableMessageFrame) -> None:  # ruff: ignore[unused-async]
         handled.append(frame.headers["message-id"])
         if frame.headers["message-id"] == "a":
             msg = "boom"

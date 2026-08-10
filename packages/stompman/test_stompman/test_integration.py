@@ -26,15 +26,17 @@ async def wait_for_reconnect(client: stompman.Client, initial_reconnection_count
             and client._connection_manager._active_connection_state is not None
         )
 
-    while not is_reconnected():  # noqa: ASYNC110
+    while not is_reconnected():  # ruff: ignore[async-busy-wait]
         await asyncio.sleep(0.05)
 
 
 async def force_reconnect(client: stompman.Client) -> None:
     connection_state = await client._connection_manager._get_active_connection_state()
     initial_reconnection_count = client._connection_manager._reconnection_count
-    client._connection_manager._clear_active_connection_state(stompman.ConnectionLostError(reason="test reconnect"))
-    await connection_state.connection.close()
+    await client._connection_manager._discard_failed_connection_state(
+        connection_state,
+        stompman.ConnectionLostError(reason="test reconnect"),
+    )
     await asyncio.wait_for(wait_for_reconnect(client, initial_reconnection_count), timeout=5)
 
 
@@ -101,7 +103,7 @@ async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
         received_messages: list[bytes] = []
         event = asyncio.Event()
 
-        async def handle_message(frame: stompman.MessageFrame) -> None:  # noqa: RUF029
+        async def handle_message(frame: stompman.MessageFrame) -> None:  # ruff: ignore[unused-async]
             received_messages.append(frame.body)
             if len(received_messages) == len(messages):
                 event.set()

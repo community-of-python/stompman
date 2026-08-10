@@ -30,7 +30,7 @@ from stompman.transaction import Transaction
 async def _run_handler_with_safety_net(coro: Coroutine[Any, Any, Any]) -> None:
     try:
         await coro
-    except Exception:  # noqa: BLE001
+    except Exception:  # ruff: ignore[blind-except]
         LOGGER.exception("unhandled exception in message handler")
 
 
@@ -56,6 +56,8 @@ class Client:
     """Client will check if server alive `server heartbeat interval` times `interval factor`"""
     no_message_restart_interval: timedelta | None = timedelta(hours=1)
     """Force reconnect if no messages received within this interval. None to disable."""
+    keep_alive_on_connection_failure: bool = False
+    """Keep background connection recovery alive after a retry cycle is exhausted."""
     max_concurrent_handlers: int | None = 100
     """Cap on concurrently-running message handlers. Set to None to disable the cap."""
 
@@ -89,6 +91,7 @@ class Client:
             write_retry_attempts=self.write_retry_attempts,
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             no_message_restart_interval=self.no_message_restart_interval,
+            keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
             ssl=self.ssl,
         )
         if self.max_concurrent_handlers is not None:
