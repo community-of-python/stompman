@@ -2,13 +2,14 @@ import asyncio
 import contextlib
 import logging
 import typing
+from unittest import mock
 
 import faker
 import faststream_stomp
 import pydantic
 import pytest
 import stompman
-from faststream import FastStream
+from faststream import FastStream, PublishCommand, PublishType
 from faststream.message import gen_cor_id
 from faststream_stomp.broker import _handle_listen_task_done
 from faststream_stomp.opentelemetry import StompTelemetryMiddleware
@@ -19,6 +20,9 @@ from opentelemetry.sdk.trace import TracerProvider
 from polyfactory.factories.pydantic_factory import ModelFactory
 from prometheus_client import CollectorRegistry
 from test_stompman.conftest import build_dataclass
+
+if typing.TYPE_CHECKING:
+    from faststream_stomp.subscriber import StompFakePublisher
 
 pytestmark = pytest.mark.anyio
 
@@ -31,6 +35,14 @@ def fake_connection_params() -> stompman.ConnectionParameters:
 @pytest.fixture
 def broker(fake_connection_params: stompman.ConnectionParameters) -> faststream_stomp.StompBroker:
     return faststream_stomp.StompBroker(stompman.Client([fake_connection_params]))
+
+
+def make_mock_client(
+    connection_parameters: stompman.ConnectionParameters,
+) -> tuple[stompman.Client, mock.NonCallableMagicMock]:
+    client_mock = mock.create_autospec(stompman.Client, instance=True)
+    client_mock.servers = [connection_parameters]
+    return typing.cast("stompman.Client", client_mock), client_mock
 
 
 class TestTesting:
@@ -131,6 +143,103 @@ class TestNotImplemented:
             with pytest.raises(NotImplementedError):
                 async for _ in broker.subscriber(faker.pystr()):
                     ...  # pragma: no cover
+
+
+class TestAddContentLength:
+    @pytest.mark.parametrize(
+        ("broker_default", "call_override", "expected"),
+        [
+            (True, None, True),
+            (False, None, False),
+            (False, True, True),
+            (True, False, False),
+        ],
+    )
+    async def test_broker_publish(
+        self,
+        fake_connection_params: stompman.ConnectionParameters,
+        faker: faker.Faker,
+        *,
+        broker_default: bool,
+        call_override: bool | None,
+        expected: bool,
+    ) -> None:
+        client, client_mock = make_mock_client(fake_connection_params)
+        broker = faststream_stomp.StompBroker(client, add_content_length=broker_default)
+
+        await broker.publish(faker.pystr(), faker.pystr(), add_content_length=call_override)
+
+        assert client_mock.send.await_args.kwargs["add_content_length"] is expected
+
+    @pytest.mark.parametrize(
+        ("broker_default", "publisher_default", "call_override", "expected"),
+        [
+            (True, None, None, True),
+            (False, None, None, False),
+            (True, False, None, False),
+            (False, True, None, True),
+            (True, True, False, False),
+            (False, False, True, True),
+        ],
+    )
+    async def test_publisher_publish(
+        self,
+        fake_connection_params: stompman.ConnectionParameters,
+        faker: faker.Faker,
+        *,
+        broker_default: bool,
+        publisher_default: bool | None,
+        call_override: bool | None,
+        expected: bool,
+    ) -> None:
+        client, client_mock = make_mock_client(fake_connection_params)
+        broker = faststream_stomp.StompBroker(client, add_content_length=broker_default)
+        publisher = broker.publisher(faker.pystr(), add_content_length=publisher_default)
+
+        await publisher.publish(faker.pystr(), add_content_length=call_override)
+
+        assert client_mock.send.await_args.kwargs["add_content_length"] is expected
+
+    async def test_publish_batch(
+        self, fake_connection_params: stompman.ConnectionParameters, faker: faker.Faker
+    ) -> None:
+        client, client_mock = make_mock_client(fake_connection_params)
+        broker = faststream_stomp.StompBroker(client)
+        transaction = mock.AsyncMock()
+        messages = (faker.pystr(), faker.pystr())
+
+        client_mock.begin.return_value.__aenter__.return_value = transaction
+        await broker.publish_batch(
+            *messages,
+            destination=faker.pystr(),
+            add_content_length=False,
+        )
+
+        assert transaction.send.await_count == len(messages)
+        assert all(call.kwargs["add_content_length"] is False for call in transaction.send.await_args_list)
+
+    async def test_publisher_decorator_default(self, broker: faststream_stomp.StompBroker, faker: faker.Faker) -> None:
+        publisher = broker.publisher(faker.pystr(), add_content_length=False)
+        publish_mock = mock.AsyncMock()
+        command = PublishCommand(faker.pystr(), _publish_type=PublishType.PUBLISH)
+
+        with mock.patch.object(broker.config.producer, "publish", publish_mock):
+            await publisher._publish(command, _extra_middlewares=())
+
+        assert publish_mock.await_args is not None
+        published_command = publish_mock.await_args.args[0]
+        assert published_command.add_content_length is False
+
+    def test_subscriber_reply_default(self, broker: faststream_stomp.StompBroker, faker: faker.Faker) -> None:
+        subscriber = broker.subscriber(faker.pystr(), reply_add_content_length=False)
+        response_publisher = typing.cast(
+            "StompFakePublisher",
+            subscriber._make_response_publisher(mock.Mock(reply_to=faker.pystr()))[0],
+        )
+
+        command = response_publisher.patch_command(PublishCommand(faker.pystr(), _publish_type=PublishType.REPLY))
+
+        assert command.add_content_length is False
 
 
 def test_asyncapi_schema(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:

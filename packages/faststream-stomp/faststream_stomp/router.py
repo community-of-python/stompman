@@ -25,6 +25,7 @@ class StompRoutePublisher(ArgsContainer):
         title_: str | None = None,
         description_: str | None = None,
         include_in_schema: bool = True,
+        add_content_length: bool | None = None,
     ) -> None:
         super().__init__(
             destination=destination,
@@ -32,6 +33,7 @@ class StompRoutePublisher(ArgsContainer):
             title_=title_,
             description_=description_,
             include_in_schema=include_in_schema,
+            add_content_length=add_content_length,
         )
 
 
@@ -48,6 +50,7 @@ class StompRoute(SubscriberRoute):
         *,
         ack_mode: stompman.AckMode = "client-individual",
         headers: dict[str, str] | None = None,
+        reply_add_content_length: bool | None = None,
         # other args
         publishers: Iterable[StompRoutePublisher] = (),
         dependencies: Iterable[Dependant] = (),
@@ -62,6 +65,7 @@ class StompRoute(SubscriberRoute):
             destination=destination,
             ack_mode=ack_mode,
             headers=headers,
+            reply_add_content_length=reply_add_content_length,
             publishers=publishers,
             dependencies=dependencies,
             parser=parser,

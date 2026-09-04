@@ -38,13 +38,20 @@ class StompSubscriberSpecification(SubscriberSpecification[BrokerConfig, StompSu
 
 
 class StompFakePublisher(FakePublisher):
-    def __init__(self, *, producer: ProducerProto[Any], reply_to: str) -> None:
+    def __init__(
+        self,
+        *,
+        producer: ProducerProto[Any],
+        reply_to: str,
+        add_content_length: bool | None,
+    ) -> None:
         super().__init__(producer=producer)
         self.reply_to = reply_to
+        self.add_content_length = add_content_length
 
     def patch_command(self, cmd: PublishCommand | StompPublishCommand) -> StompPublishCommand:
         cmd = super().patch_command(cmd)
-        real_cmd = StompPublishCommand.from_cmd(cmd)
+        real_cmd = StompPublishCommand.from_cmd(cmd, add_content_length=self.add_content_length)
         real_cmd.destination = self.reply_to
         return real_cmd
 
@@ -85,7 +92,13 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         await asyncio.sleep(0)  # pragma: no cover
 
     def _make_response_publisher(self, message: StreamMessage[stompman.MessageFrame]) -> Sequence[FakePublisher]:
-        return (StompFakePublisher(producer=self.config._outer_config.producer, reply_to=message.reply_to),)
+        return (
+            StompFakePublisher(
+                producer=self.config._outer_config.producer,
+                reply_to=message.reply_to,
+                add_content_length=self.config.reply_add_content_length,
+            ),
+        )
 
     def get_log_context(self, message: StreamMessage[stompman.MessageFrame] | None) -> dict[str, str]:
         return {

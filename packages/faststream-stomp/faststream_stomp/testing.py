@@ -66,6 +66,7 @@ class FakeAckableMessageFrame(stompman.AckableMessageFrame):
 class FakeStompProducer(StompProducer):
     def __init__(self, broker: StompBroker) -> None:
         self.broker = broker
+        self.add_content_length = typing.cast("StompProducer", broker.config.producer).add_content_length
         self.codec = DefaultCodec()
 
     async def publish(self, cmd: StompPublishCommand) -> None:
@@ -85,7 +86,7 @@ class FakeStompProducer(StompProducer):
                 destination=cmd.destination,
                 transaction=None,
                 content_type=content_type,
-                add_content_length=False,
+                add_content_length=self._resolve_add_content_length(cmd),
                 headers=cmd.headers,
             )
         )
