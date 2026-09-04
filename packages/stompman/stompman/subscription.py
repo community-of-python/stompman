@@ -131,7 +131,7 @@ class BaseSubscription:
             if not math.isfinite(self.receipt_timeout) or self.receipt_timeout <= 0:
                 msg = "receipt_timeout must be a finite positive number"
                 raise ValueError(msg)
-            connection_state = await self._connection_manager._get_active_connection_state()
+            connection_state = await self._connection_manager._get_restored_connection_state()
             self._active_subscriptions.add(self)  # type: ignore[arg-type]
             try:
                 pending = await self._send_confirmed_subscription(connection_state.connection)

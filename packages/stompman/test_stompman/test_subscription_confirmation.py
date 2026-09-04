@@ -220,8 +220,14 @@ async def test_resubscription_failure_notifies_owner_and_cleans_up(
     assert not client._active_subscriptions.pending_receipts
 
 
+@pytest.mark.parametrize("cancel_send", [True, False])
 async def test_receipts_are_processed_while_later_subscription_replay_is_blocked(
-    client: stompman.Client, incoming: Incoming, outgoing: Outgoing, monkeypatch: pytest.MonkeyPatch
+    client: stompman.Client,
+    incoming: Incoming,
+    outgoing: Outgoing,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cancel_send: bool,
 ) -> None:
     failures: list[stompman.SubscriptionError] = []
     subscriptions: list[stompman.ManualAckSubscription] = []
@@ -260,6 +266,13 @@ async def test_receipts_are_processed_while_later_subscription_replay_is_blocked
             assert not client._active_subscriptions.pending_receipts
             assert client._active_subscriptions.get_all() == subscriptions
             assert not send.done()
+            if cancel_send:
+                send.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await send
+                send = tasks.create_task(client.send(b"after cancelled send", "test"))
+                await asyncio.sleep(0)
+                assert not send.done()
         finally:
             release_write.set()
     assert any(isinstance(frame, stompman.SendFrame) for frame in remaining_frames(outgoing))

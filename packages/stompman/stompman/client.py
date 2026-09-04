@@ -24,8 +24,14 @@ from stompman.frames import (
     SendFrame,
 )
 from stompman.logger import LOGGER
-from stompman.subscription import AckableMessageFrame, ActiveSubscriptions, AutoAckSubscription, ManualAckSubscription
-from stompman.transaction import Transaction
+from stompman.subscription import (
+    AckableMessageFrame,
+    ActiveSubscriptions,
+    AutoAckSubscription,
+    ManualAckSubscription,
+    resubscribe_to_active_subscriptions,
+)
+from stompman.transaction import Transaction, commit_pending_transactions
 
 
 async def _run_handler_with_safety_net(coro: Coroutine[Any, Any, Any]) -> None:
@@ -82,7 +88,6 @@ class Client:
                 connection_confirmation_timeout=self.connection_confirmation_timeout,
                 disconnect_confirmation_timeout=self.disconnect_confirmation_timeout,
                 active_subscriptions=self._active_subscriptions,
-                active_transactions=self._active_transactions,
             ),
             connection_class=self.connection_class,
             connect_retry_attempts=self.connect_retry_attempts,
@@ -94,10 +99,17 @@ class Client:
             no_message_restart_interval=self.no_message_restart_interval,
             keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
             on_connection_lost=self._active_subscriptions.connection_lost,
+            restore_connection=self._restore_connection,
             ssl=self.ssl,
         )
         if self.max_concurrent_handlers is not None:
             self._handler_semaphore = asyncio.Semaphore(self.max_concurrent_handlers)
+
+    async def _restore_connection(self, connection: AbstractConnection) -> None:
+        await resubscribe_to_active_subscriptions(
+            connection=connection, active_subscriptions=self._active_subscriptions
+        )
+        await commit_pending_transactions(connection=connection, active_transactions=self._active_transactions)
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
