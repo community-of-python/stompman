@@ -129,17 +129,7 @@ class Session:
         try:  # ruff: ignore[too-many-statements-in-try-clause]
             async for frame in self._frames:
                 self._last_received = time.monotonic()
-                if isinstance(frame, ReceiptFrame):
-                    future = self._receipts.pop(frame.headers["receipt-id"], None)
-                    if future is not None and not future.done():
-                        future.set_result(frame)
-                elif isinstance(frame, ErrorFrame):
-                    receipt_id = frame.headers.get("receipt-id")
-                    for pending_id, pending in list(self._receipts.items()):
-                        if receipt_id is None or receipt_id == pending_id:
-                            self._receipts.pop(pending_id)
-                            if not pending.done():
-                                pending.set_exception(ReceiptRejectedError(receipt_id=pending_id, frame=frame))
+                self._resolve_receipt(frame)
                 if isinstance(frame, MessageFrame):
                     self._last_message = self._last_received
                 receive(frame, self)
@@ -148,6 +138,19 @@ class Session:
             self.fail(ConnectionLostError(reason="eof"))
         except Exception as error:  # ruff: ignore[blind-except]
             self.fail(error)
+
+    def _resolve_receipt(self, frame: AnyServerFrame) -> None:
+        if isinstance(frame, ReceiptFrame):
+            future = self._receipts.pop(frame.headers["receipt-id"], None)
+            if future is not None and not future.done():
+                future.set_result(frame)
+        elif isinstance(frame, ErrorFrame):
+            receipt_id = frame.headers.get("receipt-id")
+            for pending_id, pending in list(self._receipts.items()):
+                if receipt_id is None or receipt_id == pending_id:
+                    self._receipts.pop(pending_id)
+                    if not pending.done():
+                        pending.set_exception(ReceiptRejectedError(receipt_id=pending_id, frame=frame))
 
     def is_alive(self) -> bool:
         if self._closed or self.failed.is_set():
