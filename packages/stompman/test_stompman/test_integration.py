@@ -19,25 +19,8 @@ from stompman.serde import (
 )
 
 
-async def wait_for_reconnect(client: stompman.Client, initial_reconnection_count: int) -> None:
-    def is_reconnected() -> bool:
-        return (
-            client._connection_manager._reconnection_count > initial_reconnection_count
-            and client._connection_manager._active_connection_state is not None
-        )
-
-    while not is_reconnected():  # ruff: ignore[async-busy-wait]
-        await asyncio.sleep(0.05)
-
-
 async def force_reconnect(client: stompman.Client) -> None:
-    connection_state = await client._connection_manager._get_active_connection_state()
-    initial_reconnection_count = client._connection_manager._reconnection_count
-    await client._connection_manager._discard_failed_connection_state(
-        connection_state,
-        stompman.ConnectionLostError(reason="test reconnect"),
-    )
-    await asyncio.wait_for(wait_for_reconnect(client, initial_reconnection_count), timeout=5)
+    await asyncio.wait_for(client.core.reconnect(), timeout=5)
 
 
 @asynccontextmanager
@@ -103,7 +86,7 @@ async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
         received_messages: list[bytes] = []
         event = asyncio.Event()
 
-        async def handle_message(frame: stompman.MessageFrame) -> None:  # ruff: ignore[unused-async]
+        async def handle_message(frame: stompman.MessageFrame) -> None:
             received_messages.append(frame.body)
             if len(received_messages) == len(messages):
                 event.set()
@@ -163,7 +146,9 @@ headers_strategy = strategies.dictionaries(header_value_strategy, header_value_s
     )
 )
 
-FRAMES_WITH_ESCAPED_HEADERS = tuple(command for command in COMMANDS_TO_FRAMES if command != b"CONNECT")
+FRAMES_WITH_ESCAPED_HEADERS = tuple(
+    command for command in COMMANDS_TO_FRAMES if command not in {b"CONNECT", b"CONNECTED"}
+)
 frame_strategy = strategies.just(stompman.HeartbeatFrame()) | strategies.builds(
     make_frame_from_parts,
     command=strategies.sampled_from(FRAMES_WITH_ESCAPED_HEADERS),

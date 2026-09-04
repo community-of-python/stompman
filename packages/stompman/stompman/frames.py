@@ -24,6 +24,7 @@ ConnectedHeaders = TypedDict(
 SendHeaders = TypedDict(
     "SendHeaders",
     {
+        "receipt": NotRequired[str],
         "content-length": NotRequired[str],
         "content-type": NotRequired[str],
         "destination": str,
@@ -34,6 +35,7 @@ AckMode = Literal["client", "client-individual", "auto"]
 SubscribeHeaders = TypedDict(
     "SubscribeHeaders",
     {
+        "receipt": NotRequired[str],
         "id": str,
         "destination": str,
         "ack": NotRequired[AckMode],
@@ -43,6 +45,7 @@ SubscribeHeaders = TypedDict(
 UnsubscribeHeaders = TypedDict(
     "UnsubscribeHeaders",
     {
+        "receipt": NotRequired[str],
         "id": str,
         "content-length": NotRequired[str],
     },
@@ -50,6 +53,7 @@ UnsubscribeHeaders = TypedDict(
 AckHeaders = TypedDict(
     "AckHeaders",
     {
+        "receipt": NotRequired[str],
         "subscription": str,
         "id": str,
         "transaction": NotRequired[str],
@@ -59,6 +63,7 @@ AckHeaders = TypedDict(
 NackHeaders = TypedDict(
     "NackHeaders",
     {
+        "receipt": NotRequired[str],
         "subscription": str,
         "id": str,
         "transaction": NotRequired[str],
@@ -68,6 +73,7 @@ NackHeaders = TypedDict(
 BeginHeaders = TypedDict(
     "BeginHeaders",
     {
+        "receipt": NotRequired[str],
         "transaction": str,
         "content-length": NotRequired[str],
     },
@@ -75,6 +81,7 @@ BeginHeaders = TypedDict(
 CommitHeaders = TypedDict(
     "CommitHeaders",
     {
+        "receipt": NotRequired[str],
         "transaction": str,
         "content-length": NotRequired[str],
     },
@@ -82,6 +89,7 @@ CommitHeaders = TypedDict(
 AbortHeaders = TypedDict(
     "AbortHeaders",
     {
+        "receipt": NotRequired[str],
         "transaction": str,
         "content-length": NotRequired[str],
     },
@@ -152,14 +160,18 @@ class SendFrame:
         add_content_length: bool,
         headers: dict[str, str] | None,
     ) -> Self:
-        all_headers: SendHeaders = headers or {}  # type: ignore[assignment]
+        all_headers: SendHeaders = headers.copy() if headers else {}  # type: ignore[assignment, typeddict-item]
         all_headers["destination"] = destination
         if add_content_length:
             all_headers["content-length"] = str(len(body))
+        else:
+            all_headers.pop("content-length", None)
         if content_type is not None:
             all_headers["content-type"] = content_type
         if transaction is not None:
             all_headers["transaction"] = transaction
+        else:
+            all_headers.pop("transaction", None)
         return cls(headers=all_headers, body=body)
 
 

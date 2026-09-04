@@ -1,6 +1,3 @@
-import asyncio
-import contextlib
-import logging
 import typing
 from unittest import mock
 
@@ -9,9 +6,8 @@ import faststream_stomp
 import pydantic
 import pytest
 import stompman
-from faststream import FastStream, PublishCommand, PublishType
+from faststream import Context, FastStream, PublishCommand, PublishType
 from faststream.message import gen_cor_id
-from faststream_stomp.broker import _handle_listen_task_done
 from faststream_stomp.opentelemetry import StompTelemetryMiddleware
 from faststream_stomp.prometheus import StompPrometheusMiddleware
 from faststream_stomp.router import StompRouter
@@ -19,7 +15,8 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from polyfactory.factories.pydantic_factory import ModelFactory
 from prometheus_client import CollectorRegistry
-from test_stompman.conftest import build_dataclass
+from stompman.core.config import RuntimeConfig
+from stompman.core.runtime import Runtime
 
 if typing.TYPE_CHECKING:
     from faststream_stomp.subscriber import StompFakePublisher
@@ -29,7 +26,7 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 def fake_connection_params() -> stompman.ConnectionParameters:
-    return build_dataclass(stompman.ConnectionParameters)
+    return stompman.ConnectionParameters("broker.example", 61616, "guest", "guest")
 
 
 @pytest.fixture
@@ -37,12 +34,12 @@ def broker(fake_connection_params: stompman.ConnectionParameters) -> faststream_
     return faststream_stomp.StompBroker(stompman.Client([fake_connection_params]))
 
 
-def make_mock_client(
+def make_mock_runtime(
     connection_parameters: stompman.ConnectionParameters,
-) -> tuple[stompman.Client, mock.NonCallableMagicMock]:
-    client_mock = mock.create_autospec(stompman.Client, instance=True)
-    client_mock.servers = [connection_parameters]
-    return typing.cast("stompman.Client", client_mock), client_mock
+) -> tuple[Runtime, mock.NonCallableMagicMock]:
+    runtime_mock = mock.create_autospec(Runtime, instance=True)
+    runtime_mock.config = RuntimeConfig([connection_parameters])
+    return typing.cast("Runtime", runtime_mock), runtime_mock
 
 
 class TestTesting:
@@ -164,7 +161,7 @@ class TestAddContentLength:
         call_override: bool | None,
         expected: bool,
     ) -> None:
-        client, client_mock = make_mock_client(fake_connection_params)
+        client, client_mock = make_mock_runtime(fake_connection_params)
         broker = faststream_stomp.StompBroker(client, add_content_length=broker_default)
 
         await broker.publish(faker.pystr(), faker.pystr(), add_content_length=call_override)
@@ -192,7 +189,7 @@ class TestAddContentLength:
         call_override: bool | None,
         expected: bool,
     ) -> None:
-        client, client_mock = make_mock_client(fake_connection_params)
+        client, client_mock = make_mock_runtime(fake_connection_params)
         broker = faststream_stomp.StompBroker(client, add_content_length=broker_default)
         publisher = broker.publisher(faker.pystr(), add_content_length=publisher_default)
 
@@ -203,7 +200,7 @@ class TestAddContentLength:
     async def test_publish_batch(
         self, fake_connection_params: stompman.ConnectionParameters, faker: faker.Faker
     ) -> None:
-        client, client_mock = make_mock_client(fake_connection_params)
+        client, client_mock = make_mock_runtime(fake_connection_params)
         broker = faststream_stomp.StompBroker(client)
         transaction = mock.AsyncMock()
         messages = (faker.pystr(), faker.pystr())
@@ -274,24 +271,22 @@ async def test_prometheus_publish(faker: faker.Faker, broker: faststream_stomp.S
         await broker.publish(faker.pystr(), destination, correlation_id=gen_cor_id())
 
 
-def test_handle_listen_task_done_logs_unhandled_exception(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    # faststream parent logger has propagate=False, which would block caplog (attached to root)
-    monkeypatch.setattr(logging.getLogger("faststream"), "propagate", True)
+async def test_automatic_reply_uses_inbound_metadata(broker: faststream_stomp.StompBroker) -> None:
+    replies: list[tuple[str, str]] = []
 
-    async def run() -> None:
-        async def boom() -> None:  # noqa: RUF029
-            msg = "kaboom"
-            raise RuntimeError(msg)
+    @broker.subscriber("requests", reply_add_content_length=False)
+    def respond(body: str) -> str:
+        return f"reply:{body}"
 
-        task: asyncio.Task[None] = asyncio.create_task(boom())
-        with contextlib.suppress(RuntimeError):
-            await task
+    @broker.subscriber("replies")
+    def receive_reply(
+        body: str,
+        message: typing.Annotated[faststream_stomp.StompStreamMessage, Context()],
+    ) -> None:
+        replies.append((body, message.correlation_id))
+        assert "content-length" not in message.headers
 
-        with caplog.at_level(logging.ERROR):
-            _handle_listen_task_done(task)
+    async with faststream_stomp.TestStompBroker(broker):
+        await broker.publish("request", "requests", headers={"reply-to": "replies"}, correlation_id="correlation")
 
-    asyncio.run(run())
-
-    assert any("listen task exited" in m.lower() for m in caplog.messages)
+    assert replies == [("reply:request", "correlation")]

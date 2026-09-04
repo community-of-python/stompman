@@ -8,6 +8,11 @@ class Heartbeat:
     will_send_interval_ms: int
     want_to_receive_interval_ms: int
 
+    def __post_init__(self) -> None:
+        if self.will_send_interval_ms < 0 or self.want_to_receive_interval_ms < 0:
+            msg = "heartbeat intervals must be nonnegative"
+            raise ValueError(msg)
+
     def to_header(self) -> str:
         return f"{self.will_send_interval_ms},{self.want_to_receive_interval_ms}"
 

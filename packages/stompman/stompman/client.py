@@ -1,157 +1,73 @@
-import asyncio
-import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
-from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import timedelta
-from functools import partial
-from ssl import SSLContext
+from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass, field, fields, replace
 from types import TracebackType
-from typing import Any, ClassVar, Literal, Self
+from typing import Any, ClassVar, Self, overload
 
-from stompman.config import ConnectionParameters, Heartbeat
-from stompman.connection import AbstractConnection, Connection
-from stompman.connection_lifespan import ConnectionLifespan
-from stompman.connection_manager import ConnectionManager
-from stompman.frames import (
-    AckMode,
-    ConnectedFrame,
-    ErrorFrame,
-    HeartbeatFrame,
-    MessageFrame,
-    ReceiptFrame,
-    SendFrame,
-)
-from stompman.logger import LOGGER
-from stompman.subscription import AckableMessageFrame, ActiveSubscriptions, AutoAckSubscription, ManualAckSubscription
-from stompman.transaction import Transaction
-
-
-async def _run_handler_with_safety_net(coro: Coroutine[Any, Any, Any]) -> None:
-    try:
-        await coro
-    except Exception:  # ruff: ignore[blind-except]
-        LOGGER.exception("unhandled exception in message handler")
+from stompman.core import Delivery, Runtime, RuntimeConfig
+from stompman.frames import AckMode, MessageFrame, ReceiptFrame
+from stompman.subscription import AckableMessageFrame, AutoAckSubscription, ManualAckSubscription, _make_subscription_id
+from stompman.transaction import Transaction, _make_transaction_id
 
 
 @dataclass(kw_only=True, slots=True)
-class Client:
-    PROTOCOL_VERSION: ClassVar = "1.2"  # https://stomp.github.io/stomp-specification-1.2.html
+class Client(RuntimeConfig):
+    """Compatibility facade. Runtime owns all protocol and connection state."""
 
-    servers: list[ConnectionParameters] = field(kw_only=False)
-    on_error_frame: Callable[[ErrorFrame], Any] | None = lambda error_frame: LOGGER.error(
-        "received error frame: %s", error_frame
-    )
-
-    heartbeat: Heartbeat = field(default=Heartbeat(1000, 1000))
-    ssl: Literal[True] | SSLContext | None = None
-    connect_retry_attempts: int = 3
-    connect_retry_interval: int = 1
-    connect_timeout: int = 2
-    read_max_chunk_size: int = 1024 * 1024
-    write_retry_attempts: int = 3
-    connection_confirmation_timeout: int = 2
-    disconnect_confirmation_timeout: int = 2
-    check_server_alive_interval_factor: int = 3
-    """Client will check if server alive `server heartbeat interval` times `interval factor`"""
-    no_message_restart_interval: timedelta | None = timedelta(hours=1)
-    """Force reconnect if no messages received within this interval. None to disable."""
-    keep_alive_on_connection_failure: bool = False
-    """Keep background connection recovery alive after a retry cycle is exhausted."""
-    max_concurrent_handlers: int | None = 100
-    """Cap on concurrently-running message handlers. Set to None to disable the cap."""
-
-    connection_class: type[AbstractConnection] = Connection
-
-    _connection_manager: ConnectionManager = field(init=False)
-    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
-    _active_transactions: set[Transaction] = field(default_factory=set, init=False)
-    _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
-    _listen_task: asyncio.Task[None] = field(init=False, repr=False)
-    _task_group: asyncio.TaskGroup = field(init=False, repr=False)
-    _handler_semaphore: asyncio.Semaphore | None = field(init=False, default=None, repr=False)
+    PROTOCOL_VERSION: ClassVar = "1.2"
+    _runtime: Runtime = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._connection_manager = ConnectionManager(
-            servers=self.servers,
-            lifespan_factory=partial(
-                ConnectionLifespan,
-                protocol_version=self.PROTOCOL_VERSION,
-                client_heartbeat=self.heartbeat,
-                connection_confirmation_timeout=self.connection_confirmation_timeout,
-                disconnect_confirmation_timeout=self.disconnect_confirmation_timeout,
-                active_subscriptions=self._active_subscriptions,
-                active_transactions=self._active_transactions,
-            ),
-            connection_class=self.connection_class,
-            connect_retry_attempts=self.connect_retry_attempts,
-            connect_retry_interval=self.connect_retry_interval,
-            connect_timeout=self.connect_timeout,
-            read_max_chunk_size=self.read_max_chunk_size,
-            write_retry_attempts=self.write_retry_attempts,
-            check_server_alive_interval_factor=self.check_server_alive_interval_factor,
-            no_message_restart_interval=self.no_message_restart_interval,
-            keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
-            ssl=self.ssl,
-        )
-        if self.max_concurrent_handlers is not None:
-            self._handler_semaphore = asyncio.Semaphore(self.max_concurrent_handlers)
+        self._runtime = Runtime(self.to_config())
+
+    def to_config(self) -> RuntimeConfig:
+        """Copy configuration without sharing lifecycle state with another adapter."""
+        values = {item.name: getattr(self, item.name) for item in fields(RuntimeConfig)}
+        values["servers"] = [replace(server, connect_headers=server.connect_headers.copy()) for server in self.servers]
+        return RuntimeConfig(**values)
+
+    @property
+    def core(self) -> Runtime:
+        return self._runtime
 
     async def __aenter__(self) -> Self:
-        self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
-        await self._exit_stack.enter_async_context(self._connection_manager)
-        self._listen_task = self._task_group.create_task(self._listen_to_frames())
+        await self._runtime.start()
         return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
     ) -> None:
         try:
-            if not exc_value:
-                await self._active_subscriptions.wait_until_empty()
-        finally:
-            self._listen_task.cancel()
-            await asyncio.wait([self._listen_task])
-            await self._exit_stack.aclose()
+            if exc_type is None:
+                await self._runtime.wait_until_unsubscribed()
+        except BaseException as error:
+            await self._runtime.close(type(error), error, error.__traceback__)
+            raise
+        else:
+            await self._runtime.close(exc_type, exc_value, traceback)
 
-    async def _listen_to_frames(self) -> None:
-        async with asyncio.TaskGroup() as task_group:
-            async for frame, epoch in self._connection_manager.read_frames_reconnecting():
-                match frame:
-                    case MessageFrame():
-                        self._connection_manager._last_message_received_time = time.time()
-                        received_at_reconnection_count = epoch
-                        if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
-                            if self._handler_semaphore is not None:
-                                await self._handler_semaphore.acquire()
-                            handler_coro = (
-                                subscription._run_handler(
-                                    frame=frame,
-                                    received_at_reconnection_count=received_at_reconnection_count,
-                                )
-                                if isinstance(subscription, AutoAckSubscription)
-                                else subscription.handler(
-                                    AckableMessageFrame(
-                                        headers=frame.headers,
-                                        body=frame.body,
-                                        _subscription=subscription,
-                                        _received_at_reconnection_count=received_at_reconnection_count,
-                                    )
-                                )
-                            )
-                            task = task_group.create_task(_run_handler_with_safety_net(handler_coro))
-                            if self._handler_semaphore is not None:
-                                semaphore = self._handler_semaphore
+    @overload
+    async def send(
+        self,
+        body: bytes,
+        destination: str,
+        *,
+        content_type: str | None = None,
+        add_content_length: bool = True,
+        headers: dict[str, str] | None = None,
+        receipt_timeout: None = None,
+    ) -> None: ...
 
-                                def _release(_t: asyncio.Task[None], s: asyncio.Semaphore = semaphore) -> None:
-                                    s.release()
-
-                                task.add_done_callback(_release)
-                    case ErrorFrame():
-                        if self.on_error_frame:
-                            self.on_error_frame(frame)
-                    case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
-                        pass
+    @overload
+    async def send(
+        self,
+        body: bytes,
+        destination: str,
+        *,
+        content_type: str | None = None,
+        add_content_length: bool = True,
+        headers: dict[str, str] | None = None,
+        receipt_timeout: float,
+    ) -> ReceiptFrame: ...
 
     async def send(
         self,
@@ -161,24 +77,19 @@ class Client:
         content_type: str | None = None,
         add_content_length: bool = True,
         headers: dict[str, str] | None = None,
-    ) -> None:
-        await self._connection_manager.write_frame_reconnecting(
-            SendFrame.build(
-                body=body,
-                destination=destination,
-                transaction=None,
-                content_type=content_type,
-                add_content_length=add_content_length,
-                headers=headers,
-            )
+        receipt_timeout: float | None = None,
+    ) -> ReceiptFrame | None:
+        return await self._runtime.send(
+            body,
+            destination,
+            content_type=content_type,
+            add_content_length=add_content_length,
+            headers=headers,
+            receipt_timeout=receipt_timeout,
         )
 
-    @asynccontextmanager
-    async def begin(self) -> AsyncGenerator[Transaction, None]:
-        async with Transaction(
-            _connection_manager=self._connection_manager, _active_transactions=self._active_transactions
-        ) as transaction:
-            yield transaction
+    def begin(self, *, receipt_timeout: float | None = None) -> Transaction:
+        return Transaction(self._runtime.begin(receipt_timeout=receipt_timeout, transaction_id=_make_transaction_id()))
 
     async def subscribe(
         self,
@@ -189,19 +100,23 @@ class Client:
         headers: dict[str, str] | None = None,
         on_suppressed_exception: Callable[[Exception, MessageFrame], Any],
         suppressed_exception_classes: tuple[type[Exception], ...] = (Exception,),
-    ) -> "AutoAckSubscription":
-        subscription = AutoAckSubscription(
-            destination=destination,
-            handler=handler,
-            headers=headers,
-            ack=ack,
-            on_suppressed_exception=on_suppressed_exception,
-            suppressed_exception_classes=suppressed_exception_classes,
-            _connection_manager=self._connection_manager,
-            _active_subscriptions=self._active_subscriptions,
+    ) -> AutoAckSubscription:
+        async def consume(delivery: Delivery) -> None:
+            frame = MessageFrame(headers=delivery.headers, body=delivery.body)
+            try:
+                await handler(frame)
+            except suppressed_exception_classes as error:
+                if ack != "auto":
+                    await delivery.nack()
+                on_suppressed_exception(error, frame)
+            else:
+                if ack != "auto":
+                    await delivery.ack()
+
+        subscription = await self._runtime.subscribe(
+            destination, consume, ack=ack, headers=headers, subscription_id=_make_subscription_id()
         )
-        await subscription._subscribe()
-        return subscription
+        return AutoAckSubscription(subscription, handler, on_suppressed_exception, suppressed_exception_classes)
 
     async def subscribe_with_manual_ack(
         self,
@@ -210,21 +125,14 @@ class Client:
         *,
         ack: AckMode = "client-individual",
         headers: dict[str, str] | None = None,
-    ) -> "ManualAckSubscription":
-        subscription = ManualAckSubscription(
-            destination=destination,
-            handler=handler,
-            headers=headers,
-            ack=ack,
-            _connection_manager=self._connection_manager,
-            _active_subscriptions=self._active_subscriptions,
+    ) -> ManualAckSubscription:
+        async def consume(delivery: Delivery) -> None:
+            await handler(AckableMessageFrame.from_delivery(delivery))
+
+        subscription = await self._runtime.subscribe(
+            destination, consume, ack=ack, headers=headers, subscription_id=_make_subscription_id()
         )
-        await subscription._subscribe()
-        return subscription
+        return ManualAckSubscription(subscription, handler)
 
     def is_alive(self) -> bool:
-        if self._listen_task.done():
-            return False
-        return (
-            self._connection_manager._active_connection_state or False
-        ) and self._connection_manager._active_connection_state.is_alive(self.check_server_alive_interval_factor)
+        return self._runtime.is_alive()

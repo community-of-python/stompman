@@ -8,6 +8,11 @@ The project consists of two main packages:
 1. `stompman` - The core STOMP client library
 2. `faststream-stomp` - A FastStream broker implementation for STOMP
 
+FastStream is the primary facade. Both facades use the independent implementation
+in `stompman.core`; FastStream must not execute through the legacy `Client`.
+Keep `Client` as a separate compatibility adapter and preserve consumer contracts
+when evolving the core. See `docs/session-core.md` for recovery and migration details.
+
 ## Key Features
 
 - Fully asynchronous implementation using Python's asyncio

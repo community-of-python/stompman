@@ -27,7 +27,7 @@ class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageF
             MESSAGING_DESTINATION_PUBLISH_NAME: msg.raw_message.headers["destination"],
         }
 
-    def get_consume_destination_name(self, msg: StreamMessage[stompman.MessageFrame]) -> str:  # noqa: PLR6301
+    def get_consume_destination_name(self, msg: StreamMessage[stompman.MessageFrame]) -> str:  # ruff: ignore[no-self-use]
         return msg.raw_message.headers["destination"]
 
     def get_publish_attrs_from_cmd(self, cmd: StompPublishCommand) -> dict[str, Any]:
@@ -39,7 +39,7 @@ class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageF
             publish_attrs[messaging_attributes.MESSAGING_MESSAGE_CONVERSATION_ID] = cmd.correlation_id
         return publish_attrs
 
-    def get_publish_destination_name(self, cmd: StompPublishCommand) -> str:  # noqa: PLR6301
+    def get_publish_destination_name(self, cmd: StompPublishCommand) -> str:  # ruff: ignore[no-self-use]
         return cmd.destination
 
 

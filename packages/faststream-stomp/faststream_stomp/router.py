@@ -21,7 +21,7 @@ class StompRoutePublisher(ArgsContainer):
         self,
         destination: str,
         *,
-        schema_: Any | None = None,  # noqa: ANN401
+        schema_: Any | None = None,  # ruff: ignore[any-type]
         title_: str | None = None,
         description_: str | None = None,
         include_in_schema: bool = True,

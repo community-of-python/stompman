@@ -11,13 +11,13 @@ broker = faststream_stomp.StompBroker(stompman.Client([server]))
 @broker.subscriber("first")
 @broker.publisher("second")
 def _(message: str) -> str:
-    print(message)  # noqa: T201
+    print(message)  # ruff: ignore[print]
     return "Hi from first handler!"
 
 
 @broker.subscriber("second")
 def _(message: str) -> None:
-    print(message)  # noqa: T201
+    print(message)  # ruff: ignore[print]
 
 
 app = faststream.FastStream(broker)

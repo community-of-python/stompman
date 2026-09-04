@@ -36,10 +36,11 @@ HEADER_ESCAPE_CHARS: Final = {
     NEWLINE.decode(): "\\n",
     COLON_.decode(): "\\c",
     BACKSLASH.decode(): "\\\\",
-    CARRIAGE.decode(): "",  # [\r]\n is newline, therefore can't be used in header
+    CARRIAGE.decode(): "\\r",
 }
 HEADER_UNESCAPE_CHARS: Final = {
     b"n": NEWLINE,
+    b"r": CARRIAGE,
     b"c": COLON_,
     BACKSLASH: BACKSLASH,
 }
@@ -82,7 +83,7 @@ def dump_frame(frame: AnyClientFrame | AnyRealServerFrame) -> bytes:
     sorted_headers = sorted(frame.headers.items())
     dumped_headers = (
         (f"{key}:{value}\n".encode() for key, value in sorted_headers)
-        if isinstance(frame, ConnectFrame)
+        if isinstance(frame, (ConnectFrame, ConnectedFrame))
         else (dump_header(key, cast("str", value)) for key, value in sorted_headers)
     )
     lines = (
@@ -104,33 +105,34 @@ def unescape_byte(*, byte: bytes, previous_byte: bytes | None) -> bytes | None:
     return byte
 
 
-def parse_header(buffer: bytearray) -> tuple[str, str] | None:
-    key_buffer = bytearray()
-    value_buffer = bytearray()
-    key_parsed = False
-
-    previous_byte = None
-    just_escaped_line = False
-
-    for byte in iter_bytes(buffer):
-        if byte == COLON_:
-            if key_parsed:
+def _unescape_header_part(value: bytes) -> bytes | None:
+    result = bytearray()
+    iterator = iter(iter_bytes(value))
+    for byte in iterator:
+        if byte == BACKSLASH:
+            replacement = HEADER_UNESCAPE_CHARS.get(next(iterator, b""))
+            if replacement is None:
                 return None
-            key_parsed = True
-        elif just_escaped_line:
-            just_escaped_line = False
-            if byte != BACKSLASH:
-                (value_buffer if key_parsed else key_buffer).extend(byte)
-        elif unescaped_byte := unescape_byte(byte=byte, previous_byte=previous_byte):
-            just_escaped_line = True
-            (value_buffer if key_parsed else key_buffer).extend(unescaped_byte)
+            result.extend(replacement)
+        elif byte == COLON_:
+            return None
+        else:
+            result.extend(byte)
+    return bytes(result)
 
-        previous_byte = byte
 
-    if key_parsed:
-        with suppress(UnicodeDecodeError):
-            return key_buffer.decode(), value_buffer.decode()
-
+def parse_header(buffer: bytearray, *, unescape: bool = True) -> tuple[str, str] | None:
+    key, separator, value = bytes(buffer).removesuffix(NEWLINE).removesuffix(CARRIAGE).partition(COLON_)
+    if not separator:
+        return None
+    if unescape:
+        unescaped_key = _unescape_header_part(key)
+        unescaped_value = _unescape_header_part(value)
+        if unescaped_key is None or unescaped_value is None:
+            return None
+        key, value = unescaped_key, unescaped_value
+    with suppress(UnicodeDecodeError):
+        return key.decode(), value.decode()
     return None
 
 
@@ -192,7 +194,7 @@ class FrameParser:
             self._current_buf = bytearray()
 
     def _process_header(self) -> None:
-        header = parse_header(self._current_buf)
+        header = parse_header(self._current_buf, unescape=self._command not in {b"CONNECT", b"CONNECTED"})
         if not header:
             self._current_buf = bytearray()
             return

@@ -1,4 +1,4 @@
-import platform
+import os
 from typing import cast
 
 import pytest
@@ -17,18 +17,20 @@ def anyio_backend(request: pytest.FixtureRequest) -> object:
 
 @pytest.fixture
 def first_server_connection_parameters() -> stompman.ConnectionParameters:
-    return stompman.ConnectionParameters(host="127.0.0.1", port=9000, login="admin", passcode=":=123")
+    return stompman.ConnectionParameters(
+        host="127.0.0.1", port=int(os.environ.get("STOMPMAN_ARTEMIS_PORT", "9000")), login="admin", passcode=":=123"
+    )
 
 
 @pytest.fixture(
     params=[
-        stompman.ConnectionParameters(host="127.0.0.1", port=9000, login="admin", passcode=":=123"),
-        stompman.ConnectionParameters(host="127.0.0.1", port=9001, login="admin", passcode=":=123"),
+        stompman.ConnectionParameters(
+            host="127.0.0.1", port=int(os.environ.get("STOMPMAN_ARTEMIS_PORT", "9000")), login="admin", passcode=":=123"
+        ),
+        stompman.ConnectionParameters(
+            host="127.0.0.1", port=int(os.environ.get("STOMPMAN_CLASSIC_PORT", "9001")), login="admin", passcode=":=123"
+        ),
     ]
-    if platform.platform() == "Linux"  # TODO: fix tests with ActiveMQ Classic on Mac  # noqa: FIX002, TD002, TD003
-    else [
-        stompman.ConnectionParameters(host="127.0.0.1", port=9000, login="admin", passcode=":=123"),
-    ],
 )
 def connection_parameters(request: pytest.FixtureRequest) -> stompman.ConnectionParameters:
     return cast("stompman.ConnectionParameters", request.param)

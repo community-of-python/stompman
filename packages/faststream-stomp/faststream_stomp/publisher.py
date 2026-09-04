@@ -1,7 +1,6 @@
 import typing
 from typing import Any, NoReturn
 
-import stompman
 from fast_depends.library.serializer import SerializerProto
 from faststream import PublishCommand, PublishType
 from faststream._internal.basic_types import SendableMessage
@@ -13,6 +12,7 @@ from faststream._internal.types import AsyncCallable, PublisherMiddleware
 from faststream.message import encode_message
 from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.schema import Message, Operation, PublisherSpec
+from stompman.core.runtime import Runtime
 
 from faststream_stomp.models import (
     StompPublishCommand,
@@ -28,7 +28,7 @@ class StompProducer(ProducerProto[StompPublishCommand]):
     def __init__(
         self,
         *,
-        client: stompman.Client,
+        client: Runtime,
         serializer: SerializerProto | None,
         add_content_length: bool = True,
     ) -> None:
@@ -71,6 +71,8 @@ def _make_headers_for_publish(cmd: StompPublishCommand) -> dict[str, str]:
     all_headers = cmd.headers.copy()
     if cmd.correlation_id:
         all_headers["correlation-id"] = cmd.correlation_id
+    if cmd.reply_to:
+        all_headers["reply-to"] = cmd.reply_to
     return all_headers
 
 
@@ -141,7 +143,7 @@ class StompPublisher(PublisherUsecase):
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
         add_content_length: bool | None = None,
-    ) -> Any:  # noqa: ANN401
+    ) -> Any:  # ruff: ignore[any-type]
         publish_command = StompPublishCommand(
             message,
             _publish_type=PublishType.REQUEST,

@@ -2,7 +2,13 @@
 name = "faststream-stomp"
 description = "FastStream STOMP broker"
 authors = [{ name = "Lev Vereshchagin", email = "mail@vrslev.com" }]
-dependencies = ["faststream~=0.7", "stompman>=3.11.1"]
+dependencies = [
+    "faststream~=0.7",
+    "stompman>=3.15.0",
+    # FastDepends 3.0.8 accesses anyio.to_thread without importing the submodule.
+    # AnyIO 4.15's lazy imports break that path in a fresh process.
+    "anyio<4.15",
+]
 requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }

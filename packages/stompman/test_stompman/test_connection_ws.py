@@ -1,7 +1,8 @@
 import asyncio
 import socket
 from collections.abc import Awaitable
-from typing import Any
+from ssl import CERT_REQUIRED, SSLContext, create_default_context
+from typing import Any, Literal
 from unittest import mock
 
 import pytest
@@ -12,6 +13,9 @@ from stompman import (
     ConnectedFrame,
     ConnectionLostError,
     HeartbeatFrame,
+    MessageFrame,
+    ReceiptFrame,
+    dump_frame,
 )
 from stompman.serde import NEWLINE
 
@@ -157,3 +161,55 @@ async def test_read_frames_connection_error(monkeypatch: pytest.MonkeyPatch, exc
     connection = await make_mocked_connection(monkeypatch, mock.AsyncMock(recv=mock.AsyncMock(side_effect=exception)))
     with pytest.raises(ConnectionLostError):
         _ = [frame async for frame in connection.read_frames()]
+
+
+@pytest.mark.parametrize("split_message", [False, True])
+async def test_read_frames_preserves_unread_input_between_iterators(
+    monkeypatch: pytest.MonkeyPatch, *, split_message: bool
+) -> None:
+    connected = ConnectedFrame(headers={"version": "1.2", "heart-beat": "1000,1000"})
+    message = MessageFrame(headers={"destination": "queue", "subscription": "sub", "message-id": "id"}, body=b"hello")
+    receipt = ReceiptFrame(headers={"receipt-id": "receipt"})
+    message_bytes = dump_frame(message)
+    chunks = (
+        [dump_frame(connected) + message_bytes[:10], message_bytes[10:] + dump_frame(receipt)]
+        if split_message
+        else [dump_frame(connected) + message_bytes + dump_frame(receipt)]
+    )
+    websocket = mock.Mock(recv=mock.AsyncMock(side_effect=chunks))
+    connection = await make_mocked_connection(monkeypatch, websocket)
+    for expected_frame in (connected, message, receipt):
+        iterator = connection.read_frames()
+        assert await anext(iterator) == expected_frame
+        await iterator.aclose()
+    assert websocket.recv.await_count == len(chunks)
+
+
+@pytest.mark.parametrize("tls_mode", ["none", "default", "custom"])
+async def test_connect_uses_matching_websocket_tls_options(monkeypatch: pytest.MonkeyPatch, tls_mode: str) -> None:
+    ssl: Literal[True] | SSLContext | None = {"none": None, "default": True, "custom": create_default_context()}[
+        tls_mode
+    ]
+    connect = mock.AsyncMock()
+    monkeypatch.setattr("websockets.connect", connect)
+    max_size = 4096
+    connection = await WebSocketConnection.connect(
+        host="broker.example", port=61614, timeout=2, read_max_chunk_size=max_size, ssl=ssl, ws_uri_path="/stomp"
+    )
+    assert connection is not None
+    kwargs = connect.call_args.kwargs
+    assert kwargs["uri"] == f"{'ws' if ssl is None else 'wss'}://broker.example:61614/stomp"
+    assert kwargs["max_size"] == max_size
+    if ssl is True:
+        assert isinstance(kwargs["ssl"], SSLContext)
+        assert kwargs["ssl"].check_hostname
+        assert kwargs["ssl"].verify_mode == CERT_REQUIRED
+    else:
+        assert kwargs["ssl"] is ssl
+
+
+async def test_async_heartbeat_observes_send_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    websocket = mock.Mock(send=mock.AsyncMock(side_effect=WebSocketException))
+    connection = await make_mocked_connection(monkeypatch, websocket)
+    with pytest.raises(ConnectionLostError):
+        await connection.send_heartbeat()

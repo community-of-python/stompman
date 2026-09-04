@@ -1,6 +1,6 @@
 import asyncio
-import socket
 import time
+from collections import deque
 from collections.abc import AsyncGenerator, Generator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -22,7 +22,7 @@ class AbstractConnection(Protocol):
         *,
         host: str,
         port: int,
-        timeout: int,
+        timeout: float,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
         ws_uri_path: str | None = None,
@@ -47,6 +47,8 @@ class Connection(AbstractConnection):
     writer: asyncio.StreamWriter
     read_max_chunk_size: int
     ssl: Literal[True] | SSLContext | None
+    _parser: FrameParser = field(default_factory=FrameParser, init=False, repr=False, compare=False)
+    _pending_frames: deque[AnyServerFrame] = field(default_factory=deque, init=False, repr=False, compare=False)
 
     @classmethod
     async def connect(
@@ -54,7 +56,7 @@ class Connection(AbstractConnection):
         *,
         host: str,
         port: int,
-        timeout: int,
+        timeout: float,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
         ws_uri_path: str | None = None,
@@ -64,7 +66,7 @@ class Connection(AbstractConnection):
                 msg = "only stompman.connection_ws.WebSocketConnection supports ws_uri_path argument"
                 raise AssertionError(msg)
             reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port, ssl=ssl), timeout=timeout)
-        except (TimeoutError, ConnectionError, socket.gaierror):
+        except OSError:
             return None
         else:
             return cls(
@@ -75,18 +77,23 @@ class Connection(AbstractConnection):
             )
 
     async def close(self) -> None:
-        self.writer.close()
-        with suppress(ConnectionError):
+        with suppress(OSError):
+            self.writer.close()
             await self.writer.wait_closed()
 
     def write_heartbeat(self) -> None:
-        with reraise_connection_lost(RuntimeError):
+        with reraise_connection_lost(RuntimeError, OSError):
             return self.writer.write(NEWLINE)
 
+    async def send_heartbeat(self) -> None:
+        self.write_heartbeat()
+        with reraise_connection_lost(OSError):
+            await self.writer.drain()
+
     async def write_frame(self, frame: AnyClientFrame) -> None:
-        with reraise_connection_lost(RuntimeError):
+        with reraise_connection_lost(RuntimeError, OSError):
             self.writer.write(dump_frame(frame))
-        with reraise_connection_lost(ConnectionError):
+        with reraise_connection_lost(OSError):
             await self.writer.drain()
 
     async def _read_non_empty_bytes(self, max_chunk_size: int) -> bytes:
@@ -95,12 +102,13 @@ class Connection(AbstractConnection):
         return chunk
 
     async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:
-        parser = FrameParser()
-
         while True:
-            with reraise_connection_lost(ConnectionError):
-                raw_frames = await self._read_non_empty_bytes(self.read_max_chunk_size)
-            self.last_read_time = time.time()
-
-            for frame in cast("Iterator[AnyServerFrame]", parser.parse_frames_from_chunk(raw_frames)):
-                yield frame
+            if not self._pending_frames:
+                with reraise_connection_lost(OSError):
+                    raw_frames = await self._read_non_empty_bytes(self.read_max_chunk_size)
+                self.last_read_time = time.time()
+                self._pending_frames.extend(
+                    cast("Iterator[AnyServerFrame]", self._parser.parse_frames_from_chunk(raw_frames))
+                )
+            while self._pending_frames:
+                yield self._pending_frames.popleft()

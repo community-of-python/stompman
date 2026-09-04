@@ -20,6 +20,7 @@ from faststream.message import gen_cor_id
 from faststream_stomp.models import StompStreamMessage
 from faststream_stomp.router import StompRoutePublisher
 from polyfactory.factories.pydantic_factory import ModelFactory
+from stompman.core import RuntimeConfig
 
 if TYPE_CHECKING:
     from faststream_stomp.broker import StompBroker
@@ -28,10 +29,8 @@ pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-def broker(first_server_connection_parameters: stompman.ConnectionParameters) -> faststream_stomp.StompBroker:
-    return faststream_stomp.StompBroker(
-        stompman.Client([first_server_connection_parameters], connect_retry_attempts=10)
-    )
+def broker(connection_parameters: stompman.ConnectionParameters) -> faststream_stomp.StompBroker:
+    return faststream_stomp.StompBroker(RuntimeConfig([connection_parameters], connect_retry_attempts=10))
 
 
 @asynccontextmanager
@@ -59,7 +58,7 @@ async def test_simple_publish(
     received_bodies = []
 
     @broker.subscriber(destination)
-    def handle_destination(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> None:  # noqa: B008
+    def handle_destination(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> None:  # ruff: ignore[function-call-in-default-argument]
         received_bodies.append(body)
         if len(received_bodies) == len(sent_bodies):
             event.set()
@@ -115,7 +114,7 @@ async def test_republish(faker: faker.Faker, broker: faststream_stomp.StompBroke
 async def test_router(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
     expected_body, prefix, destination = faker.pystr(), faker.pystr(), faker.pystr()
 
-    def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> bytes:  # noqa: B008
+    def route(body: str, message: stompman.MessageFrame = Context("message.raw_message")) -> bytes:  # ruff: ignore[function-call-in-default-argument]
         assert body == expected_body
         event.set()
         return message.body
@@ -201,6 +200,7 @@ async def test_ack_nack_reject_method_call(
         await event.wait()
 
 
+@pytest.mark.usefixtures("connection_parameters")
 class TestLogging:
     async def test_ok(
         self, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, faker: faker.Faker
@@ -232,14 +232,16 @@ class TestLogging:
         broker.config.broker_config.logger = mock.Mock(log=(log_mock := mock.Mock()))
         event = asyncio.Event()
         message_id: str | None = None
+        received_destination: str | None = None
 
         @dataclass
         class MyError(Exception): ...
 
         @broker.subscriber(destination := faker.pystr())
         def handle_destination(message_frame: Annotated[stompman.MessageFrame, Context("message.raw_message")]) -> None:
-            nonlocal message_id
+            nonlocal message_id, received_destination
             message_id = message_frame.headers["message-id"]
+            received_destination = message_frame.headers["destination"]
             event.set()
             raise MyError
 
@@ -251,7 +253,7 @@ class TestLogging:
             await asyncio.sleep(0)
 
         assert message_id
-        extra = {"destination": destination, "message_id": message_id}
+        extra = {"destination": received_destination, "message_id": message_id}
         assert log_mock.mock_calls[-3:] == [
             mock.call("Received", extra=extra),
             mock.call(message="MyError: ", extra=extra, exc_info=MyError(), log_level=logging.ERROR),
@@ -271,3 +273,30 @@ async def test_publish_pydantic(faker: faker.Faker, broker: faststream_stomp.Sto
 
     async with broker:
         await broker.publish(ModelFactory.create_factory(SomePydanticModel).build(), faker.pystr())
+
+
+async def test_native_runtime_reconnect_and_automatic_reply(
+    broker: faststream_stomp.StompBroker,
+    faker: faker.Faker,
+) -> None:
+    request_destination, reply_destination = faker.pystr(), faker.pystr()
+    received = asyncio.Event()
+    replies = []
+
+    @broker.subscriber(request_destination)
+    def answer(body: str) -> str:
+        return body.upper()
+
+    @broker.subscriber(reply_destination)
+    def response(body: str, message: Annotated[StompStreamMessage, Context()]) -> None:
+        replies.append((body, message.correlation_id))
+        received.set()
+
+    async with broker:
+        await broker.start()
+        await broker.runtime.reconnect()
+        await broker.publish(
+            "question", request_destination, correlation_id="request-1", headers={"reply-to": reply_destination}
+        )
+        await asyncio.wait_for(received.wait(), timeout=5)
+    assert replies == [("QUESTION", "request-1")]

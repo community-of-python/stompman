@@ -18,9 +18,9 @@ __all__ = [
 ]
 
 
-try:  # noqa: RUF067
+try:  # ruff: ignore[non-empty-init-module]
     from faststream_stomp._test_broker_registry import patch_test_broker_registry
 
     patch_test_broker_registry()
-except Exception:  # noqa: BLE001, S110
+except Exception:  # ruff: ignore[blind-except, try-except-pass]
     pass

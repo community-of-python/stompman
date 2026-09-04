@@ -9,9 +9,83 @@ from stompman import (
     FrameParser,
     HeartbeatFrame,
     MessageFrame,
+    SendFrame,
     dump_frame,
 )
+from stompman.frames import StompFrame
 from stompman.serde import NEWLINE
+
+
+def test_send_frame_copies_headers_and_owns_routing_headers() -> None:
+    headers = {
+        "destination": "old-destination",
+        "transaction": "old-transaction",
+        "content-length": "999",
+        "content-type": "application/custom",
+        "persistent": "true",
+    }
+    original_headers = headers.copy()
+    frame = SendFrame.build(
+        body=b"payload",
+        destination="new-destination",
+        transaction=None,
+        content_type=None,
+        add_content_length=False,
+        headers=headers,
+    )
+    assert headers == original_headers
+    assert frame.headers == {
+        "destination": "new-destination",
+        "content-type": "application/custom",
+        "persistent": "true",
+    }
+
+
+def test_send_frame_keeps_previous_frames_independent() -> None:
+    headers = {"persistent": "true"}
+    first = SendFrame.build(
+        body=b"one",
+        destination="first",
+        transaction="tx",
+        content_type="text/plain",
+        add_content_length=True,
+        headers=headers,
+    )
+    second = SendFrame.build(
+        body=b"second",
+        destination="second",
+        transaction=None,
+        content_type=None,
+        add_content_length=True,
+        headers=headers,
+    )
+    headers["persistent"] = "false"
+    assert first.headers == {
+        "destination": "first",
+        "transaction": "tx",
+        "content-type": "text/plain",
+        "content-length": "3",
+        "persistent": "true",
+    }
+    assert second.headers == {"destination": "second", "content-length": "6", "persistent": "true"}
+
+
+@pytest.mark.parametrize("frame_type", [SendFrame, StompFrame])
+def test_frame_round_trips_all_header_escapes(frame_type: type[SendFrame] | type[StompFrame]) -> None:
+    headers = {"key\r\n:\\": "value\r\n:\\"}
+    frame = frame_type(headers=headers)  # type: ignore[arg-type]
+    encoded = dump_frame(frame)
+    assert b"key\\r\\n\\c\\\\:value\\r\\n\\c\\\\\n" in encoded
+    assert list(FrameParser().parse_frames_from_chunk(encoded)) == [frame]
+
+
+@pytest.mark.parametrize("frame_type", [ConnectFrame, ConnectedFrame])
+def test_connect_headers_are_literal(frame_type: type[ConnectFrame] | type[ConnectedFrame]) -> None:
+    headers = {"literal\\c": "value:literal\\n\\r\\\\"}
+    frame = frame_type(headers=headers)  # type: ignore[arg-type]
+    encoded = dump_frame(frame)
+    assert b"literal\\c:value:literal\\n\\r\\\\\n" in encoded
+    assert list(FrameParser().parse_frames_from_chunk(encoded)) == [frame]
 
 
 @pytest.mark.parametrize(
@@ -202,7 +276,7 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
             [ConnectedFrame(headers={"head": "", "header": "1.1"})],  # type: ignore[typeddict-item]
         ),
         # header value with :
-        (b"CONNECTED\nheader:what:?\n\n\x00", [ConnectedFrame(headers={})]),  # type: ignore[typeddict-item]
+        (b"CONNECTED\nheader:what:?\n\n\x00", [ConnectedFrame(headers={"header": "what:?"})]),  # type: ignore[typeddict-item]
         # no NULL
         (b"CONNECTED\nheader:what:?\n\nhello", []),
         # header never end

@@ -1,275 +1,108 @@
 import asyncio
-from collections.abc import AsyncGenerator, Coroutine
-from ssl import SSLContext
-from typing import TYPE_CHECKING, Any, Literal, Self, cast
-from unittest import mock
 
-import faker
 import pytest
-import stompman.connection_lifespan
-from stompman import (
-    AnyServerFrame,
-    Client,
-    ConnectedFrame,
-    ConnectFrame,
-    ConnectionConfirmationTimeout,
-    ConnectionLostError,
-    ConnectionParameters,
-    DisconnectFrame,
-    ErrorFrame,
-    FailedAllConnectAttemptsError,
-    Heartbeat,
-    ReceiptFrame,
-    SendFrame,
-    UnsupportedProtocolVersion,
-)
+import stompman
+from stompman.core import Runtime
 
-from test_stompman.conftest import (
-    BaseMockConnection,
-    EnrichedClient,
-    build_dataclass,
-    create_spying_connection,
-    get_read_frames_with_lifespan,
-)
-
-if TYPE_CHECKING:
-    from stompman.connection import AbstractConnection
+from test_stompman.conftest import ScriptedBroker, wait_until
 
 pytestmark = pytest.mark.anyio
 
 
-async def test_client_connection_lifespan_ok(monkeypatch: pytest.MonkeyPatch, faker: faker.Faker) -> None:
-    connected_frame = build_dataclass(ConnectedFrame, headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"})
-    connection_class, collected_frames = create_spying_connection(
-        [connected_frame], [], [(receipt_frame := build_dataclass(ReceiptFrame))]
-    )
-
-    disconnect_frame = DisconnectFrame(headers={"receipt": (receipt_id := faker.pystr())})
-    monkeypatch.setattr(stompman.connection_lifespan, "_make_receipt_id", mock.Mock(return_value=receipt_id))
-
-    async with EnrichedClient(
-        [ConnectionParameters("localhost", 10, "login", "%3Dpasscode")], connection_class=connection_class
-    ) as client:
-        await asyncio.sleep(0)
-
-    connect_frame = ConnectFrame(
-        headers={
-            "host": "localhost",
-            "accept-version": Client.PROTOCOL_VERSION,
-            "heart-beat": client.heartbeat.to_header(),
-            "login": "login",
-            "passcode": "=passcode",
-        }
-    )
-    assert collected_frames == [connect_frame, connected_frame, disconnect_frame, receipt_frame]
+async def test_handshake_and_disconnect_use_one_reader(broker: ScriptedBroker) -> None:
+    servers = [
+        stompman.ConnectionParameters("localhost", 10, "login", "%3Dpasscode", connect_headers={"client-id": "one"})
+    ]
+    async with broker.client(servers=servers) as client:
+        assert client.is_alive()
+    connection = broker.current
+    connect = connection.writes[0]
+    assert isinstance(connect, stompman.ConnectFrame)
+    assert connect.headers == {
+        "accept-version": "1.2",
+        "host": "localhost",
+        "heart-beat": "0,0",
+        "login": "login",
+        "passcode": "=passcode",
+        "client-id": "one",
+    }
+    assert isinstance(connection.writes[-1], stompman.DisconnectFrame)
+    assert connection.read_calls == 1
+    assert connection.closed
 
 
-async def test_client_connection_lifespan_adds_custom_connect_headers() -> None:
-    connected_frame = build_dataclass(
-        ConnectedFrame,
-        headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"},
-    )
-    connection_class, collected_frames = create_spying_connection(
-        [connected_frame], [], [build_dataclass(ReceiptFrame)]
-    )
-
-    async with EnrichedClient(
-        [
-            ConnectionParameters(
-                "localhost",
-                10,
-                "login",
-                "passcode",
-                connect_headers={"client-id": "client-1"},
-            )
-        ],
-        connection_class=connection_class,
-    ):
-        await asyncio.sleep(0)
-
-    connect_frame = collected_frames[0]
-    assert isinstance(connect_frame, ConnectFrame)
-    assert cast("dict[str, str]", connect_frame.headers)["client-id"] == "client-1"
-
-
-@pytest.mark.usefixtures("mock_sleep")
-async def test_client_connection_lifespan_connection_not_confirmed(
-    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker
+@pytest.mark.parametrize("response", [None, stompman.ErrorFrame(headers={"message": "denied"})])
+async def test_handshake_failure_closes_every_candidate(
+    broker: ScriptedBroker, response: stompman.AnyServerFrame | None
 ) -> None:
-    async def mock_wait_for(future: Coroutine[Any, Any, Any], timeout: float) -> object:
-        assert timeout == connection_confirmation_timeout
-        task = asyncio.create_task(future)
-        await asyncio.sleep(0)
-        return await original_wait_for(task, 0)
-
-    original_wait_for = asyncio.wait_for
-    monkeypatch.setattr("asyncio.wait_for", mock_wait_for)
-    error_frame = build_dataclass(ErrorFrame)
-    connection_confirmation_timeout = faker.pyint()
-
-    class MockConnection(BaseMockConnection):
-        @staticmethod
-        async def read_frames() -> AsyncGenerator[AnyServerFrame, None]:
-            yield error_frame
-            await asyncio.sleep(0)
-
-    with pytest.raises(FailedAllConnectAttemptsError) as exc_info:
-        await EnrichedClient(
-            connection_class=MockConnection, connection_confirmation_timeout=connection_confirmation_timeout
-        ).__aenter__()
-
-    assert exc_info.value == FailedAllConnectAttemptsError(
-        retry_attempts=3,
-        issues=[ConnectionConfirmationTimeout(timeout=connection_confirmation_timeout, frames=[error_frame])] * 3,
-    )
+    broker.handshakes["localhost"] = response
+    with pytest.raises(stompman.FailedAllConnectAttemptsError) as info:
+        await broker.runtime(connection_confirmation_timeout=0.001).start()
+    assert info.value.retry_attempts == 3
+    assert len(info.value.issues) == 3
+    assert all(isinstance(issue, stompman.ConnectionConfirmationTimeout) for issue in info.value.issues)
+    assert all(connection.closed for connection in broker.connections)
 
 
-@pytest.mark.usefixtures("mock_sleep")
-async def test_client_connection_lifespan_unsupported_protocol_version(faker: faker.Faker) -> None:
-    given_version = faker.pystr()
-
-    with pytest.raises(FailedAllConnectAttemptsError) as exc_info:
-        await EnrichedClient(
-            connection_class=create_spying_connection(
-                [build_dataclass(ConnectedFrame, headers={"version": given_version})]
-            )[0],
-            connect_retry_attempts=1,
-        ).__aenter__()
-
-    assert exc_info.value == FailedAllConnectAttemptsError(
-        retry_attempts=1,
-        issues=[UnsupportedProtocolVersion(given_version=given_version, supported_version=Client.PROTOCOL_VERSION)],
-    )
+async def test_unsupported_version(broker: ScriptedBroker) -> None:
+    broker.handshakes["localhost"] = stompman.ConnectedFrame(headers={"version": "1.0"})
+    with pytest.raises(stompman.FailedAllConnectAttemptsError) as info:
+        await broker.runtime(connect_retry_attempts=1).start()
+    assert info.value.issues == [stompman.UnsupportedProtocolVersion(given_version="1.0", supported_version="1.2")]
+    assert broker.current.closed
 
 
-async def test_client_connection_lifespan_disconnect_not_confirmed(
-    monkeypatch: pytest.MonkeyPatch, faker: faker.Faker
-) -> None:
-    wait_for_calls = []
+async def test_failed_start_can_be_retried(broker: ScriptedBroker) -> None:
+    broker.available = False
+    runtime = broker.runtime()
+    with pytest.raises(stompman.FailedAllConnectAttemptsError):
+        await runtime.start()
+    assert runtime.status.state == "closed"
+    broker.available = True
+    async with runtime:
+        assert runtime.is_alive()
 
-    async def mock_wait_for(future: Coroutine[Any, Any, Any], timeout: float) -> object:
-        wait_for_calls.append(timeout)
-        task = asyncio.create_task(future)
-        await asyncio.sleep(0)
-        return await original_wait_for(task, 0)
 
-    original_wait_for = asyncio.wait_for
-    monkeypatch.setattr("asyncio.wait_for", mock_wait_for)
-    disconnect_confirmation_timeout = faker.pyint()
-    read_frames_yields = get_read_frames_with_lifespan([])
-    read_frames_yields[-1].clear()
-    connection_class, _ = create_spying_connection(*read_frames_yields)
+async def test_cancelled_start_closes_handshake_candidates(broker: ScriptedBroker) -> None:
+    broker.handshakes["localhost"] = None
+    runtime = broker.runtime(connection_confirmation_timeout=60)
+    task = asyncio.create_task(runtime.start())
+    await wait_until(lambda: bool(broker.connections))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert broker.current.closed
+    assert runtime.status.state == "closed"
 
-    async with EnrichedClient(
-        connection_class=connection_class, disconnect_confirmation_timeout=disconnect_confirmation_timeout
-    ):
+
+async def test_disconnect_receipt_timeout_is_bounded(broker: ScriptedBroker) -> None:
+    broker.receipts = False
+    async with broker.runtime():
         pass
-
-    assert wait_for_calls[-1] == disconnect_confirmation_timeout
-
-
-async def test_client_heartbeats_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def mock_sleep(delay: float) -> None:
-        await real_sleep(0)
-        sleep_calls.append(delay)
-
-    sleep_calls: list[float] = []
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", mock_sleep)
-
-    connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([]))
-    connection_class.write_heartbeat = (write_heartbeat_mock := mock.Mock())  # type: ignore[method-assign]
-
-    async with EnrichedClient(connection_class=connection_class):
-        await real_sleep(0)
-
-    assert sleep_calls == [0, 1, 1, 1]
-    assert write_heartbeat_mock.mock_calls == [mock.call(), mock.call(), mock.call(), mock.call()]
+    assert broker.current.closed
 
 
-async def test_client_recovers_after_heartbeat_failure_when_keep_alive_enabled() -> None:  # ruff: ignore[complex-structure]
-    expected_connection_count = 2
-    heartbeat_failed = asyncio.Event()
-    second_connection_established = asyncio.Event()
-    sent_connection_numbers: list[int] = []
-    closed_connection_numbers: list[int] = []
-    connection_count = 0
-
-    class RecoveringConnection:
-        last_read_time: float | None = None
-
-        def __init__(self) -> None:
-            nonlocal connection_count
-            connection_count += 1
-            self.connection_number = connection_count
-            self.closed = asyncio.Event()
-            self.disconnect_sent = False
-            self.read_count = 0
-
-        @classmethod
-        async def connect(
-            cls,
-            *,
-            host: str,
-            port: int,
-            timeout: int,
-            read_max_chunk_size: int,
-            ssl: Literal[True] | SSLContext | None,
-            ws_uri_path: str | None = None,
-        ) -> Self:
-            del host, port, timeout, read_max_chunk_size, ssl, ws_uri_path
-            return cls()
-
-        async def close(self) -> None:
-            if self.closed.is_set():
-                return
-            closed_connection_numbers.append(self.connection_number)
-            self.closed.set()
-
-        def write_heartbeat(self) -> None:
-            if self.connection_number == 1 and not heartbeat_failed.is_set():
-                heartbeat_failed.set()
-                raise ConnectionLostError(reason="induced heartbeat failure")
-
-        async def write_frame(self, frame: stompman.AnyClientFrame) -> None:
-            if isinstance(frame, DisconnectFrame):
-                self.disconnect_sent = True
-            elif isinstance(frame, SendFrame):
-                sent_connection_numbers.append(self.connection_number)
-
-        async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:
-            self.read_count += 1
-            if self.read_count == 1:
-                if self.connection_number == expected_connection_count:
-                    second_connection_established.set()
-                yield ConnectedFrame(headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1,1"})
-                return
-            if self.disconnect_sent:
-                yield ReceiptFrame(headers={"receipt-id": "receipt-id-1"})
-                return
-            await self.closed.wait()
-            raise ConnectionLostError(reason="closed")
-
-    async with EnrichedClient(
-        connection_class=cast("type[AbstractConnection]", RecoveringConnection),
-        heartbeat=Heartbeat(will_send_interval_ms=1, want_to_receive_interval_ms=1),
-        connect_retry_attempts=1,
-        connect_retry_interval=0,
-        write_retry_attempts=1,
-        keep_alive_on_connection_failure=True,
-    ) as client:
-        await asyncio.wait_for(heartbeat_failed.wait(), timeout=1)
-        await asyncio.wait_for(second_connection_established.wait(), timeout=1)
-        await asyncio.sleep(0)
-
-        await client.send(b"payload", destination="queue")
-
-        assert not client._listen_task.done()
-        assert sent_connection_numbers == [expected_connection_count]
-
-    assert closed_connection_numbers == [1, expected_connection_count]
+async def test_close_and_restart_are_idempotent(broker: ScriptedBroker) -> None:
+    runtime = broker.runtime()
+    await runtime.close()
+    async with runtime:
+        await runtime.start()
+        assert broker.connect_calls == 1
+    await runtime.close()
+    async with runtime:
+        assert runtime.is_alive()
+        assert broker.connect_calls == 2
 
 
-def test_make_receipt_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.undo()
-    stompman.connection_lifespan._make_receipt_id()
+async def test_context_body_error_is_preserved(broker: ScriptedBroker) -> None:
+    with pytest.raises(ValueError, match="body"):
+        async with broker.client():
+            msg = "body"
+            raise ValueError(msg)
+    assert broker.current.closed
+
+
+async def test_legacy_client_is_dataclass_extendable(broker: ScriptedBroker) -> None:
+    client = broker.client()
+    assert isinstance(client.core, Runtime)
+    assert client.to_config().connection_class is broker.connection_class

@@ -30,7 +30,7 @@ class TestConnectionParametersFromPydanticMultiHostHosts:
         ]
         host_with_credentials = faker.pyint(min_value=0, max_value=3)
         hosts[host_with_credentials]["username"] = "lev"
-        hosts[host_with_credentials]["password"] = "pass"  # noqa: S105
+        hosts[host_with_credentials]["password"] = "pass"  # ruff: ignore[hardcoded-password-string]
 
         result = stompman.ConnectionParameters.from_pydantic_multihost_hosts(hosts)
 

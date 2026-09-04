@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import sys
 import time
@@ -23,7 +24,22 @@ class BrokerWaitTimeoutError(Exception):
     pass
 
 
-BROKERS = (Broker(name="ActiveMQ Artemis", host="127.0.0.1", port=9000, login="admin", passcode=":=123"),)
+BROKERS = (
+    Broker(
+        name="ActiveMQ Artemis",
+        host="127.0.0.1",
+        port=int(os.environ.get("STOMPMAN_ARTEMIS_PORT", "9000")),
+        login="admin",
+        passcode=":=123",
+    ),
+    Broker(
+        name="ActiveMQ Classic",
+        host="127.0.0.1",
+        port=int(os.environ.get("STOMPMAN_CLASSIC_PORT", "9001")),
+        login="admin",
+        passcode=":=123",
+    ),
+)
 CONNECT_TIMEOUT_SECONDS = 2.0
 READ_TIMEOUT_SECONDS = 2.0
 OVERALL_TIMEOUT_SECONDS = 90.0

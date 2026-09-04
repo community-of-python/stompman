@@ -13,11 +13,11 @@ async def handle_message(message_frame: stompman.MessageFrame) -> None:
         raise ValueError(error_message)
 
     await asyncio.sleep(0.1)
-    print(f"received and processed friendly message: {message_content}")  # noqa: T201
+    print(f"received and processed friendly message: {message_content}")  # ruff: ignore[print]
 
 
 def handle_suppressed_exception(exception: Exception, message_frame: stompman.MessageFrame) -> None:
-    print(f"caught an exception, perhaps, producer is not friendly: {message_frame.body=!r} {exception=}")  # noqa: T201
+    print(f"caught an exception, perhaps, producer is not friendly: {message_frame.body=!r} {exception=}")  # ruff: ignore[print]
 
 
 async def main() -> None:

@@ -1,115 +1,128 @@
-import asyncio
-from contextlib import suppress
-from typing import TYPE_CHECKING
-from unittest import mock
-
-import faker
 import pytest
-import stompman.transaction
-from stompman import (
-    AbortFrame,
-    BeginFrame,
-    CommitFrame,
-    SendFrame,
-)
+import stompman
+from stompman.core import TransactionState
 
-from test_stompman.conftest import (
-    CONNECT_FRAME,
-    CONNECTED_FRAME,
-    EnrichedClient,
-    SomeError,
-    create_spying_connection,
-    drop_active_connection,
-    enrich_expected_frames,
-    get_read_frames_with_lifespan,
-)
-
-if TYPE_CHECKING:
-    from stompman.frames import SendHeaders
+from test_stompman.conftest import ScriptedBroker
 
 pytestmark = pytest.mark.anyio
 
 
-async def test_send_message_and_enter_transaction_ok(monkeypatch: pytest.MonkeyPatch, faker: faker.Faker) -> None:
-    body, destination, expires, content_type = faker.binary(length=10), faker.pystr(), faker.pystr(), faker.pystr()
-
-    transaction_id = faker.pystr()
-    monkeypatch.setattr(stompman.transaction, "_make_transaction_id", mock.Mock(return_value=transaction_id))
-
-    connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([]))
-
-    async with EnrichedClient(connection_class=connection_class) as client, client.begin() as transaction:
-        await transaction.send(
-            body=body, destination=destination, content_type=content_type, headers={"expires": expires}
-        )
-        await client.send(body=body, destination=destination, content_type=content_type, headers={"expires": expires})
-        await asyncio.sleep(0)
-
-    send_headers: SendHeaders = {  # type: ignore[typeddict-unknown-key]
-        "content-length": str(len(body)),
-        "content-type": content_type,
-        "destination": destination,
-        "expires": expires,
+async def test_send_and_commit_keep_headers_independent(broker: ScriptedBroker) -> None:
+    headers = {"expires": "123"}
+    async with broker.client() as client:
+        async with client.begin() as transaction:
+            await transaction.send(b"one", "first", content_type="text/plain", headers=headers)
+            await transaction.send(b"longer", "second", headers=headers, add_content_length=False)
+            await client.send(b"outside", "third", headers=headers)
+        assert type(transaction) is stompman.Transaction
+    assert headers == {"expires": "123"}
+    first, second = broker.committed[0]
+    assert first.headers == {
+        "transaction": transaction.id,
+        "destination": "first",
+        "content-length": "3",
+        "content-type": "text/plain",
+        "expires": "123",
     }
-    assert collected_frames == enrich_expected_frames(
-        BeginFrame(headers={"transaction": transaction_id}),
-        SendFrame(headers=send_headers | {"transaction": transaction_id}, body=body),
-        SendFrame(headers=send_headers, body=body),
-        CommitFrame(headers={"transaction": transaction_id}),
+    assert second.headers == {"transaction": transaction.id, "destination": "second", "expires": "123"}
+    outside = next(
+        frame for frame in broker.current.writes if isinstance(frame, stompman.SendFrame) and frame.body == b"outside"
     )
+    assert "transaction" not in outside.headers
 
 
-async def test_send_message_and_enter_transaction_abort(monkeypatch: pytest.MonkeyPatch, faker: faker.Faker) -> None:
-    transaction_id = faker.pystr()
-    monkeypatch.setattr(stompman.transaction, "_make_transaction_id", mock.Mock(return_value=transaction_id))
-    connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([]))
-
-    async with EnrichedClient(connection_class=connection_class) as client:
-        with suppress(SomeError):
-            async with client.begin():
-                raise SomeError
-        await asyncio.sleep(0)
-
-    assert collected_frames == enrich_expected_frames(
-        BeginFrame(headers={"transaction": transaction_id}), AbortFrame(headers={"transaction": transaction_id})
-    )
+async def test_transaction_aborts_on_body_error(broker: ScriptedBroker) -> None:
+    async with broker.client() as client:
+        with pytest.raises(ValueError, match="abort"):
+            async with client.begin() as transaction:
+                await transaction.send(b"no", "q")
+                msg = "abort"
+                raise ValueError(msg)
+        assert any(isinstance(frame, stompman.AbortFrame) for frame in broker.current.writes)
+    assert broker.committed == []
 
 
-async def test_commit_pending_transactions(monkeypatch: pytest.MonkeyPatch, faker: faker.Faker) -> None:
-    body, destination = faker.binary(length=10), faker.pystr()
-    monkeypatch.setattr(
-        stompman.transaction,
-        "_make_transaction_id",
-        mock.Mock(side_effect=[(first_id := faker.pystr()), (second_id := faker.pystr())]),
-    )
-    connection_class, collected_frames = create_spying_connection(*get_read_frames_with_lifespan([CONNECTED_FRAME], []))
-    async with EnrichedClient(connection_class=connection_class) as client:
-        async with client.begin() as first_transaction:
-            await first_transaction.send(body, destination=destination)
-            await drop_active_connection(client)
-        async with client.begin() as second_transaction:
-            await second_transaction.send(body, destination=destination)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-
-    assert collected_frames == enrich_expected_frames(
-        BeginFrame(headers={"transaction": first_id}),
-        SendFrame(
-            headers={"destination": destination, "transaction": first_id, "content-length": str(len(body))}, body=body
-        ),
-        CONNECT_FRAME,
-        CONNECTED_FRAME,
-        SendFrame(
-            headers={"destination": destination, "transaction": first_id, "content-length": str(len(body))}, body=body
-        ),
-        CommitFrame(headers={"transaction": first_id}),
-        BeginFrame(headers={"transaction": second_id}),
-        SendFrame(
-            headers={"destination": destination, "transaction": second_id, "content-length": str(len(body))}, body=body
-        ),
-        CommitFrame(headers={"transaction": second_id}),
-    )
+async def test_open_transaction_is_restored_without_early_commit(broker: ScriptedBroker) -> None:
+    async with broker.runtime() as runtime:
+        async with runtime.begin(transaction_id="tx") as transaction:
+            await transaction.send(b"first", "q")
+            await runtime.reconnect()
+            assert transaction.state.value == TransactionState.OPEN.value
+            assert broker.committed == []
+            assert [type(frame) for frame in broker.current.writes] == [
+                stompman.ConnectFrame,
+                stompman.BeginFrame,
+                stompman.SendFrame,
+            ]
+            await transaction.send(b"second", "q")
+        assert transaction.state == TransactionState.COMPLETED
+    assert [frame.body for frame in broker.committed[0]] == [b"first", b"second"]
 
 
-def test_make_transaction_id() -> None:
-    stompman.transaction._make_transaction_id()
+async def test_failed_triggering_send_is_not_replayed_twice(broker: ScriptedBroker) -> None:
+    async with broker.runtime() as runtime:
+        first_connection = broker.current
+        async with runtime.begin() as transaction:
+            await transaction.send(b"first", "q")
+            broker.fail_before = lambda frame, connection: (
+                connection is first_connection and isinstance(frame, stompman.SendFrame) and frame.body == b"second"
+            )
+            await transaction.send(b"second", "q")
+        assert first_connection.closed
+    assert [frame.body for frame in broker.committed[0]] == [b"first", b"second"]
+
+
+async def test_replay_journal_cannot_be_mutated_by_caller(broker: ScriptedBroker) -> None:
+    async with broker.runtime() as runtime, runtime.begin() as transaction:
+        await transaction.send(b"first", "q")
+        frames = transaction.sent_frames
+        frames[0].headers["destination"] = "wrong"
+        frames.clear()
+        await runtime.reconnect()
+    assert broker.committed[0][0].headers["destination"] == "q"
+
+
+async def test_unknown_commit_is_reported_and_never_replayed(broker: ScriptedBroker) -> None:
+    async with broker.runtime() as runtime:
+        first = broker.current
+        broker.fail_after = lambda frame, connection: connection is first and isinstance(frame, stompman.CommitFrame)
+        with pytest.raises(stompman.TransactionOutcomeUnknownError):
+            async with runtime.begin() as transaction:
+                await transaction.send(b"once", "q")
+        assert transaction.state is TransactionState.UNCERTAIN
+        await runtime.reconnect()
+        assert not any(isinstance(frame, stompman.BeginFrame) for frame in broker.current.writes)
+    assert len(broker.committed) == 1
+
+
+async def test_commit_receipt_timeout_is_unknown(broker: ScriptedBroker) -> None:
+    broker.receipts = False
+    async with broker.runtime() as runtime:
+        with pytest.raises(stompman.TransactionOutcomeUnknownError) as info:
+            async with runtime.begin(receipt_timeout=0.001) as transaction:
+                await transaction.send(b"accepted", "q")
+        assert isinstance(info.value.reason, stompman.ReceiptTimeoutError)
+        assert transaction.state is TransactionState.UNCERTAIN
+        await runtime.reconnect()
+    assert len(broker.committed) == 1
+
+
+async def test_receipt_confirmed_transaction_and_completed_reuse_rejected(broker: ScriptedBroker) -> None:
+    async with broker.runtime() as runtime:
+        async with runtime.begin(receipt_timeout=0.1) as transaction:
+            await transaction.send(b"one", "q")
+        with pytest.raises(RuntimeError, match="completed"):
+            await transaction.send(b"two", "q")
+        with pytest.raises(RuntimeError, match="already"):
+            await transaction.__aenter__()
+
+
+async def test_abort_after_connection_loss_does_not_reconnect(broker: ScriptedBroker) -> None:
+    async with broker.runtime() as runtime:
+        transaction = await runtime.begin().__aenter__()
+        await transaction.send(b"one", "q")
+        # The replacement has a valid BEGIN; abort remains legal after restoration.
+        await runtime.reconnect()
+        await transaction.abort()
+        assert transaction.state is TransactionState.ABORTED
+    assert broker.committed == []
