@@ -7,6 +7,7 @@ from stompman.errors import (
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
     StompProtocolConnectionIssue,
+    SubscriptionError,
     UnsupportedProtocolVersion,
 )
 from stompman.frames import (
@@ -30,7 +31,7 @@ from stompman.frames import (
     SubscribeFrame,
     UnsubscribeFrame,
 )
-from stompman.logger import LOGGER as logger  # noqa: N811
+from stompman.logger import LOGGER as logger  # ruff: ignore[constant-imported-as-non-constant]
 from stompman.serde import FrameParser, dump_frame
 from stompman.subscription import AckableMessageFrame, AutoAckSubscription, ManualAckSubscription
 from stompman.transaction import Transaction
@@ -67,6 +68,7 @@ __all__ = [
     "SendFrame",
     "StompProtocolConnectionIssue",
     "SubscribeFrame",
+    "SubscriptionError",
     "Transaction",
     "UnsubscribeFrame",
     "UnsupportedProtocolVersion",

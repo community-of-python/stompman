@@ -37,6 +37,7 @@ SubscribeHeaders = TypedDict(
         "id": str,
         "destination": str,
         "ack": NotRequired[AckMode],
+        "receipt": NotRequired[str],
         "content-length": NotRequired[str],
     },
 )
@@ -115,6 +116,7 @@ ErrorHeaders = TypedDict(
     "ErrorHeaders",
     {
         "message": str,
+        "receipt-id": NotRequired[str],
         "content-length": NotRequired[str],
         "content-type": NotRequired[str],
     },

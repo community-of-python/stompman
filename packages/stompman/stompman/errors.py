@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
-from stompman.config import ConnectionParameters  # noqa: TC001
+from stompman.config import ConnectionParameters  # ruff: ignore[typing-only-first-party-import]
 from stompman.frames import ErrorFrame, HeartbeatFrame, MessageFrame, ReceiptFrame
 
 
@@ -52,3 +53,12 @@ class FailedAllConnectAttemptsError(Error):
 @dataclass(kw_only=True)
 class FailedAllWriteAttemptsError(Error):
     retry_attempts: int
+
+
+@dataclass(kw_only=True)
+class SubscriptionError(Error):
+    """A receipt-confirmed subscription could not be established or restored."""
+
+    subscription_id: str
+    reason: Literal["rejected", "timeout", "connection_lost", "unsubscribed"]
+    frame: ErrorFrame | None = field(default=None, repr=False)

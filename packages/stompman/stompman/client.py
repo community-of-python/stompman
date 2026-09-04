@@ -13,6 +13,7 @@ from stompman.config import ConnectionParameters, Heartbeat
 from stompman.connection import AbstractConnection, Connection
 from stompman.connection_lifespan import ConnectionLifespan
 from stompman.connection_manager import ConnectionManager
+from stompman.errors import SubscriptionError
 from stompman.frames import (
     AckMode,
     ConnectedFrame,
@@ -92,6 +93,7 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             no_message_restart_interval=self.no_message_restart_interval,
             keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
+            on_connection_lost=self._active_subscriptions.connection_lost,
             ssl=self.ssl,
         )
         if self.max_concurrent_handlers is not None:
@@ -112,6 +114,7 @@ class Client:
         finally:
             self._listen_task.cancel()
             await asyncio.wait([self._listen_task])
+            await self._active_subscriptions.cancel_confirmation_tasks()
             await self._exit_stack.aclose()
 
     async def _listen_to_frames(self) -> None:
@@ -147,11 +150,18 @@ class Client:
                                     s.release()
 
                                 task.add_done_callback(_release)
-                    case ErrorFrame():
-                        if self.on_error_frame:
-                            self.on_error_frame(frame)
-                    case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
+                    case ErrorFrame() | ReceiptFrame():
+                        self._handle_subscription_frame(frame, epoch=epoch)
+                    case HeartbeatFrame() | ConnectedFrame():
                         pass
+
+    def _handle_subscription_frame(self, frame: ErrorFrame | ReceiptFrame, *, epoch: int) -> None:
+        if isinstance(frame, ReceiptFrame):
+            self._active_subscriptions.handle_receipt(frame, epoch=epoch)
+        else:
+            self._active_subscriptions.handle_error(frame, epoch=epoch)
+            if self.on_error_frame:
+                self.on_error_frame(frame)
 
     async def send(
         self,
@@ -189,6 +199,8 @@ class Client:
         headers: dict[str, str] | None = None,
         on_suppressed_exception: Callable[[Exception, MessageFrame], Any],
         suppressed_exception_classes: tuple[type[Exception], ...] = (Exception,),
+        receipt_timeout: float | None = None,
+        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> "AutoAckSubscription":
         subscription = AutoAckSubscription(
             destination=destination,
@@ -197,6 +209,8 @@ class Client:
             ack=ack,
             on_suppressed_exception=on_suppressed_exception,
             suppressed_exception_classes=suppressed_exception_classes,
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
             _connection_manager=self._connection_manager,
             _active_subscriptions=self._active_subscriptions,
         )
@@ -210,12 +224,16 @@ class Client:
         *,
         ack: AckMode = "client-individual",
         headers: dict[str, str] | None = None,
+        receipt_timeout: float | None = None,
+        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> "ManualAckSubscription":
         subscription = ManualAckSubscription(
             destination=destination,
             handler=handler,
             headers=headers,
             ack=ack,
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
             _connection_manager=self._connection_manager,
             _active_subscriptions=self._active_subscriptions,
         )

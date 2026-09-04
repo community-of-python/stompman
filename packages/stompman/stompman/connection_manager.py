@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from ssl import SSLContext
@@ -62,6 +62,7 @@ class ConnectionManager:
     check_server_alive_interval_factor: int
     no_message_restart_interval: timedelta | None
     keep_alive_on_connection_failure: bool = False
+    on_connection_lost: Callable[[AbstractConnection], None] | None = None
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
@@ -70,6 +71,8 @@ class ConnectionManager:
     _monitor_no_message_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _reconnection_count: int = field(default=0, init=False)
     _last_message_received_time: float = field(init=False, default_factory=time.time)
+    _connected_at_monotonic: float = field(init=False, default=0)
+    _reconnect_not_before: float = field(init=False, default=0)
 
     async def __aenter__(self) -> Self:
         await self._task_group.__aenter__()
@@ -201,6 +204,8 @@ class ConnectionManager:
             return connection_result
         finally:
             if not connection_established:
+                if self.on_connection_lost is not None:
+                    self.on_connection_lost(connection)
                 await connection.close()
 
     async def _get_active_connection_state(self, *, is_initial_call: bool = False) -> ActiveConnectionState:
@@ -213,11 +218,15 @@ class ConnectionManager:
             if self._active_connection_state:
                 return self._active_connection_state
 
+            if (delay := self._reconnect_not_before - time.monotonic()) > 0:
+                await asyncio.sleep(delay)
+
             for attempt in range(self.connect_retry_attempts):
                 connection_result = await self._connect_to_any_server()
 
                 if isinstance(connection_result, ActiveConnectionState):
                     self._active_connection_state = connection_result
+                    self._connected_at_monotonic = time.monotonic()
                     self._last_message_received_time = time.time()
                     self._restart_no_message_monitor()
                     if not is_initial_call:
@@ -246,6 +255,11 @@ class ConnectionManager:
         )
         self._active_connection_state = None
         self._reconnection_count += 1
+        # A successful handshake must not bypass retry spacing when the peer
+        # immediately closes the connection again.
+        self._reconnect_not_before = self._connected_at_monotonic + self.connect_retry_interval
+        if self.on_connection_lost is not None:
+            self.on_connection_lost(connection_state.connection)
         await connection_state.connection.close()
 
     async def write_heartbeat_reconnecting(self) -> None:
