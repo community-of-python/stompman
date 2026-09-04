@@ -1,8 +1,9 @@
 from dataclasses import dataclass, field
-from typing import Self, cast
+from typing import Any, Self, cast
 
 import stompman
-from faststream import AckPolicy, BatchPublishCommand, PublishCommand, StreamMessage
+from faststream import AckPolicy, BatchPublishCommand, PublishCommand, PublishType, StreamMessage
+from faststream._internal.basic_types import SendableMessage
 from faststream._internal.configs import (
     BrokerConfig,
     PublisherSpecificationConfig,
@@ -44,9 +45,40 @@ class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
 
 
 class StompPublishCommand(BatchPublishCommand):
+    def __init__(
+        self,
+        body: SendableMessage,
+        /,
+        *bodies: SendableMessage,
+        _publish_type: PublishType,
+        reply_to: str = "",
+        destination: str = "",
+        correlation_id: str | None = None,
+        headers: dict[str, Any] | None = None,
+        add_content_length: bool | None = None,
+    ) -> None:
+        super().__init__(
+            body,
+            *bodies,
+            _publish_type=_publish_type,
+            reply_to=reply_to,
+            destination=destination,
+            correlation_id=correlation_id,
+            headers=headers,
+        )
+        self.add_content_length = add_content_length
+
     @classmethod
-    def from_cmd(cls, cmd: PublishCommand, *, batch: bool = False) -> Self:  # noqa: ARG003
+    def from_cmd(
+        cls,
+        cmd: PublishCommand,
+        *,
+        batch: bool = False,  # noqa: ARG003
+        add_content_length: bool | None = None,
+    ) -> Self:
         messages = cmd.batch_bodies
+        if isinstance(cmd, StompPublishCommand) and cmd.add_content_length is not None:
+            add_content_length = cmd.add_content_length
         return cls(
             *messages,
             _publish_type=cmd.publish_type,
@@ -54,6 +86,7 @@ class StompPublishCommand(BatchPublishCommand):
             destination=cmd.destination,
             correlation_id=cmd.correlation_id,
             headers=cmd.headers,
+            add_content_length=add_content_length,
         )
 
 
@@ -78,6 +111,7 @@ class StompSubscriberSpecificationConfig(_StompBaseSubscriberConfig, SubscriberS
 @dataclass(kw_only=True)
 class StompSubscriberUsecaseConfig(_StompBaseSubscriberConfig, SubscriberUsecaseConfig):
     _outer_config: BrokerConfigWithStompClient
+    reply_add_content_length: bool | None
     parser: AsyncCallable = StompStreamMessage.from_frame
     decoder: AsyncCallable = field(default=to_async(decode_message))
 
@@ -102,6 +136,7 @@ class StompPublisherSpecificationConfig(_StompBasePublisherConfig, PublisherSpec
 @dataclass(kw_only=True)
 class StompPublisherUsecaseConfig(_StompBasePublisherConfig, PublisherUsecaseConfig):
     _outer_config: BrokerConfigWithStompClient
+    add_content_length: bool | None
 
     @property
     def full_destination(self) -> str:

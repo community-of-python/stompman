@@ -101,6 +101,7 @@ class StompBroker(
         middlewares: Sequence[type[BaseMiddleware] | BrokerMiddleware[stompman.MessageFrame, StompPublishCommand]] = (),
         graceful_timeout: float | None = 15.0,
         routers: Sequence[Registrator[stompman.MessageFrame]] = (),
+        add_content_length: bool = True,
         # Logging args
         logger: LoggerProto | None = EMPTY,
         log_level: int = logging.INFO,
@@ -124,7 +125,11 @@ class StompBroker(
             broker_dependencies=dependencies,
             graceful_timeout=graceful_timeout,
             extra_context={"broker": self},
-            producer=StompProducer(client=client, serializer=fd_config._serializer),
+            producer=StompProducer(
+                client=client,
+                serializer=fd_config._serializer,
+                add_content_length=add_content_length,
+            ),
             client=client,
         )
         specification = BrokerSpec(
@@ -193,6 +198,7 @@ class StompBroker(
         *,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
+        add_content_length: bool | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
             message,
@@ -200,6 +206,7 @@ class StompBroker(
             destination=destination,
             correlation_id=correlation_id,
             headers=headers,
+            add_content_length=add_content_length,
         )
         return typing.cast("None", await self._basic_publish(publish_command, producer=self.config.producer))
 
@@ -210,6 +217,7 @@ class StompBroker(
         *,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
+        add_content_length: bool | None = None,
     ) -> Any:  # noqa: ANN401
         publish_command = StompPublishCommand(
             message,
@@ -217,6 +225,7 @@ class StompBroker(
             destination=destination,
             correlation_id=correlation_id,
             headers=headers,
+            add_content_length=add_content_length,
         )
         return await self._basic_request(publish_command, producer=self.config.producer)
 
@@ -226,6 +235,7 @@ class StompBroker(
         destination: str,
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
+        add_content_length: bool | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
             *messages,
@@ -233,5 +243,6 @@ class StompBroker(
             destination=destination,
             correlation_id=correlation_id,
             headers=headers,
+            add_content_length=add_content_length,
         )
         return typing.cast("None", await self._basic_publish_batch(publish_command, producer=self.config.producer))

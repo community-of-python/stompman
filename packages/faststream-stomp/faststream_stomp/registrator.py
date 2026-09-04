@@ -27,6 +27,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         *,
         ack_mode: stompman.AckMode = "client-individual",
         headers: dict[str, str] | None = None,
+        reply_add_content_length: bool | None = None,
         # other args
         dependencies: Iterable[Dependant] = (),
         parser: CustomCallable | None = None,
@@ -40,6 +41,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
             destination_without_prefix=destination,
             ack_mode=ack_mode,
             headers=headers,
+            reply_add_content_length=reply_add_content_length,
         )
         calls = CallsCollection[stompman.MessageFrame]()
         specification = StompSubscriberSpecification(
@@ -71,10 +73,12 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         title_: str | None = None,
         description_: str | None = None,
         include_in_schema: bool = True,
+        add_content_length: bool | None = None,
     ) -> StompPublisher:
         usecase_config = StompPublisherUsecaseConfig(
             _outer_config=self.config,  # type: ignore[arg-type]
             destination_without_prefix=destination,
+            add_content_length=add_content_length,
         )
         specification = StompPublisherSpecification(
             _outer_config=self.config,  # type: ignore[arg-type]

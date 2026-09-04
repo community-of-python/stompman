@@ -25,14 +25,27 @@ class StompProducer(ProducerProto[StompPublishCommand]):
     _parser: AsyncCallable
     _decoder: AsyncCallable
 
-    def __init__(self, *, client: stompman.Client, serializer: SerializerProto | None) -> None:
+    def __init__(
+        self,
+        *,
+        client: stompman.Client,
+        serializer: SerializerProto | None,
+        add_content_length: bool = True,
+    ) -> None:
         self.client = client
         self.serializer = serializer
+        self.add_content_length = add_content_length
         self.codec: CodecProto = DefaultCodec()
 
     async def publish(self, cmd: StompPublishCommand) -> None:
         body, content_type = encode_message(cmd.body, serializer=self.serializer)
-        await self.client.send(body, cmd.destination, content_type=content_type, headers=_make_headers_for_publish(cmd))
+        await self.client.send(
+            body,
+            cmd.destination,
+            content_type=content_type,
+            add_content_length=self._resolve_add_content_length(cmd),
+            headers=_make_headers_for_publish(cmd),
+        )
 
     async def request(self, cmd: StompPublishCommand) -> NoReturn:
         msg = "`StompProducer` can be used only to publish a response for `reply-to` or `RPC` messages."
@@ -43,8 +56,15 @@ class StompProducer(ProducerProto[StompPublishCommand]):
             for one_body in cmd.batch_bodies:
                 body, content_type = encode_message(one_body, serializer=self.serializer)
                 await transaction.send(
-                    body, cmd.destination, content_type=content_type, headers=_make_headers_for_publish(cmd)
+                    body,
+                    cmd.destination,
+                    content_type=content_type,
+                    add_content_length=self._resolve_add_content_length(cmd),
+                    headers=_make_headers_for_publish(cmd),
                 )
+
+    def _resolve_add_content_length(self, cmd: StompPublishCommand) -> bool:
+        return self.add_content_length if cmd.add_content_length is None else cmd.add_content_length
 
 
 def _make_headers_for_publish(cmd: StompPublishCommand) -> dict[str, str]:
@@ -82,7 +102,7 @@ class StompPublisher(PublisherUsecase):
     async def _publish(
         self, cmd: PublishCommand, *, _extra_middlewares: typing.Iterable[PublisherMiddleware[PublishCommand]]
     ) -> None:
-        publish_command = StompPublishCommand.from_cmd(cmd)
+        publish_command = StompPublishCommand.from_cmd(cmd, add_content_length=self.config.add_content_length)
         publish_command.destination = self.config.full_destination
         return typing.cast(
             "None",
@@ -92,7 +112,12 @@ class StompPublisher(PublisherUsecase):
         )
 
     async def publish(
-        self, message: SendableMessage, *, correlation_id: str | None = None, headers: dict[str, str] | None = None
+        self,
+        message: SendableMessage,
+        *,
+        correlation_id: str | None = None,
+        headers: dict[str, str] | None = None,
+        add_content_length: bool | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
             message,
@@ -100,6 +125,7 @@ class StompPublisher(PublisherUsecase):
             destination=self.config.full_destination,
             correlation_id=correlation_id,
             headers=headers,
+            add_content_length=self.config.add_content_length if add_content_length is None else add_content_length,
         )
         return typing.cast(
             "None",
@@ -109,7 +135,12 @@ class StompPublisher(PublisherUsecase):
         )
 
     async def request(
-        self, message: SendableMessage, *, correlation_id: str | None = None, headers: dict[str, str] | None = None
+        self,
+        message: SendableMessage,
+        *,
+        correlation_id: str | None = None,
+        headers: dict[str, str] | None = None,
+        add_content_length: bool | None = None,
     ) -> Any:  # noqa: ANN401
         publish_command = StompPublishCommand(
             message,
@@ -117,11 +148,16 @@ class StompPublisher(PublisherUsecase):
             destination=self.config.full_destination,
             correlation_id=correlation_id,
             headers=headers,
+            add_content_length=self.config.add_content_length if add_content_length is None else add_content_length,
         )
         return await self._basic_request(publish_command, producer=self.config._outer_config.producer)
 
     async def publish_batch(
-        self, *messages: SendableMessage, correlation_id: str | None = None, headers: dict[str, str] | None = None
+        self,
+        *messages: SendableMessage,
+        correlation_id: str | None = None,
+        headers: dict[str, str] | None = None,
+        add_content_length: bool | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
             *messages,
@@ -129,6 +165,7 @@ class StompPublisher(PublisherUsecase):
             destination=self.config.full_destination,
             correlation_id=correlation_id,
             headers=headers,
+            add_content_length=self.config.add_content_length if add_content_length is None else add_content_length,
         )
         return typing.cast(
             "None",
