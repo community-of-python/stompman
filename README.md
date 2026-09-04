@@ -181,6 +181,11 @@ that connection; it does not remove previously confirmed subscriptions.
 Neither subscription confirmation nor a publish receipt proves downstream
 business processing.
 
+The handler concurrency limit remains in effect while confirmations are
+pending. The reader temporarily buffers message handlers waiting for capacity
+so it can reach interleaved receipts/errors, then resumes normal backpressure.
+Use broker prefetch/consumer-window settings to bound deliveries on the wire.
+
 ### Cleaning Up
 
 stompman takes care of cleaning up resources automatically. When you leave the context of async context managers `stompman.Client()`, or `client.begin()`, the necessary frames will be sent to the server.

@@ -10,7 +10,7 @@ from stompman.connection import AbstractConnection
 from test_stompman.conftest import BaseMockConnection, EnrichedClient, noop_message_handler
 
 pytestmark = [pytest.mark.anyio, pytest.mark.timeout(10)]
-Incoming = dict[AbstractConnection, asyncio.Queue[stompman.AnyServerFrame | stompman.ConnectionLostError]]
+Incoming = dict[int, asyncio.Queue[stompman.AnyServerFrame | stompman.ConnectionLostError]]
 Outgoing = asyncio.Queue[tuple[AbstractConnection, stompman.AnyClientFrame]]
 
 
@@ -31,7 +31,7 @@ async def client(
     async def write_frame(  # ruff: ignore[unused-async]
         connection: AbstractConnection, frame: stompman.AnyClientFrame
     ) -> None:
-        queue = incoming.setdefault(connection, asyncio.Queue())
+        queue = incoming.setdefault(id(connection), asyncio.Queue())
         outgoing.put_nowait((connection, frame))
         if isinstance(frame, stompman.ConnectFrame):
             queue.put_nowait(stompman.ConnectedFrame(headers={"version": "1.2", "heart-beat": "1000,1000"}))
@@ -39,7 +39,7 @@ async def client(
             queue.put_nowait(stompman.ReceiptFrame(headers={"receipt-id": frame.headers["receipt"]}))
 
     async def read_frames(connection: AbstractConnection) -> AsyncGenerator[stompman.AnyServerFrame, None]:
-        queue = incoming.setdefault(connection, asyncio.Queue())
+        queue = incoming.setdefault(id(connection), asyncio.Queue())
         while True:
             frame = await queue.get()
             if isinstance(frame, stompman.ConnectionLostError):
@@ -49,7 +49,10 @@ async def client(
     monkeypatch.setattr(BaseMockConnection, "write_frame", write_frame)
     monkeypatch.setattr(BaseMockConnection, "read_frames", read_frames)
     async with EnrichedClient(
-        connection_class=BaseMockConnection, connect_retry_interval=0, on_error_frame=mock.Mock()
+        connection_class=BaseMockConnection,
+        connect_retry_interval=0,
+        max_concurrent_handlers=1,
+        on_error_frame=mock.Mock(),
     ) as instance:
         try:
             yield instance
@@ -67,7 +70,7 @@ async def next_subscribe(outgoing: Outgoing) -> tuple[AbstractConnection, stompm
 
 
 def receipt(incoming: Incoming, connection: AbstractConnection, frame: stompman.SubscribeFrame) -> None:
-    incoming[connection].put_nowait(stompman.ReceiptFrame(headers={"receipt-id": frame.headers["receipt"]}))
+    incoming[id(connection)].put_nowait(stompman.ReceiptFrame(headers={"receipt-id": frame.headers["receipt"]}))
 
 
 def remaining_frames(outgoing: Outgoing) -> list[stompman.AnyClientFrame]:
@@ -91,8 +94,8 @@ async def test_subscribe_waits_for_matching_receipt(
     async with asyncio.TaskGroup() as tasks:
         task = tasks.create_task(subscribe)
         connection, frame = await next_subscribe(outgoing)
-        incoming[connection].put_nowait(stompman.ReceiptFrame(headers={"receipt-id": "unrelated"}))
-        incoming[connection].put_nowait(
+        incoming[id(connection)].put_nowait(stompman.ReceiptFrame(headers={"receipt-id": "unrelated"}))
+        incoming[id(connection)].put_nowait(
             stompman.ErrorFrame(headers={"message": "unrelated", "receipt-id": "unrelated"})
         )
         await asyncio.sleep(0)
@@ -123,14 +126,14 @@ async def test_rejected_subscription_is_removed_before_callback_and_not_replayed
         )
     )
     connection, frame = await next_subscribe(outgoing)
-    incoming[connection].put_nowait(
+    incoming[id(connection)].put_nowait(
         stompman.ErrorFrame(headers={"message": "subscription rejected", "receipt-id": frame.headers["receipt"]})
     )
     with pytest.raises(stompman.SubscriptionError, match="rejected"):
         await task
     assert len(failures) == 1
     assert not client._active_subscriptions.pending_receipts
-    incoming[connection].put_nowait(stompman.ConnectionLostError(reason="peer closed after ERROR"))
+    incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="peer closed after ERROR"))
     await asyncio.sleep(0)
     await client.send(b"still usable", "test")
     assert all(not isinstance(frame, stompman.SubscribeFrame) for frame in remaining_frames(outgoing))
@@ -159,7 +162,7 @@ async def test_connection_loss_fails_unconfirmed_subscription(
 ) -> None:
     task = asyncio.create_task(client.subscribe_with_manual_ack("test", noop_message_handler, receipt_timeout=1))
     connection, _ = await next_subscribe(outgoing)
-    incoming[connection].put_nowait(stompman.ConnectionLostError(reason="connection lost before receipt"))
+    incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="connection lost before receipt"))
     with pytest.raises(stompman.SubscriptionError, match="connection_lost"):
         await task
     assert not client._active_subscriptions.get_all()
@@ -179,11 +182,11 @@ async def test_concurrent_subscription_rejection_does_not_remove_confirmed_subsc
     error_headers: stompman.frames.ErrorHeaders = {"message": "rejected"}
     if correlated:
         error_headers["receipt-id"] = rejected.headers["receipt"]
-    incoming[connection].put_nowait(stompman.ErrorFrame(headers=error_headers))
+    incoming[id(connection)].put_nowait(stompman.ErrorFrame(headers=error_headers))
     with pytest.raises(stompman.SubscriptionError, match="rejected"):
         await failed
     assert client._active_subscriptions.get_all() == [healthy]
-    incoming[connection].put_nowait(stompman.ConnectionLostError(reason="peer closed"))
+    incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="peer closed"))
     restored_connection, restored = await next_subscribe(outgoing)
     assert restored.headers["id"] == healthy.id
     assert restored.headers["receipt"] != accepted.headers["receipt"]
@@ -205,10 +208,10 @@ async def test_resubscription_failure_notifies_owner_and_cleans_up(
     connection, initial = await next_subscribe(outgoing)
     receipt(incoming, connection, initial)
     await task
-    incoming[connection].put_nowait(stompman.ConnectionLostError(reason="force restore"))
+    incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="force restore"))
     restored_connection, restored = await next_subscribe(outgoing)
     if reject:
-        incoming[restored_connection].put_nowait(
+        incoming[id(restored_connection)].put_nowait(
             stompman.ErrorFrame(headers={"message": "rejected", "receipt-id": restored.headers["receipt"]})
         )
     error = await asyncio.wait_for(failure, timeout=1)
@@ -224,8 +227,72 @@ async def test_invalid_receipt_timeout(client: stompman.Client, timeout: float) 
     assert not client._active_subscriptions.get_all()
 
 
-async def test_cancellation_after_receipt_during_write_cleans_up(
-    client: stompman.Client, incoming: Incoming, outgoing: Outgoing, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("start_confirmation_early", [True, False])
+async def test_receipts_are_processed_when_handler_capacity_is_exhausted(
+    client: stompman.Client,
+    incoming: Incoming,
+    outgoing: Outgoing,
+    *,
+    start_confirmation_early: bool,
+) -> None:
+    start_confirmation = asyncio.Event()
+    finished = asyncio.Event()
+    failures: list[stompman.SubscriptionError] = []
+    active_handlers = 0
+    maximum_handlers = 0
+
+    async def handler(frame: stompman.AckableMessageFrame) -> None:
+        nonlocal active_handlers, maximum_handlers
+        active_handlers += 1
+        maximum_handlers = max(maximum_handlers, active_handlers)
+        try:
+            if frame.body == b"first":
+                await start_confirmation.wait()
+                subscription = await client.subscribe_with_manual_ack(
+                    "responses", noop_message_handler, receipt_timeout=1, on_subscription_error=failures.append
+                )
+                await subscription.unsubscribe()
+            else:
+                finished.set()
+        finally:
+            active_handlers -= 1
+
+    source = await client.subscribe_with_manual_ack("source", handler, ack="auto")
+    connection, source_frame = await next_subscribe(outgoing)
+    incoming[id(connection)].put_nowait(
+        stompman.MessageFrame(
+            headers={"subscription": source_frame.headers["id"], "destination": "source", "message-id": "1"},
+            body=b"first",
+        )
+    )
+    if start_confirmation_early:
+        start_confirmation.set()
+        response_connection, response_frame = await next_subscribe(outgoing)
+    incoming[id(connection)].put_nowait(
+        stompman.MessageFrame(
+            headers={"subscription": source_frame.headers["id"], "destination": "source", "message-id": "2"},
+            body=b"second",
+        )
+    )
+    if not start_confirmation_early:
+        await asyncio.sleep(0)
+        start_confirmation.set()
+        response_connection, response_frame = await next_subscribe(outgoing)
+    receipt(incoming, response_connection, response_frame)
+    await asyncio.wait_for(finished.wait(), timeout=2)
+    assert failures == []
+    assert maximum_handlers == 1
+    await source.unsubscribe()
+
+
+@pytest.mark.parametrize("cancel", [True, False])
+async def test_failure_after_receipt_during_write_cleans_up(
+    client: stompman.Client,
+    incoming: Incoming,
+    outgoing: Outgoing,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cancel: bool,
 ) -> None:
     write_frame = BaseMockConnection.write_frame
     blocked = asyncio.Event()
@@ -236,12 +303,16 @@ async def test_cancellation_after_receipt_during_write_cleans_up(
             await blocked.wait()
 
     monkeypatch.setattr(BaseMockConnection, "write_frame", blocked_write)
-    task = asyncio.create_task(client.subscribe_with_manual_ack("test", noop_message_handler, receipt_timeout=1))
+    task = asyncio.create_task(client.subscribe_with_manual_ack("test", noop_message_handler, receipt_timeout=0.05))
     connection, frame = await next_subscribe(outgoing)
     receipt(incoming, connection, frame)
     await asyncio.sleep(0)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    if cancel:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(stompman.SubscriptionError, match="timeout"):
+            await task
     assert not client._active_subscriptions.get_all()
     assert not client._active_subscriptions.pending_receipts

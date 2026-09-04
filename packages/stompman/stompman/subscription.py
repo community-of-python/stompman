@@ -38,6 +38,7 @@ class ActiveSubscriptions:
     event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     pending_receipts: dict[str, _PendingConfirmation] = field(default_factory=dict, init=False)
     confirmation_tasks: set[asyncio.Task[None]] = field(default_factory=set, init=False)
+    confirmation_started: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
     def __post_init__(self) -> None:
         self.event.set()
@@ -70,6 +71,8 @@ class ActiveSubscriptions:
     def handle_receipt(self, frame: ReceiptFrame, *, epoch: int) -> None:
         if (pending := self.pending_receipts.get(frame.headers["receipt-id"])) and pending.epoch == epoch:
             del self.pending_receipts[pending.receipt_id]
+            if not self.pending_receipts:
+                self.confirmation_started.clear()
             pending.subscription._pending_confirmation = None
             if not pending.result.done():
                 pending.result.set_result(None)
@@ -164,6 +167,7 @@ class BaseSubscription:
         )
         self._pending_confirmation = pending
         self._active_subscriptions.pending_receipts[pending.receipt_id] = pending
+        self._active_subscriptions.confirmation_started.set()
         try:
             async with asyncio.timeout_at(pending.deadline):
                 await connection.write_frame(
@@ -177,6 +181,10 @@ class BaseSubscription:
         except TimeoutError as error:
             failure = SubscriptionError(subscription_id=self.id, reason="timeout")
             self._fail_confirmation(pending, failure)
+            # A receipt can arrive before the socket write finishes draining.
+            # A failed subscribe must not leave that already-confirmed entry
+            # behind without a subscription handle for the caller to close.
+            self._active_subscriptions.delete_by_id(self.id)
             await self._cleanup_confirmation(pending)
             raise failure from error
         except BaseException as error:
@@ -201,6 +209,13 @@ class BaseSubscription:
                 async with asyncio.timeout_at(pending.deadline):
                     error = await asyncio.shield(pending.result)
         except TimeoutError as timeout_error:
+            # Prefer a receipt already processed by the reader over a deadline
+            # cancellation delivered before this waiter was rescheduled.
+            if pending.result.done():
+                error = pending.result.result()
+                if error is not None:
+                    raise error from timeout_error
+                return
             error = SubscriptionError(subscription_id=self.id, reason="timeout")
             self._fail_confirmation(pending, error)
             await self._cleanup_confirmation(pending)
@@ -224,6 +239,8 @@ class BaseSubscription:
     ) -> None:
         if self._active_subscriptions.pending_receipts.pop(pending.receipt_id, None) is None:
             return
+        if not self._active_subscriptions.pending_receipts:
+            self._active_subscriptions.confirmation_started.clear()
         self._pending_confirmation = None
         self._active_subscriptions.delete_by_id(self.id)
         if not pending.result.done():
