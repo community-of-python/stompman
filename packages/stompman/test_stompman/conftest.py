@@ -144,7 +144,7 @@ CONNECTED_FRAME = stompman.ConnectedFrame(
 )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)  # ruff: ignore[pytest-fixture-autouse]
 def _mock_receipt_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stompman.connection_lifespan, "_make_receipt_id", lambda: "receipt-id-1")
 

@@ -6,18 +6,18 @@ version = "0"
 [dependency-groups]
 dev = [
     "anyio==4.14.2",
-    "faker==40.36.0",
-    "hypothesis==6.163.0",
-    "mypy==2.3.0",
+    "faker==40.37.0",
+    "hypothesis==6.165.10",
+    "mypy==2.3.1",
     "polyfactory==3.3.0",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-timeout==2.4.0",
-    "ruff==0.16.0",
+    "ruff==0.16.5",
     "uvloop==0.22.1",
 ]
 ws = [
-    "websockets==16.1.1",
+    "websockets==17.1",
 ]
 
 [tool.uv]
