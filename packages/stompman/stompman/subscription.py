@@ -4,6 +4,7 @@ from typing import Any, Self
 from uuid import uuid4
 
 from stompman.core.delivery import Delivery, Subscription
+from stompman.errors import SubscriptionError
 from stompman.frames import AckMode, MessageFrame
 
 
@@ -41,6 +42,14 @@ class BaseSubscription:
     @property
     def ack(self) -> AckMode:
         return self._subscription.ack
+
+    @property
+    def receipt_timeout(self) -> float | None:
+        return self._subscription.receipt_timeout
+
+    @property
+    def on_subscription_error(self) -> Callable[[SubscriptionError], Any] | None:
+        return self._subscription.on_subscription_error
 
     async def unsubscribe(self) -> None:
         await self._subscription.unsubscribe()

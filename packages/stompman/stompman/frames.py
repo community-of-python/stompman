@@ -123,6 +123,7 @@ ErrorHeaders = TypedDict(
     "ErrorHeaders",
     {
         "message": str,
+        "receipt-id": NotRequired[str],
         "content-length": NotRequired[str],
         "content-type": NotRequired[str],
     },

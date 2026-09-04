@@ -1,5 +1,7 @@
 # Task entrypoints retain broad cleanup scopes so every failure reaches the lifecycle owner.
 import asyncio
+import math
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -12,7 +14,7 @@ from uuid import uuid4
 from stompman.config import ConnectionParameters, Heartbeat
 from stompman.core._tasks import await_cleanup
 from stompman.core.config import RuntimeConfig
-from stompman.core.delivery import Delivery, PendingDelivery, Subscription
+from stompman.core.delivery import Delivery, PendingConfirmation, PendingDelivery, Subscription
 from stompman.core.session import Session
 from stompman.core.transaction import Transaction, TransactionState
 from stompman.errors import (
@@ -23,6 +25,9 @@ from stompman.errors import (
     ConsumerOverloadedError,
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
+    ReceiptRejectedError,
+    ReceiptTimeoutError,
+    SubscriptionError,
 )
 from stompman.frames import (
     AckFrame,
@@ -57,6 +62,8 @@ class Runtime:
         self.config = config
         self._session: Session | None = None
         self._generation = 0
+        self._connected_at = 0.0
+        self._reconnect_not_before = 0.0
         self._lock = asyncio.Lock()
         self._lifecycle = asyncio.Lock()
         self._opened = False
@@ -122,6 +129,7 @@ class Runtime:
             self.config.validate()
             self._failure = None
             self._closing = False
+            self._reconnect_not_before = 0.0
             self._opened = True
             try:  # ruff: ignore[too-many-statements-in-try-clause]
                 async with self._lock:
@@ -272,18 +280,19 @@ class Runtime:
         await self._discard_session()
         issues: list[AnyConnectionIssue] = []
         for attempt in range(self.config.connect_retry_attempts):
+            delay = self._reconnect_not_before - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
             session, attempt_issues = await self._race()
             issues.extend(attempt_issues)
             if session is not None:
                 self._generation += 1
                 session.generation = self._generation
                 self._session = session
+                self._connected_at = time.monotonic()
                 session.start(self._receive)
                 try:
-                    for subscription in self._subscriptions.values():
-                        await session.write(subscription.frame())
-                    for transaction in self._transactions.values():
-                        await transaction.restore(session)
+                    await self._restore_session(session)
                 except ConnectionLostError:
                     issues.append(ConnectionLostOnLifespanEnter())
                     await self._discard_session()
@@ -293,10 +302,23 @@ class Runtime:
                 await asyncio.sleep(self.config.connect_retry_interval * (attempt + 1))
         raise FailedAllConnectAttemptsError(retry_attempts=self.config.connect_retry_attempts, issues=issues)
 
+    async def _restore_session(self, session: Session) -> None:
+        for subscription in list(self._subscriptions.values()):
+            if subscription.receipt_timeout is None:
+                await session.write(subscription.frame())
+            else:
+                with suppress(SubscriptionError):
+                    await self._confirm_subscription(subscription, session, restoring=True)
+        if session.failed.is_set():
+            raise ConnectionLostError(reason=session.failure or "failed during restoration")
+        for transaction in self._transactions.values():
+            await transaction.restore(session)
+
     async def _discard_session(self) -> None:
         session = self._session
         self._session = None
         if session is not None:
+            self._reconnect_not_before = self._connected_at + self.config.connect_retry_interval
             for pending in list(self._pending):
                 if pending.delivery._generation == session.generation:
                     pending.wire_done = True
@@ -404,7 +426,12 @@ class Runtime:
         ack: AckMode = "client-individual",
         headers: dict[str, str] | None = None,
         subscription_id: str | None = None,
+        receipt_timeout: float | None = None,
+        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> Subscription:
+        if receipt_timeout is not None and (not math.isfinite(receipt_timeout) or receipt_timeout <= 0):
+            msg = "receipt_timeout must be a finite positive number"
+            raise ValueError(msg)
         subscription = Subscription(
             id=subscription_id or str(uuid4()),
             destination=destination,
@@ -412,6 +439,8 @@ class Runtime:
             headers=headers.copy() if headers is not None else None,
             handler=handler,
             _runtime=self,
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
         )
         async with self._lock:
             self._require_open()
@@ -424,6 +453,9 @@ class Runtime:
                 session = await self._ensure_session()
                 self._subscriptions[subscription.id] = subscription
                 self._empty.clear()
+                if receipt_timeout is not None:
+                    await self._confirm_subscription(subscription, session)
+                    return subscription
                 try:
                     await session.write(subscription.frame())
                 except BaseException as error:
@@ -434,6 +466,68 @@ class Runtime:
                 else:
                     return subscription
             raise FailedAllWriteAttemptsError(retry_attempts=self.config.write_retry_attempts)
+
+    async def _confirm_subscription(
+        self, subscription: Subscription, session: Session, *, restoring: bool = False
+    ) -> None:
+        timeout = subscription.receipt_timeout
+        assert timeout is not None  # ruff: ignore[assert]
+        caller = asyncio.current_task()
+        assert caller is not None  # ruff: ignore[assert]
+        cancelling = caller.cancelling()
+        receipt_id = str(uuid4())
+        pending = subscription._confirmation = PendingConfirmation(
+            receipt_id=receipt_id,
+            generation=session.generation,
+            operation=asyncio.create_task(
+                session.write(subscription.frame(), receipt_timeout=timeout, receipt_id=receipt_id),
+                name="stomp-subscribe-confirmation",
+            ),
+        )
+        try:
+            await pending.operation
+        except BaseException as cause:
+            cancelled = isinstance(cause, asyncio.CancelledError) and caller.cancelling() > cancelling
+            if isinstance(cause, ReceiptRejectedError):
+                failure = SubscriptionError(subscription_id=subscription.id, reason="rejected", frame=cause.frame)
+            elif isinstance(cause, (TimeoutError, ReceiptTimeoutError)):
+                failure = SubscriptionError(subscription_id=subscription.id, reason="timeout")
+            else:
+                failure = SubscriptionError(
+                    subscription_id=subscription.id,
+                    reason="unsubscribed"
+                    if isinstance(cause, asyncio.CancelledError) and not restoring
+                    else "connection_lost",
+                )
+            if pending.failure is None:
+                pending.failure = failure
+                self._remove_subscription(subscription)
+                if (not cancelled and failure.reason != "unsubscribed") or restoring:
+                    self._notify_subscription_error(subscription, failure)
+            else:
+                failure = pending.failure
+            await await_cleanup(asyncio.create_task(self._cleanup_confirmation(subscription, session)))
+            if cancelled:
+                raise
+            raise failure from cause
+        finally:
+            subscription._confirmation = None
+
+    async def _cleanup_confirmation(self, subscription: Subscription, session: Session) -> None:
+        if self._session is session and not session.failed.is_set():
+            with suppress(ConnectionLostError, TimeoutError):
+                async with asyncio.timeout(subscription.receipt_timeout):
+                    await session.write(UnsubscribeFrame(headers={"id": subscription.id}))
+
+    @staticmethod
+    def _notify_subscription_error(subscription: Subscription, error: SubscriptionError) -> None:
+        if subscription.on_subscription_error is None:
+            LOGGER.warning("subscription confirmation failed: %s", error)
+        else:
+            try:
+                subscription.on_subscription_error(error)
+            except Exception:  # ruff: ignore[blind-except]
+                LOGGER.exception("unhandled exception in subscription error callback")
 
     def _remove_subscription(self, subscription: Subscription) -> None:
         self._subscriptions.pop(subscription.id, None)
@@ -447,6 +541,15 @@ class Runtime:
         self._drop_queued(lambda pending: pending.delivery._subscription is subscription)
 
     async def unsubscribe(self, subscription: Subscription) -> None:
+        if subscription._confirmation is not None:
+            # Wake confirmation without waiting for its operation lock. Its owner
+            # removes the intent and performs bounded cleanup on the same Session.
+            subscription._confirmation.failure = SubscriptionError(
+                subscription_id=subscription.id, reason="unsubscribed"
+            )
+            subscription._confirmation.operation.cancel()
+            self._remove_subscription(subscription)
+            return
         async with self._lock:
             if self._subscriptions.get(subscription.id) is not subscription:
                 return
@@ -459,11 +562,29 @@ class Runtime:
         subscription._paused = True
         self._drop_queued(lambda pending: pending.delivery._subscription is subscription)
 
+    def _receive_confirmation(self, frame: ErrorFrame | ReceiptFrame, session: Session) -> None:
+        receipt_id = frame.headers.get("receipt-id")
+        for subscription in list(self._subscriptions.values()):
+            pending = subscription._confirmation
+            if pending is None or pending.generation != session.generation:
+                continue
+            if isinstance(frame, ReceiptFrame):
+                if pending.receipt_id == receipt_id:
+                    pending.received = True
+            elif not pending.received and (receipt_id is None or pending.receipt_id == receipt_id):
+                failure = pending.failure = SubscriptionError(
+                    subscription_id=subscription.id, reason="rejected", frame=frame
+                )
+                self._remove_subscription(subscription)
+                self._notify_subscription_error(subscription, failure)
+
     def _receive(self, frame: AnyServerFrame, session: Session) -> None:
         if isinstance(frame, ErrorFrame):
+            self._receive_confirmation(frame, session)
             if self.config.on_error_frame is not None:
                 self.config.on_error_frame(frame)
-            session.fail(ConnectionLostError(reason="broker sent ERROR"))
+        elif isinstance(frame, ReceiptFrame):
+            self._receive_confirmation(frame, session)
         elif isinstance(frame, MessageFrame) and not self._closing:
             subscription = self._subscriptions.get(frame.headers["subscription"])
             if subscription is None or subscription._paused:

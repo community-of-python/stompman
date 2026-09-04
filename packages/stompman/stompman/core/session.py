@@ -14,6 +14,7 @@ from stompman.core.config import RuntimeConfig
 from stompman.errors import (
     ConnectionConfirmationTimeout,
     ConnectionLostError,
+    ReceiptRejectedError,
     ReceiptTimeoutError,
     StompProtocolConnectionIssue,
     UnsupportedProtocolVersion,
@@ -129,9 +130,16 @@ class Session:
             async for frame in self._frames:
                 self._last_received = time.monotonic()
                 if isinstance(frame, ReceiptFrame):
-                    future = self._receipts.get(frame.headers["receipt-id"])
+                    future = self._receipts.pop(frame.headers["receipt-id"], None)
                     if future is not None and not future.done():
                         future.set_result(frame)
+                elif isinstance(frame, ErrorFrame):
+                    receipt_id = frame.headers.get("receipt-id")
+                    for pending_id, pending in list(self._receipts.items()):
+                        if receipt_id is None or receipt_id == pending_id:
+                            self._receipts.pop(pending_id)
+                            if not pending.done():
+                                pending.set_exception(ReceiptRejectedError(receipt_id=pending_id, frame=frame))
                 if isinstance(frame, MessageFrame):
                     self._last_message = self._last_received
                 receive(frame, self)
@@ -208,26 +216,31 @@ class Session:
         finally:
             self._active_write = None
 
-    async def write(self, frame: AnyClientFrame, *, receipt_timeout: float | None = None) -> ReceiptFrame | None:
-        future = None
-        receipt_id = ""
+    async def write(
+        self, frame: AnyClientFrame, *, receipt_timeout: float | None = None, receipt_id: str = ""
+    ) -> ReceiptFrame | None:
+        future: asyncio.Future[ReceiptFrame] | None = None
+        written = False
         if receipt_timeout is not None:
-            receipt_id = str(uuid4())
+            receipt_id = receipt_id or str(uuid4())
             frame = replace(frame, headers=frame.headers | {"receipt": receipt_id})  # type: ignore[arg-type]
             future = asyncio.get_running_loop().create_future()
             self._receipts[receipt_id] = future
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            async with self._writes:
-                if self._closed or self.failed.is_set():
-                    raise ConnectionLostError(reason="session is closed")  # ruff: ignore[raise-within-try]
-                await self._write_transport(self.connection.write_frame(frame))
-                self._last_sent = time.monotonic()
-            if future is not None:
-                try:
-                    return await asyncio.wait_for(future, timeout=receipt_timeout)
-                except TimeoutError as error:
-                    assert receipt_timeout is not None  # ruff: ignore[assert]
-                    raise ReceiptTimeoutError(receipt_id=receipt_id, timeout=receipt_timeout) from error
+            async with asyncio.timeout(receipt_timeout):
+                async with self._writes:
+                    if self._closed or self.failed.is_set():
+                        raise ConnectionLostError(reason="session is closed")  # ruff: ignore[raise-within-try]
+                    await self._write_transport(self.connection.write_frame(frame))
+                    written = True
+                    self._last_sent = time.monotonic()
+                if future is not None:
+                    return await future
+        except TimeoutError as error:
+            if written and future is not None and future.done() and not future.cancelled():
+                return future.result()
+            assert receipt_timeout is not None  # ruff: ignore[assert]
+            raise ReceiptTimeoutError(receipt_id=receipt_id, timeout=receipt_timeout) from error
         except ConnectionLostError as error:
             self.fail(error)
             raise

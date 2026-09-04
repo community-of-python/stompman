@@ -45,6 +45,15 @@ Unconfirmed SEND keeps bounded write retries; a network failure may therefore
 produce duplicates. Optional receipt confirmation correlates the exact receipt
 and reports timeout or loss, without automatically repeating an uncertain send.
 Receipt confirmation means broker acceptance, not consumer processing.
+Receipt timeouts bound both the transport write and the confirmation wait.
+
+`Runtime.subscribe` and both Client subscription methods preserve opt-in
+`receipt_timeout` and `on_subscription_error`. The timeout covers writing and
+confirmation after connection restoration. `SubscriptionError` reports rejection,
+timeout, connection loss or unsubscribe; its raw ERROR frame is excluded from
+the exception representation. Failed subscriptions are removed before callbacks,
+and callback exceptions are logged. Only previously confirmed subscriptions are
+restored, with fresh receipt IDs, and recovery failures notify their owners.
 
 An open transaction is restored with BEGIN and an immutable send journal. It is
 never committed before its context exits, and a failed triggering SEND appears
@@ -105,7 +114,7 @@ should inject a Runtime or a mock with its interface. `TestStompBroker` remains 
 preferred in-process testing helper. Its publish command remains mutable so
 middleware can add headers before serialization.
 
-Publish stompman 3.15.0 or newer before publishing this faststream-stomp release;
+Publish stompman 3.16.0 or newer before publishing this faststream-stomp release;
 the adapter's dependency minimum now enforces the new core's availability.
 
 The adapter temporarily requires AnyIO below 4.15: FastDepends 3.0.8 accesses

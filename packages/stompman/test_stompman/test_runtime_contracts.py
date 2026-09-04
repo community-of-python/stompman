@@ -86,9 +86,33 @@ async def test_receipt_timeout_does_not_replay(broker: ScriptedBroker) -> None:
     broker.receipts = False
     async with broker.runtime() as runtime:
         with pytest.raises(stompman.ReceiptTimeoutError):
-            await runtime.send(b"one", "q", receipt_timeout=0.001)
+            await runtime.send(b"one", "q", receipt_timeout=0.05)
         assert sum(isinstance(frame, stompman.SendFrame) for frame in broker.current.writes) == 1
         assert runtime.is_alive()
+
+
+async def test_receipt_timeout_during_write_invalidates_session_without_replay(
+    broker: ScriptedBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_write = broker.connection_class.write_frame
+    blocked = asyncio.Event()
+    async with broker.runtime() as runtime:
+        first = broker.current
+
+        async def write(connection: ScriptedConnection, frame: stompman.AnyClientFrame) -> None:
+            await original_write(connection, frame)
+            if connection is first and isinstance(frame, stompman.SendFrame):
+                await blocked.wait()
+
+        monkeypatch.setattr(broker.connection_class, "write_frame", write)
+        with pytest.raises(stompman.ReceiptTimeoutError):
+            await runtime.send(b"uncertain", "q", receipt_timeout=0.01)
+        await runtime.send(b"after timeout", "q")
+        assert first.closed
+        assert [frame.body for frame in first.writes if isinstance(frame, stompman.SendFrame)] == [b"uncertain"]
+        assert [frame.body for frame in broker.current.writes if isinstance(frame, stompman.SendFrame)] == [
+            b"after timeout"
+        ]
 
 
 async def test_connection_loss_waiting_for_receipt_does_not_replay(broker: ScriptedBroker) -> None:

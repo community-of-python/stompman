@@ -1,11 +1,13 @@
 import asyncio
+import time
 from collections import deque
 from datetime import timedelta
+from itertools import pairwise
 
 import pytest
 import stompman
 
-from test_stompman.conftest import ScriptedBroker, wait_until
+from test_stompman.conftest import ScriptedBroker, ScriptedConnection, wait_until
 
 pytestmark = pytest.mark.anyio
 
@@ -115,7 +117,22 @@ async def test_pending_error_after_connected_is_delivered(broker: ScriptedBroker
     def on_error(frame: stompman.ErrorFrame) -> None:
         errors.append(frame)
         broker.after_connected.clear()
+        broker.current.incoming.put_nowait(stompman.ConnectionLostError(reason="peer closed after ERROR"))
 
     async with broker.runtime(on_error_frame=on_error) as runtime:
         await wait_until(lambda: runtime.status.generation == 2)
         assert errors == [error]
+
+
+async def test_short_lived_connections_obey_retry_spacing(broker: ScriptedBroker) -> None:
+    connected_at: list[float] = []
+
+    def record_connect(frame: stompman.AnyClientFrame, connection: ScriptedConnection) -> bool:
+        if isinstance(frame, stompman.ConnectFrame):
+            connected_at.append(time.monotonic())
+        return False
+
+    broker.fail_before = record_connect
+    async with broker.runtime(connect_retry_interval=0.05, no_message_restart_interval=timedelta(milliseconds=5)):
+        await wait_until(lambda: len(connected_at) >= 3)
+    assert all(later - earlier >= 0.045 for earlier, later in pairwise(connected_at))

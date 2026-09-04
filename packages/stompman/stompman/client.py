@@ -4,6 +4,7 @@ from types import TracebackType
 from typing import Any, ClassVar, Self, overload
 
 from stompman.core import Delivery, Runtime, RuntimeConfig
+from stompman.errors import SubscriptionError
 from stompman.frames import AckMode, MessageFrame, ReceiptFrame
 from stompman.subscription import AckableMessageFrame, AutoAckSubscription, ManualAckSubscription, _make_subscription_id
 from stompman.transaction import Transaction, _make_transaction_id
@@ -100,6 +101,8 @@ class Client(RuntimeConfig):
         headers: dict[str, str] | None = None,
         on_suppressed_exception: Callable[[Exception, MessageFrame], Any],
         suppressed_exception_classes: tuple[type[Exception], ...] = (Exception,),
+        receipt_timeout: float | None = None,
+        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> AutoAckSubscription:
         async def consume(delivery: Delivery) -> None:
             frame = MessageFrame(headers=delivery.headers, body=delivery.body)
@@ -114,7 +117,13 @@ class Client(RuntimeConfig):
                     await delivery.ack()
 
         subscription = await self._runtime.subscribe(
-            destination, consume, ack=ack, headers=headers, subscription_id=_make_subscription_id()
+            destination,
+            consume,
+            ack=ack,
+            headers=headers,
+            subscription_id=_make_subscription_id(),
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
         )
         return AutoAckSubscription(subscription, handler, on_suppressed_exception, suppressed_exception_classes)
 
@@ -125,12 +134,20 @@ class Client(RuntimeConfig):
         *,
         ack: AckMode = "client-individual",
         headers: dict[str, str] | None = None,
+        receipt_timeout: float | None = None,
+        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> ManualAckSubscription:
         async def consume(delivery: Delivery) -> None:
             await handler(AckableMessageFrame.from_delivery(delivery))
 
         subscription = await self._runtime.subscribe(
-            destination, consume, ack=ack, headers=headers, subscription_id=_make_subscription_id()
+            destination,
+            consume,
+            ack=ack,
+            headers=headers,
+            subscription_id=_make_subscription_id(),
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
         )
         return ManualAckSubscription(subscription, handler)
 

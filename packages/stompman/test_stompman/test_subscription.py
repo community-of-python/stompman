@@ -275,7 +275,8 @@ async def test_handler_limit_keeps_receipts_and_errors_responsive(broker: Script
         broker.current.incoming.put_nowait(stompman.ErrorFrame(headers={"message": "late error"}))
         await wait_until(lambda: bool(errors))
         release.set()
-        await wait_until(lambda: runtime.status.generation == 2 and runtime.status.pending_messages == 0)
+        await wait_until(lambda: runtime.status.pending_messages == 0)
+        assert runtime.status.generation == 1
 
 
 @pytest.mark.parametrize(("capacity", "bytes_limit"), [(1, 1000), (10, 1)])

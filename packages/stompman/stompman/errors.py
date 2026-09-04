@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
 from stompman.config import ConnectionParameters  # ruff: ignore[typing-only-first-party-import]
 from stompman.frames import ErrorFrame, HeartbeatFrame, MessageFrame, ReceiptFrame
@@ -12,7 +13,7 @@ class Error(Exception):
 
 @dataclass(kw_only=True)
 class ConnectionLostError(Error):
-    """Raised in stompman.AbstractConnection—and handled in stompman.ConnectionManager, therefore is private."""
+    """A physical transport failed; the runtime decides whether recovery is safe."""
 
     reason: Exception | str
 
@@ -60,6 +61,21 @@ class ReceiptTimeoutError(Error):
 
     receipt_id: str
     timeout: float
+
+
+@dataclass(kw_only=True)
+class ReceiptRejectedError(Error):
+    receipt_id: str
+    frame: ErrorFrame = field(repr=False)
+
+
+@dataclass(kw_only=True)
+class SubscriptionError(Error):
+    """A receipt-confirmed subscription could not be established or restored."""
+
+    subscription_id: str
+    reason: Literal["rejected", "timeout", "connection_lost", "unsubscribed"]
+    frame: ErrorFrame | None = field(default=None, repr=False)
 
 
 @dataclass(kw_only=True)

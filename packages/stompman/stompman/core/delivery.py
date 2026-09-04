@@ -1,9 +1,11 @@
+import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from stompman.frames import AckMode, MessageFrame, SubscribeFrame
+from stompman.errors import SubscriptionError
+from stompman.frames import AckMode, MessageFrame, ReceiptFrame, SubscribeFrame
 
 if TYPE_CHECKING:
     from stompman.core.runtime import Runtime
@@ -32,6 +34,15 @@ class PendingDelivery:
 
 
 @dataclass(kw_only=True, slots=True)
+class PendingConfirmation:
+    receipt_id: str
+    generation: int
+    operation: asyncio.Task[ReceiptFrame | None]
+    received: bool = False
+    failure: SubscriptionError | None = None
+
+
+@dataclass(kw_only=True, slots=True)
 class Subscription:
     id: str
     destination: str
@@ -39,6 +50,9 @@ class Subscription:
     headers: dict[str, str] | None
     handler: Callable[[Delivery], Awaitable[Any]]
     _runtime: "Runtime"
+    receipt_timeout: float | None = None
+    on_subscription_error: Callable[[SubscriptionError], Any] | None = None
+    _confirmation: PendingConfirmation | None = field(default=None, init=False, repr=False)
     _unsettled: deque[PendingDelivery] = field(default_factory=deque, init=False, repr=False)
     _deliveries: dict[int, PendingDelivery] = field(default_factory=dict, init=False, repr=False)
     _next_sequence: int = field(default=0, init=False, repr=False)
