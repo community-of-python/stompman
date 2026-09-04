@@ -105,7 +105,12 @@ class Client:
         if self.max_concurrent_handlers is not None:
             self._handler_semaphore = asyncio.Semaphore(self.max_concurrent_handlers)
 
-    async def _restore_connection(self, connection: AbstractConnection) -> None:
+    def _restore_connection(self, connection: AbstractConnection) -> Callable[[], Coroutine[Any, Any, None]] | None:
+        if not self._active_subscriptions.get_all() and not self._active_transactions:
+            return None
+        return partial(self._replay_connection_state, connection)
+
+    async def _replay_connection_state(self, connection: AbstractConnection) -> None:
         await resubscribe_to_active_subscriptions(
             connection=connection, active_subscriptions=self._active_subscriptions
         )

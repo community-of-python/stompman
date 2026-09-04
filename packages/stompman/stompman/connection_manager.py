@@ -23,6 +23,8 @@ from stompman.logger import LOGGER
 if TYPE_CHECKING:
     from stompman.connection_lifespan import AbstractConnectionLifespan, ConnectionLifespanFactory
 
+ConnectionRestoration = Callable[[], Awaitable[None]]
+
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ActiveConnectionState:
@@ -64,7 +66,7 @@ class ConnectionManager:
     no_message_restart_interval: timedelta | None
     keep_alive_on_connection_failure: bool = False
     on_connection_lost: Callable[[AbstractConnection], None] | None = None
-    restore_connection: Callable[[AbstractConnection], Awaitable[None]] | None = None
+    restore_connection: Callable[[AbstractConnection], ConnectionRestoration | None] | None = None
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
@@ -199,6 +201,7 @@ class ConnectionManager:
                 return ConnectionLostOnLifespanEnter()
 
             if isinstance(connection_result, EstablishedConnectionResult):
+                restoration = self.restore_connection(connection) if self.restore_connection is not None else None
                 connection_established = True
                 return ActiveConnectionState(
                     connection=connection,
@@ -206,8 +209,8 @@ class ConnectionManager:
                     server_heartbeat=connection_result.server_heartbeat,
                     connected_at=time.time(),
                     restoration_task=(
-                        self._task_group.create_task(self._restore_connection(connection))
-                        if self.restore_connection is not None
+                        self._task_group.create_task(self._restore_connection(connection, restoration))
+                        if restoration is not None
                         else None
                     ),
                 )
@@ -218,10 +221,9 @@ class ConnectionManager:
                     self.on_connection_lost(connection)
                 await connection.close()
 
-    async def _restore_connection(self, connection: AbstractConnection) -> None:
-        assert self.restore_connection is not None  # ruff: ignore[assert] - internal invariant
+    async def _restore_connection(self, connection: AbstractConnection, restoration: ConnectionRestoration) -> None:
         try:
-            await self.restore_connection(connection)
+            await restoration()
         except ConnectionLostError as error:
             state = self._active_connection_state
             if state is not None and state.connection is connection:
