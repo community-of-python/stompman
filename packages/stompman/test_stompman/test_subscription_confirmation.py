@@ -278,6 +278,89 @@ async def test_receipts_are_processed_while_later_subscription_replay_is_blocked
     assert any(isinstance(frame, stompman.SendFrame) for frame in remaining_frames(outgoing))
 
 
+@pytest.mark.parametrize("connection_lost", [True, False])
+async def test_failed_replay_after_receipt_notifies_owner(
+    client: stompman.Client,
+    incoming: Incoming,
+    outgoing: Outgoing,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    connection_lost: bool,
+) -> None:
+    failures: list[stompman.SubscriptionError] = []
+    failed = asyncio.Event()
+
+    def on_failure(error: stompman.SubscriptionError) -> None:
+        failures.append(error)
+        failed.set()
+
+    task = asyncio.create_task(
+        client.subscribe_with_manual_ack(
+            "test", noop_message_handler, receipt_timeout=0.05, on_subscription_error=on_failure
+        )
+    )
+    connection, initial = await next_subscribe(outgoing)
+    receipt(incoming, connection, initial)
+    await task
+    write_frame = BaseMockConnection.write_frame
+
+    async def blocked_write(connection: BaseMockConnection, frame: stompman.AnyClientFrame) -> None:
+        await write_frame(connection, frame)
+        if isinstance(frame, stompman.SubscribeFrame):
+            await asyncio.Future()
+
+    monkeypatch.setattr(BaseMockConnection, "write_frame", blocked_write)
+    incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="force replay"))
+    restored_connection, restored = await next_subscribe(outgoing)
+    receipt(incoming, restored_connection, restored)
+    if connection_lost:
+        incoming[id(restored_connection)].put_nowait(stompman.ConnectionLostError(reason="lost while draining"))
+    await asyncio.wait_for(failed.wait(), timeout=1)
+    assert [error.reason for error in failures] == ["connection_lost" if connection_lost else "timeout"]
+    assert not client._active_subscriptions.get_all()
+    assert not client._active_subscriptions.pending_receipts
+    await client.send(b"still usable", "test")
+    assert all(not isinstance(frame, stompman.SubscribeFrame) for frame in remaining_frames(outgoing))
+
+
+async def test_transaction_finalization_does_not_overtake_replay(
+    client: stompman.Client, incoming: Incoming, outgoing: Outgoing, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = asyncio.create_task(client.subscribe_with_manual_ack("test", noop_message_handler, receipt_timeout=1))
+    connection, initial = await next_subscribe(outgoing)
+    receipt(incoming, connection, initial)
+    await task
+    write_frame = BaseMockConnection.write_frame
+    release_write = asyncio.Event()
+
+    async def blocked_write(connection: BaseMockConnection, frame: stompman.AnyClientFrame) -> None:
+        await write_frame(connection, frame)
+        if isinstance(frame, stompman.SubscribeFrame):
+            await release_write.wait()
+
+    monkeypatch.setattr(BaseMockConnection, "write_frame", blocked_write)
+    async with asyncio.TaskGroup() as tasks:
+        try:
+            async with client.begin() as transaction:
+                await transaction.send(b"buffered message", "test")
+                remaining_frames(outgoing)
+                incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="force replay"))
+                restored_connection, restored = await next_subscribe(outgoing)
+                receipt(incoming, restored_connection, restored)
+            assert not any(isinstance(frame, stompman.CommitFrame) for frame in remaining_frames(outgoing))
+            assert transaction in client._active_transactions
+            tasks.create_task(client.send(b"after replay", "test"))
+        finally:
+            release_write.set()
+    replayed = remaining_frames(outgoing)
+    assert [frame.body for frame in replayed if isinstance(frame, stompman.SendFrame)] == [
+        b"buffered message",
+        b"after replay",
+    ]
+    assert len([frame for frame in replayed if isinstance(frame, stompman.CommitFrame)]) == 1
+    assert not client._active_transactions
+
+
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
 async def test_invalid_receipt_timeout(client: stompman.Client, timeout: float) -> None:
     with pytest.raises(ValueError, match="finite positive"):

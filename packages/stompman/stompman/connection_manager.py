@@ -17,7 +17,7 @@ from stompman.errors import (
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
 )
-from stompman.frames import AckFrame, AnyClientFrame, AnyServerFrame, NackFrame
+from stompman.frames import AbortFrame, AckFrame, AnyClientFrame, AnyServerFrame, CommitFrame, NackFrame
 from stompman.logger import LOGGER
 
 if TYPE_CHECKING:
@@ -231,7 +231,7 @@ class ConnectionManager:
         issues: list[AnyConnectionIssue] = []
         for _ in range(self.connect_retry_attempts):
             state = await self._get_active_connection_state(is_initial_call=is_initial_call)
-            if state.restoration_task is not None:
+            if state.restoration_task is not None and not state.restoration_task.done():
                 # Wait without forwarding caller cancellation to shared replay.
                 # The frame reader uses the established connection immediately,
                 # so receipts are processed even while replay writes are blocked.
@@ -341,6 +341,15 @@ class ConnectionManager:
     async def maybe_write_frame(self, frame: AnyClientFrame) -> bool:
         if not (connection_state := self._active_connection_state):
             _log_dropped_frame(frame, reason="no active connection")
+            return False
+        if (
+            isinstance(frame, CommitFrame | AbortFrame)
+            and connection_state.restoration_task is not None
+            and not connection_state.restoration_task.done()
+        ):
+            # Finalization must not overtake replay of buffered transaction
+            # messages. ACK/NACK and subscription cleanup remain available.
+            _log_dropped_frame(frame, reason="connection replay in progress")
             return False
         try:
             await connection_state.connection.write_frame(frame)

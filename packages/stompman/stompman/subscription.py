@@ -155,7 +155,9 @@ class BaseSubscription:
         self._active_subscriptions.delete_by_id(self.id)
         await self._connection_manager.maybe_write_frame(UnsubscribeFrame(headers={"id": self.id}))
 
-    async def _send_confirmed_subscription(self, connection: AbstractConnection) -> _PendingConfirmation:
+    async def _send_confirmed_subscription(
+        self, connection: AbstractConnection, *, restoring: bool = False
+    ) -> _PendingConfirmation:
         assert self.receipt_timeout is not None  # ruff: ignore[assert] - internal invariant
         pending = _PendingConfirmation(
             subscription=self,
@@ -180,11 +182,10 @@ class BaseSubscription:
                 )
         except TimeoutError as error:
             failure = SubscriptionError(subscription_id=self.id, reason="timeout")
-            self._fail_confirmation(pending, failure)
+            self._fail_confirmation(pending, failure, include_confirmed=True)
             # A receipt can arrive before the socket write finishes draining.
             # A failed subscribe must not leave that already-confirmed entry
             # behind without a subscription handle for the caller to close.
-            self._active_subscriptions.delete_by_id(self.id)
             await self._cleanup_confirmation(pending)
             raise failure from error
         except BaseException as error:
@@ -192,11 +193,15 @@ class BaseSubscription:
                 pending,
                 SubscriptionError(
                     subscription_id=self.id,
-                    reason="unsubscribed" if isinstance(error, asyncio.CancelledError) else "connection_lost",
+                    reason=(
+                        "unsubscribed"
+                        if isinstance(error, asyncio.CancelledError) and not restoring
+                        else "connection_lost"
+                    ),
                 ),
-                notify=not isinstance(error, asyncio.CancelledError),
+                notify=restoring or not isinstance(error, asyncio.CancelledError),
+                include_confirmed=True,
             )
-            self._active_subscriptions.delete_by_id(self.id)
             await self._cleanup_confirmation(pending)
             raise
         return pending
@@ -235,10 +240,25 @@ class BaseSubscription:
             raise error
 
     def _fail_confirmation(
-        self, pending: _PendingConfirmation, error: SubscriptionError, *, notify: bool = True
+        self,
+        pending: _PendingConfirmation,
+        error: SubscriptionError,
+        *,
+        notify: bool = True,
+        include_confirmed: bool = False,
     ) -> None:
         if self._active_subscriptions.pending_receipts.pop(pending.receipt_id, None) is None:
-            return
+            if not include_confirmed:
+                return
+            # A write may fail after its receipt. Notify once, without removing
+            # a subscription already being restored on a newer connection.
+            if (
+                self._pending_confirmation is not None
+                or not pending.result.done()
+                or pending.result.result() is not None
+                or not self._active_subscriptions.contains_by_id(self.id)
+            ):
+                return
         if not self._active_subscriptions.pending_receipts:
             self._active_subscriptions.confirmation_started.clear()
         self._pending_confirmation = None
@@ -283,7 +303,7 @@ class BaseSubscription:
             )
         else:
             try:
-                pending = await self._send_confirmed_subscription(connection)
+                pending = await self._send_confirmed_subscription(connection, restoring=True)
             except SubscriptionError:
                 return
             self._active_subscriptions.watch_confirmation(pending)
