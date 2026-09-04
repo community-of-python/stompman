@@ -353,6 +353,34 @@ async def test_stale_connection_failure_does_not_clear_new_connection() -> None:
     assert manager._reconnection_count == 0
 
 
+@pytest.mark.parametrize("stable_connection", [True, False])
+async def test_short_lived_connection_obeys_retry_spacing(
+    monkeypatch: pytest.MonkeyPatch, *, stable_connection: bool
+) -> None:
+    manager = EnrichedConnectionManager(connection_class=BaseMockConnection)
+    state = ActiveConnectionState(
+        connection=BaseMockConnection(),
+        lifespan=mock.Mock(),
+        server_heartbeat=build_dataclass(Heartbeat),
+        connected_at=time.time(),
+    )
+    manager._active_connection_state = state
+    manager._connected_at_monotonic = time.monotonic() - (2 if stable_connection else 0)
+    await manager._discard_failed_connection_state(state, ConnectionLostError(reason="peer closed"))
+    delay = manager._reconnect_not_before - time.monotonic()
+    if stable_connection:
+        assert delay <= 0
+    else:
+        assert 0 < delay <= manager.connect_retry_interval
+    sleep = mock.AsyncMock()
+    monkeypatch.setattr("asyncio.sleep", sleep)
+    # Fail connecting so that no heartbeat or lifespan tasks are introduced.
+    monkeypatch.setattr(BaseMockConnection, "connect", mock.AsyncMock(return_value=None))
+    with pytest.raises(FailedAllConnectAttemptsError):
+        await manager._get_active_connection_state()
+    assert len(sleep.await_args_list) == manager.connect_retry_attempts + (not stable_connection)
+
+
 async def test_heartbeat_failure_is_fatal_by_default() -> None:
     class MockConnection(BaseMockConnection):
         write_heartbeat = mock.Mock(side_effect=build_dataclass(ConnectionLostError))

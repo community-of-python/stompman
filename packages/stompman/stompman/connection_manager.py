@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from ssl import SSLContext
@@ -17,11 +17,13 @@ from stompman.errors import (
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
 )
-from stompman.frames import AckFrame, AnyClientFrame, AnyServerFrame, NackFrame
+from stompman.frames import AbortFrame, AckFrame, AnyClientFrame, AnyServerFrame, CommitFrame, NackFrame
 from stompman.logger import LOGGER
 
 if TYPE_CHECKING:
     from stompman.connection_lifespan import AbstractConnectionLifespan, ConnectionLifespanFactory
+
+ConnectionRestoration = Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -30,6 +32,7 @@ class ActiveConnectionState:
     lifespan: "AbstractConnectionLifespan"
     server_heartbeat: Heartbeat
     connected_at: float
+    restoration_task: asyncio.Task[None] | None = field(default=None, repr=False, compare=False)
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
         threshold_seconds = self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor
@@ -62,6 +65,8 @@ class ConnectionManager:
     check_server_alive_interval_factor: int
     no_message_restart_interval: timedelta | None
     keep_alive_on_connection_failure: bool = False
+    on_connection_lost: Callable[[AbstractConnection], None] | None = None
+    restore_connection: Callable[[AbstractConnection], ConnectionRestoration | None] | None = None
 
     _active_connection_state: ActiveConnectionState | None = field(default=None, init=False)
     _reconnect_lock: asyncio.Lock = field(init=False, default_factory=asyncio.Lock)
@@ -70,11 +75,13 @@ class ConnectionManager:
     _monitor_no_message_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _reconnection_count: int = field(default=0, init=False)
     _last_message_received_time: float = field(init=False, default_factory=time.time)
+    _connected_at_monotonic: float = field(init=False, default=0)
+    _reconnect_not_before: float = field(init=False, default=0)
 
     async def __aenter__(self) -> Self:
         await self._task_group.__aenter__()
         self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
-        self._active_connection_state = await self._get_active_connection_state(is_initial_call=True)
+        self._active_connection_state = await self._get_restored_connection_state(is_initial_call=True)
         return self
 
     async def __aexit__(
@@ -85,6 +92,9 @@ class ConnectionManager:
         if self._monitor_no_message_task is not None:
             self._monitor_no_message_task.cancel()
             tasks.append(self._monitor_no_message_task)
+        if (state := self._active_connection_state) is not None and state.restoration_task is not None:
+            state.restoration_task.cancel()
+            tasks.append(state.restoration_task)
         await asyncio.wait(tasks)
         try:
             await self._task_group.__aexit__(exc_type, exc_value, traceback)
@@ -191,17 +201,49 @@ class ConnectionManager:
                 return ConnectionLostOnLifespanEnter()
 
             if isinstance(connection_result, EstablishedConnectionResult):
+                restoration = self.restore_connection(connection) if self.restore_connection is not None else None
                 connection_established = True
                 return ActiveConnectionState(
                     connection=connection,
                     lifespan=lifespan,
                     server_heartbeat=connection_result.server_heartbeat,
                     connected_at=time.time(),
+                    restoration_task=(
+                        self._task_group.create_task(self._restore_connection(connection, restoration))
+                        if restoration is not None
+                        else None
+                    ),
                 )
             return connection_result
         finally:
             if not connection_established:
+                if self.on_connection_lost is not None:
+                    self.on_connection_lost(connection)
                 await connection.close()
+
+    async def _restore_connection(self, connection: AbstractConnection, restoration: ConnectionRestoration) -> None:
+        try:
+            await restoration()
+        except ConnectionLostError as error:
+            state = self._active_connection_state
+            if state is not None and state.connection is connection:
+                await self._discard_failed_connection_state(state, error)
+
+    async def _get_restored_connection_state(self, *, is_initial_call: bool = False) -> ActiveConnectionState:
+        issues: list[AnyConnectionIssue] = []
+        for _ in range(self.connect_retry_attempts):
+            state = await self._get_active_connection_state(is_initial_call=is_initial_call)
+            if state.restoration_task is not None and not state.restoration_task.done():
+                # Wait without forwarding caller cancellation to shared replay.
+                # The frame reader uses the established connection immediately,
+                # so receipts are processed even while replay writes are blocked.
+                await asyncio.wait([state.restoration_task])
+            if self._active_connection_state is state:
+                if state.restoration_task is not None:
+                    state.restoration_task.result()
+                return state
+            issues.append(ConnectionLostOnLifespanEnter())
+        raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=issues)
 
     async def _get_active_connection_state(self, *, is_initial_call: bool = False) -> ActiveConnectionState:
         if self._active_connection_state:
@@ -213,11 +255,15 @@ class ConnectionManager:
             if self._active_connection_state:
                 return self._active_connection_state
 
+            if (delay := self._reconnect_not_before - time.monotonic()) > 0:
+                await asyncio.sleep(delay)
+
             for attempt in range(self.connect_retry_attempts):
                 connection_result = await self._connect_to_any_server()
 
                 if isinstance(connection_result, ActiveConnectionState):
                     self._active_connection_state = connection_result
+                    self._connected_at_monotonic = time.monotonic()
                     self._last_message_received_time = time.time()
                     self._restart_no_message_monitor()
                     if not is_initial_call:
@@ -246,6 +292,15 @@ class ConnectionManager:
         )
         self._active_connection_state = None
         self._reconnection_count += 1
+        # A successful handshake must not bypass retry spacing when the peer
+        # immediately closes the connection again.
+        self._reconnect_not_before = self._connected_at_monotonic + self.connect_retry_interval
+        if self.on_connection_lost is not None:
+            self.on_connection_lost(connection_state.connection)
+        restoration = connection_state.restoration_task
+        if restoration is not None and restoration is not asyncio.current_task() and not restoration.done():
+            restoration.cancel()
+            await asyncio.gather(restoration, return_exceptions=True)
         await connection_state.connection.close()
 
     async def write_heartbeat_reconnecting(self) -> None:
@@ -260,7 +315,7 @@ class ConnectionManager:
 
     async def write_frame_reconnecting(self, frame: AnyClientFrame) -> None:
         for _ in range(self.write_retry_attempts):
-            connection_state = await self._get_active_connection_state()
+            connection_state = await self._get_restored_connection_state()
             try:
                 return await connection_state.connection.write_frame(frame)
             except ConnectionLostError as error:
@@ -288,6 +343,15 @@ class ConnectionManager:
     async def maybe_write_frame(self, frame: AnyClientFrame) -> bool:
         if not (connection_state := self._active_connection_state):
             _log_dropped_frame(frame, reason="no active connection")
+            return False
+        if (
+            isinstance(frame, CommitFrame | AbortFrame)
+            and connection_state.restoration_task is not None
+            and not connection_state.restoration_task.done()
+        ):
+            # Finalization must not overtake replay of buffered transaction
+            # messages. ACK/NACK and subscription cleanup remain available.
+            _log_dropped_frame(frame, reason="connection replay in progress")
             return False
         try:
             await connection_state.connection.write_frame(frame)

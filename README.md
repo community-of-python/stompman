@@ -142,6 +142,50 @@ await client.subscribe_with_manual_ack("DLQ", handle_message_from_dlq, ack="clie
 
 Note that this way exceptions won't be suppressed automatically.
 
+#### Confirming subscriptions
+
+Pass `receipt_timeout` to either subscription method to wait for the broker to
+accept the subscription before returning. This uses standard
+[STOMP receipts](https://stomp.github.io/stomp-specification-1.2.html#RECEIPT),
+not broker-specific error messages.
+
+```python
+subscription = await client.subscribe_with_manual_ack(
+    "DLQ",
+    handle_message_from_dlq,
+    receipt_timeout=3.0,
+    on_subscription_error=lambda error: print(error.reason),
+)
+# It is now safe to publish a request that requires this response subscription.
+```
+
+The default `receipt_timeout=None` preserves the existing write-only behavior.
+A timeout must be finite and positive. It covers writing `SUBSCRIBE` and waiting
+for its receipt, after a connection is available. The client generates its own
+`receipt` header in this mode.
+
+An initial failure raises `SubscriptionError`, with `reason` equal to
+`rejected`, `timeout`, `connection_lost`, or `unsubscribed`. The optional,
+synchronous `on_subscription_error` callback also reports failures during
+automatic resubscription, when there is no caller awaiting `subscribe()`.
+The rejected subscription is removed before the callback runs. Callbacks should
+not block; their exceptions are logged without terminating the frame reader.
+Raw broker error frames are available through `error.frame`, but are excluded
+from the exception's representation.
+
+Confirmed subscriptions are restored after reconnect with fresh receipt IDs.
+Unconfirmed or rejected subscriptions are not blindly replayed. Timeouts and
+cancellation remove local state and attempt bounded cleanup on the same
+connection. An `ERROR` without `receipt-id` fails all pending confirmations on
+that connection; it does not remove previously confirmed subscriptions.
+Neither subscription confirmation nor a publish receipt proves downstream
+business processing.
+
+The handler concurrency limit remains in effect while confirmations are
+pending. The reader temporarily buffers message handlers waiting for capacity
+so it can reach interleaved receipts/errors, then resumes normal backpressure.
+Use broker prefetch/consumer-window settings to bound deliveries on the wire.
+
 ### Cleaning Up
 
 stompman takes care of cleaning up resources automatically. When you leave the context of async context managers `stompman.Client()`, or `client.begin()`, the necessary frames will be sent to the server.
@@ -152,6 +196,7 @@ stompman takes care of cleaning up resources automatically. When you leave the c
 
 - When connection is lost, stompman will attempt to handle it automatically. `stompman.FailedAllConnectAttemptsError` will be raised if all connection attempts fail. `stompman.FailedAllWriteAttemptsError` will be raised if connection succeeds but sending a frame or heartbeat lead to losing connection.
 - Set `keep_alive_on_connection_failure=True` to keep background heartbeat and read recovery running after a retry cycle is exhausted. The default remains `False`, and errors from `Client.send()` still follow `connect_retry_attempts` and `write_retry_attempts`.
+- Connections that succeed and immediately fail are spaced by `connect_retry_interval` as well, preventing a tight reconnect loop.
 - If no messages are received for `no_message_restart_interval` (defaults to 1 hour), stompman will force a reconnect. Set to `None` to disable.
 - To implement health checks, use `stompman.Client.is_alive()` — it will return `True` if everything is OK and `False` if server is not responding.
 - `stompman` will write log warnings when connection is lost, after successful reconnection or invalid state during ack/nack.

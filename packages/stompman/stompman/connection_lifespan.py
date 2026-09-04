@@ -15,12 +15,7 @@ from stompman.frames import (
     DisconnectFrame,
     ReceiptFrame,
 )
-from stompman.subscription import (
-    ActiveSubscriptions,
-    resubscribe_to_active_subscriptions,
-    unsubscribe_from_all_active_subscriptions,
-)
-from stompman.transaction import ActiveTransactions, commit_pending_transactions
+from stompman.subscription import ActiveSubscriptions, unsubscribe_from_all_active_subscriptions
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -44,10 +39,9 @@ class ConnectionLifespan(AbstractConnectionLifespan):
     connection_confirmation_timeout: int
     disconnect_confirmation_timeout: int
     active_subscriptions: ActiveSubscriptions
-    active_transactions: ActiveTransactions
     set_heartbeat_interval: Callable[[Heartbeat], Any]
 
-    async def _establish_connection(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
+    async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
         connect_headers = cast(
             "ConnectHeaders",
             self.connection_parameters.connect_headers
@@ -85,15 +79,6 @@ class ConnectionLifespan(AbstractConnectionLifespan):
         server_heartbeat = Heartbeat.from_header(connected_frame.headers["heart-beat"])
         self.set_heartbeat_interval(server_heartbeat)
         return EstablishedConnectionResult(server_heartbeat=server_heartbeat)
-
-    async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
-        connection_result = await self._establish_connection()
-        if isinstance(connection_result, EstablishedConnectionResult):
-            await resubscribe_to_active_subscriptions(
-                connection=self.connection, active_subscriptions=self.active_subscriptions
-            )
-            await commit_pending_transactions(connection=self.connection, active_transactions=self.active_transactions)
-        return connection_result
 
     async def _take_receipt_frame(self) -> None:
         async for frame in self.connection.read_frames():

@@ -13,6 +13,7 @@ from stompman.config import ConnectionParameters, Heartbeat
 from stompman.connection import AbstractConnection, Connection
 from stompman.connection_lifespan import ConnectionLifespan
 from stompman.connection_manager import ConnectionManager
+from stompman.errors import SubscriptionError
 from stompman.frames import (
     AckMode,
     ConnectedFrame,
@@ -23,8 +24,14 @@ from stompman.frames import (
     SendFrame,
 )
 from stompman.logger import LOGGER
-from stompman.subscription import AckableMessageFrame, ActiveSubscriptions, AutoAckSubscription, ManualAckSubscription
-from stompman.transaction import Transaction
+from stompman.subscription import (
+    AckableMessageFrame,
+    ActiveSubscriptions,
+    AutoAckSubscription,
+    ManualAckSubscription,
+    resubscribe_to_active_subscriptions,
+)
+from stompman.transaction import Transaction, commit_pending_transactions
 
 
 async def _run_handler_with_safety_net(coro: Coroutine[Any, Any, Any]) -> None:
@@ -81,7 +88,6 @@ class Client:
                 connection_confirmation_timeout=self.connection_confirmation_timeout,
                 disconnect_confirmation_timeout=self.disconnect_confirmation_timeout,
                 active_subscriptions=self._active_subscriptions,
-                active_transactions=self._active_transactions,
             ),
             connection_class=self.connection_class,
             connect_retry_attempts=self.connect_retry_attempts,
@@ -92,10 +98,23 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             no_message_restart_interval=self.no_message_restart_interval,
             keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
+            on_connection_lost=self._active_subscriptions.connection_lost,
+            restore_connection=self._restore_connection,
             ssl=self.ssl,
         )
         if self.max_concurrent_handlers is not None:
             self._handler_semaphore = asyncio.Semaphore(self.max_concurrent_handlers)
+
+    def _restore_connection(self, connection: AbstractConnection) -> Callable[[], Coroutine[Any, Any, None]] | None:
+        if not self._active_subscriptions.get_all() and not self._active_transactions:
+            return None
+        return partial(self._replay_connection_state, connection)
+
+    async def _replay_connection_state(self, connection: AbstractConnection) -> None:
+        await resubscribe_to_active_subscriptions(
+            connection=connection, active_subscriptions=self._active_subscriptions
+        )
+        await commit_pending_transactions(connection=connection, active_transactions=self._active_transactions)
 
     async def __aenter__(self) -> Self:
         self._task_group = await self._exit_stack.enter_async_context(asyncio.TaskGroup())
@@ -112,6 +131,7 @@ class Client:
         finally:
             self._listen_task.cancel()
             await asyncio.wait([self._listen_task])
+            await self._active_subscriptions.cancel_confirmation_tasks()
             await self._exit_stack.aclose()
 
     async def _listen_to_frames(self) -> None:
@@ -120,38 +140,87 @@ class Client:
                 match frame:
                     case MessageFrame():
                         self._connection_manager._last_message_received_time = time.time()
-                        received_at_reconnection_count = epoch
                         if subscription := self._active_subscriptions.get_by_id(frame.headers["subscription"]):
-                            if self._handler_semaphore is not None:
-                                await self._handler_semaphore.acquire()
-                            handler_coro = (
-                                subscription._run_handler(
-                                    frame=frame,
-                                    received_at_reconnection_count=received_at_reconnection_count,
-                                )
-                                if isinstance(subscription, AutoAckSubscription)
-                                else subscription.handler(
-                                    AckableMessageFrame(
-                                        headers=frame.headers,
-                                        body=frame.body,
-                                        _subscription=subscription,
-                                        _received_at_reconnection_count=received_at_reconnection_count,
-                                    )
-                                )
+                            reserved = await self._reserve_handler_slot()
+                            task = task_group.create_task(
+                                self._run_message_handler(subscription, frame, epoch=epoch, reserved=reserved)
                             )
-                            task = task_group.create_task(_run_handler_with_safety_net(handler_coro))
-                            if self._handler_semaphore is not None:
+                            if reserved and self._handler_semaphore is not None:
                                 semaphore = self._handler_semaphore
 
                                 def _release(_t: asyncio.Task[None], s: asyncio.Semaphore = semaphore) -> None:
                                     s.release()
 
                                 task.add_done_callback(_release)
-                    case ErrorFrame():
-                        if self.on_error_frame:
-                            self.on_error_frame(frame)
-                    case HeartbeatFrame() | ConnectedFrame() | ReceiptFrame():
+                    case ErrorFrame() | ReceiptFrame():
+                        self._handle_subscription_frame(frame, epoch=epoch)
+                    case HeartbeatFrame() | ConnectedFrame():
                         pass
+
+    async def _reserve_handler_slot(self) -> bool:
+        semaphore = self._handler_semaphore
+        if semaphore is None:
+            return False
+        if not semaphore.locked():
+            await semaphore.acquire()
+            return True
+        if self._active_subscriptions.pending_receipts:
+            return False
+        capacity = asyncio.create_task(semaphore.acquire())
+        confirmation = asyncio.create_task(self._active_subscriptions.confirmation_started.wait())
+        reserved = False
+        try:
+            await asyncio.wait((capacity, confirmation), return_when=asyncio.FIRST_COMPLETED)
+            if capacity.done() and not capacity.cancelled():
+                reserved = capacity.result()
+            return reserved
+        finally:
+            confirmation.cancel()
+            if not capacity.done():
+                capacity.cancel()
+            await asyncio.gather(capacity, confirmation, return_exceptions=True)
+            if not reserved and not capacity.cancelled() and capacity.result():
+                semaphore.release()
+
+    async def _run_message_handler(
+        self,
+        subscription: AutoAckSubscription | ManualAckSubscription,
+        frame: MessageFrame,
+        *,
+        epoch: int,
+        reserved: bool,
+    ) -> None:
+        if self._handler_semaphore is not None and not reserved:
+            async with self._handler_semaphore:
+                await self._invoke_message_handler(subscription, frame, epoch=epoch)
+        else:
+            await self._invoke_message_handler(subscription, frame, epoch=epoch)
+
+    @staticmethod
+    async def _invoke_message_handler(
+        subscription: AutoAckSubscription | ManualAckSubscription, frame: MessageFrame, *, epoch: int
+    ) -> None:
+        handler = (
+            subscription._run_handler(frame=frame, received_at_reconnection_count=epoch)
+            if isinstance(subscription, AutoAckSubscription)
+            else subscription.handler(
+                AckableMessageFrame(
+                    headers=frame.headers,
+                    body=frame.body,
+                    _subscription=subscription,
+                    _received_at_reconnection_count=epoch,
+                )
+            )
+        )
+        await _run_handler_with_safety_net(handler)
+
+    def _handle_subscription_frame(self, frame: ErrorFrame | ReceiptFrame, *, epoch: int) -> None:
+        if isinstance(frame, ReceiptFrame):
+            self._active_subscriptions.handle_receipt(frame, epoch=epoch)
+        else:
+            self._active_subscriptions.handle_error(frame, epoch=epoch)
+            if self.on_error_frame:
+                self.on_error_frame(frame)
 
     async def send(
         self,
@@ -189,6 +258,8 @@ class Client:
         headers: dict[str, str] | None = None,
         on_suppressed_exception: Callable[[Exception, MessageFrame], Any],
         suppressed_exception_classes: tuple[type[Exception], ...] = (Exception,),
+        receipt_timeout: float | None = None,
+        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> "AutoAckSubscription":
         subscription = AutoAckSubscription(
             destination=destination,
@@ -197,6 +268,8 @@ class Client:
             ack=ack,
             on_suppressed_exception=on_suppressed_exception,
             suppressed_exception_classes=suppressed_exception_classes,
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
             _connection_manager=self._connection_manager,
             _active_subscriptions=self._active_subscriptions,
         )
@@ -210,12 +283,16 @@ class Client:
         *,
         ack: AckMode = "client-individual",
         headers: dict[str, str] | None = None,
+        receipt_timeout: float | None = None,
+        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> "ManualAckSubscription":
         subscription = ManualAckSubscription(
             destination=destination,
             handler=handler,
             headers=headers,
             ack=ack,
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
             _connection_manager=self._connection_manager,
             _active_subscriptions=self._active_subscriptions,
         )

@@ -47,8 +47,10 @@ async def create_client(connection_parameters: stompman.ConnectionParameters) ->
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("receipt_timeout", [None, 3.0])
 async def test_consumption_survives_forced_reconnects(
     connection_parameters: stompman.ConnectionParameters,
+    receipt_timeout: float | None,
 ) -> None:
     iterations = 3
     received: list[bytes] = []
@@ -75,7 +77,9 @@ async def test_consumption_survives_forced_reconnects(
                 await asyncio.wait_for(received_event.wait(), timeout=5)
                 assert payload in received, f"iteration {index}: {payload!r} not delivered"
 
-        subscription = await consumer.subscribe_with_manual_ack(destination=destination, handler=handle_message)
+        subscription = await consumer.subscribe_with_manual_ack(
+            destination=destination, handler=handle_message, receipt_timeout=receipt_timeout
+        )
         try:
             await consume_after_reconnects()
         finally:
@@ -85,6 +89,42 @@ async def test_consumption_survives_forced_reconnects(
         f"expected exactly {iterations} deliveries, got {len(received)}: {received}. "
         "prior-acked messages are being redelivered after every forced reconnect"
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("port", [9000, 9001], ids=["artemis", "classic"])
+async def test_receipt_rejection_does_not_replay_subscription(port: int) -> None:
+    error_frames: list[stompman.ErrorFrame] = []
+    parameters = stompman.ConnectionParameters("127.0.0.1", port, "admin", ":=123")
+    destination = f"confirmation-{uuid4()}"
+    received: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+
+    async def handle_message(frame: stompman.AckableMessageFrame) -> None:  # ruff: ignore[unused-async]
+        if not received.done():
+            received.set_result(frame.body)
+
+    async with stompman.Client(
+        servers=[parameters], on_error_frame=error_frames.append, connection_confirmation_timeout=10
+    ) as client:
+        with pytest.raises(stompman.SubscriptionError, match="rejected"):
+            await client.subscribe_with_manual_ack(
+                destination,
+                handle_message,
+                ack="auto",
+                headers={"selector": "colour = ("},
+                receipt_timeout=3,
+            )
+        assert not client._active_subscriptions.get_all()
+        assert not client._active_subscriptions.pending_receipts
+        await force_reconnect(client)
+        healthy = await client.subscribe_with_manual_ack(destination, handle_message, ack="auto", receipt_timeout=3)
+        try:
+            payload = str(uuid4()).encode()
+            await client.send(payload, destination)
+            assert await asyncio.wait_for(received, timeout=3) == payload
+            assert len(error_frames) == 1
+        finally:
+            await healthy.unsubscribe()
 
 
 @pytest.mark.anyio
