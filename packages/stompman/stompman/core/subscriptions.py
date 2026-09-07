@@ -9,13 +9,14 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import Any
 
-from ._tasks import await_cleanup
+from ._tasks import Cancellation, await_cleanup
+from .command import Command
 from .config import Confirmation, Confirmed, Unconfirmed
 from .delivery import Channel, Deliveries, Delivery
 from .errors import ConnectionLostError, ReceiptRejectedError, ReceiptTimeoutError, SubscriptionError
-from .frames import AckMode, MessageFrame, ReceiptFrame, SubscribeFrame, UnsubscribeFrame
+from .frames import AckMode, MessageFrame, SubscribeFrame, UnsubscribeFrame
 from .recovery import ConnectionSupervisor
-from .session import Command, Session
+from .session import Session
 
 LOGGER = logging.getLogger("stompman")
 
@@ -52,7 +53,13 @@ class SubscriptionSpec:
 
 class Dormant(Enum):
     NEW = auto()
+    WAITING_FOR_SESSION = auto()
     REMOVED = auto()
+
+
+class Installation(Enum):
+    INITIAL = auto()
+    RESTORATION = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,12 +68,11 @@ class Active:
     channel: Channel
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Installing:
     session: Session
     channel: Channel
     command: Command
-    operation: asyncio.Task[ReceiptFrame | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,10 +81,15 @@ class Rejected:
 
 
 class Subscription:
-    def __init__(self, spec: SubscriptionSpec, owner: "Subscriptions") -> None:
-        self.spec = spec
+    def __init__(self, source: Callable[[], SubscriptionSpec], owner: "Subscriptions") -> None:
+        self._source = source
+        self._spec = source()
         self._owner = owner
         self._state: Dormant | Active | Installing | Rejected = Dormant.NEW
+
+    @property
+    def spec(self) -> SubscriptionSpec:
+        return self._spec
 
     @property
     def id(self) -> str:
@@ -110,8 +121,11 @@ class Subscription:
             self._state.channel.pause()
 
     def disconnected(self, session: Session) -> None:
-        if isinstance(self._state, (Active, Installing)) and self._state.session is session:
-            self._state.channel.close()
+        state = self._state
+        if isinstance(state, (Active, Installing)) and state.session is session:
+            state.channel.close()
+            if isinstance(state, Active):
+                self._state = Dormant.WAITING_FOR_SESSION
 
     def _remove(self, state: Dormant | Rejected) -> None:
         if isinstance(self._state, (Active, Installing)):
@@ -144,24 +158,15 @@ class Subscription:
             confirmation=self.spec.operations,
         )
 
-        async def submit() -> None:
-            await command.submit()
-
-        attempt = Installing(session, channel, command, asyncio.create_task(submit(), name="stomp-subscribe-write"))
+        attempt = Installing(session, channel, command)
         self._state = attempt
-        try:
-            await attempt.operation
-        except BaseException:
-            command.close()
-            raise
+        await command.submit()
         return attempt
 
     async def _complete(self, attempt: Installing) -> None:
-        attempt.operation = asyncio.create_task(attempt.command.complete(), name="stomp-subscribe-receipt")
-        try:
-            await attempt.operation
-        finally:
-            attempt.command.close()
+        await attempt.command.complete()
+        if isinstance(self._state, Rejected):
+            raise self._state.error
         if self._state is attempt:
             self._state = Active(attempt.session, attempt.channel)
 
@@ -176,31 +181,32 @@ class Subscription:
                 async with asyncio.timeout(confirmation.timeout):
                     await session.write(UnsubscribeFrame(headers={"id": self.id}), Unconfirmed())
 
-    async def _failed(self, cause: BaseException, session: Session, *, restoring: bool, cancelled: bool) -> None:
+    def _failure(self, cause: BaseException, installation: Installation) -> SubscriptionError:
+        if isinstance(cause, ReceiptRejectedError):
+            return SubscriptionError(subscription_id=self.id, reason="rejected", frame=cause.frame)
+        if isinstance(cause, (TimeoutError, ReceiptTimeoutError)):
+            return SubscriptionError(subscription_id=self.id, reason="timeout")
+        if isinstance(cause, asyncio.CancelledError) and installation is Installation.INITIAL:
+            return SubscriptionError(subscription_id=self.id, reason="unsubscribed")
+        return SubscriptionError(subscription_id=self.id, reason="connection_lost")
+
+    async def _failed(
+        self, cause: BaseException, session: Session, installation: Installation, cancellation: Cancellation
+    ) -> SubscriptionError:
         if isinstance(self._state, Rejected):
             failure = self._state.error
         else:
-            reason = (
-                "rejected"
-                if isinstance(cause, ReceiptRejectedError)
-                else "timeout"
-                if isinstance(cause, (TimeoutError, ReceiptTimeoutError))
-                else "unsubscribed"
-                if isinstance(cause, asyncio.CancelledError) and not restoring
-                else "connection_lost"
-            )
-            failure = SubscriptionError(subscription_id=self.id, reason=reason)  # type: ignore[arg-type]
+            failure = self._failure(cause, installation)
             self._remove(Rejected(failure))
-            if (not cancelled and failure.reason != "unsubscribed") or restoring:
+            if installation is Installation.RESTORATION or (
+                not cancellation.requested and failure.reason != "unsubscribed"
+            ):
                 self._notify(failure)
         await await_cleanup(asyncio.create_task(self._cleanup(session)))
-        if not cancelled:
-            raise failure from cause
+        return failure
 
     async def open(self) -> None:
-        caller = asyncio.current_task()
-        assert caller is not None  # ruff: ignore[assert]
-        cancelling = caller.cancelling()
+        cancellation = Cancellation.capture()
         confirmation = self.spec.confirmation
 
         async def submit(session: Session) -> Installing:
@@ -209,7 +215,9 @@ class Subscription:
                 return await self._submit(session)
             except BaseException as cause:
                 if isinstance(confirmation, Confirmed):
-                    await self._failed(cause, session, restoring=False, cancelled=caller.cancelling() > cancelling)
+                    failure = await self._failed(cause, session, Installation.INITIAL, cancellation)
+                    if not cancellation.requested:
+                        raise failure from cause
                 else:
                     self.retire()
                 raise
@@ -219,31 +227,42 @@ class Subscription:
         try:
             await self._complete(attempt)
         except BaseException as cause:
-            await self._failed(cause, attempt.session, restoring=False, cancelled=caller.cancelling() > cancelling)
+            failure = await self._failed(cause, attempt.session, Installation.INITIAL, cancellation)
+            if not cancellation.requested:
+                raise failure from cause
             raise
 
     async def restore(self, session: Session) -> None:
-        if not isinstance(self._state, Active):
+        if self._state is not Dormant.WAITING_FOR_SESSION:
             return
-        caller = asyncio.current_task()
-        assert caller is not None  # ruff: ignore[assert]
-        cancelling = caller.cancelling()
+        previous = self._spec
+        self._spec = self._source()
+        try:
+            self._owner.rekey(self, previous.id)
+        except BaseException:
+            self._spec = previous
+            raise
+        cancellation = Cancellation.capture()
         try:
             attempt = await self._submit(session)
             await self._complete(attempt)
         except BaseException as cause:
             if isinstance(self.spec.confirmation, Unconfirmed):
+                if isinstance(self._state, Installing) and self._state.session is session:
+                    self._state.channel.close()
+                    self._state = Dormant.WAITING_FOR_SESSION
                 raise
-            with suppress(SubscriptionError):
-                await self._failed(cause, session, restoring=True, cancelled=caller.cancelling() > cancelling)
-            if isinstance(cause, asyncio.CancelledError) and caller.cancelling() > cancelling:
+            await self._failed(cause, session, Installation.RESTORATION, cancellation)
+            if cancellation.requested:
                 raise
 
     async def unsubscribe(self) -> None:
         state = self._state
-        if isinstance(state, Installing):
+        if state is Dormant.WAITING_FOR_SESSION:
+            self.retire()
+        elif isinstance(state, Installing):
             self._remove(Rejected(SubscriptionError(subscription_id=self.id, reason="unsubscribed")))
-            state.operation.cancel()
+            state.command.cancel()
         elif isinstance(state, Active):
             self._state = Dormant.REMOVED
             self._owner.remove(self)
@@ -281,8 +300,21 @@ class Subscriptions:
         if not self._items:
             self._empty.set()
 
+    def rekey(self, subscription: Subscription, previous_id: str) -> None:
+        existing = self._items.get(subscription.id)
+        if existing is not None and existing is not subscription:
+            msg = "subscription id is already active"
+            raise ValueError(msg)
+        self.connections.rekey(subscription, ("subscription", previous_id))
+        if self._items.get(previous_id) is subscription:
+            self._items.pop(previous_id)
+        self._items[subscription.id] = subscription
+
     async def subscribe(self, spec: SubscriptionSpec) -> Subscription:
-        subscription = Subscription(spec, self)
+        return await self.follow(lambda: spec)
+
+    async def follow(self, source: Callable[[], SubscriptionSpec]) -> Subscription:
+        subscription = Subscription(source, self)
         await subscription.open()
         return subscription
 

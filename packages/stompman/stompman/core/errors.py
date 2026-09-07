@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .config import Server
+from .config import Server, Unbounded
 from .frames import ErrorFrame, HeartbeatFrame, MessageFrame, ReceiptFrame
 
 
@@ -88,5 +88,5 @@ class TransactionOutcomeUnknownError(Error):
 class ConsumerOverloadedError(Error):
     """Local delivery admission is exhausted. Configure broker credit and capacity."""
 
-    max_pending_messages: int
-    max_pending_bytes: int
+    max_pending_messages: int | Unbounded
+    max_pending_bytes: int | Unbounded

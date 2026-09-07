@@ -1,17 +1,20 @@
 """A transaction owns its journal; recovery only sees the Restorable interface."""
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from types import TracebackType
-from typing import Self, cast
+from typing import Literal, Self, cast
 
+from ._tasks import await_cleanup
+from .command import Command
 from .config import Confirmation, Unconfirmed
 from .errors import ConnectionLostError, ReceiptRejectedError, ReceiptTimeoutError, TransactionOutcomeUnknownError
 from .frames import AbortFrame, BeginFrame, CommitFrame, SendFrame, SendHeaders
 from .recovery import ConnectionSupervisor
-from .session import Command, Session
+from .session import Session
 
 
 class TransactionState(StrEnum):
@@ -23,7 +26,7 @@ class TransactionState(StrEnum):
     UNCERTAIN = "uncertain"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class JournalEntry:
     headers: tuple[tuple[str, str], ...]
     body: bytes
@@ -36,6 +39,27 @@ class JournalEntry:
         return SendFrame(headers=cast("SendHeaders", dict(self.headers)), body=self.body)
 
 
+@dataclass(frozen=True, slots=True)
+class Open:
+    journal: list[JournalEntry]
+
+    def discard(self, entry: JournalEntry) -> None:
+        with suppress(ValueError):
+            self.journal.remove(entry)
+
+
+@dataclass(frozen=True, slots=True)
+class Committing:
+    journal: tuple[JournalEntry, ...]
+    session: Session
+
+
+@dataclass(frozen=True, slots=True)
+class Finished:
+    outcome: Literal[TransactionState.COMPLETED, TransactionState.ABORTED, TransactionState.UNCERTAIN]
+    journal: tuple[JournalEntry, ...]
+
+
 class Transaction:
     def __init__(
         self,
@@ -43,21 +67,43 @@ class Transaction:
         transaction_id: str,
         confirmation: Confirmation,
         commit_confirmation: Confirmation,
+        *,
+        replay_source: Callable[[], tuple[SendFrame, ...]] | None = None,
     ) -> None:
         if not transaction_id:
             msg = "transaction id must not be empty"
             raise ValueError(msg)
-        self.id = transaction_id
-        self._state = TransactionState.NEW
+        self._id = transaction_id
+        self._state: Literal[TransactionState.NEW] | Open | Committing | Finished = TransactionState.NEW
         self._connections = connections
         self._confirmation = confirmation
         self._commit_confirmation = commit_confirmation
-        self._journal: list[JournalEntry] = []
         self._lock = asyncio.Lock()
+        self._replay: Callable[[], tuple[JournalEntry, ...]]
+        if replay_source is None:
+            self._replay = lambda: self._journal
+        else:
+            self._replay = lambda: tuple(JournalEntry.from_frame(frame) for frame in replay_source())
+
+    @property
+    def id(self) -> str:
+        return self._id
 
     @property
     def state(self) -> TransactionState:
-        return self._state
+        match self._state:
+            case Open():
+                return TransactionState.OPEN
+            case Committing():
+                return TransactionState.COMMIT_REQUESTED
+            case Finished(outcome=outcome):
+                return outcome
+            case TransactionState.NEW:
+                return TransactionState.NEW
+
+    @property
+    def _journal(self) -> tuple[JournalEntry, ...]:
+        return () if self._state is TransactionState.NEW else tuple(self._state.journal)
 
     @property
     def key(self) -> tuple[str, str]:
@@ -67,21 +113,15 @@ class Transaction:
     def sent_frames(self) -> list[SendFrame]:
         return [entry.frame() for entry in self._journal]
 
-    def _require_open(self) -> None:
-        if self.state is not TransactionState.OPEN:
-            msg = f"transaction is {self.state.value}"
-            raise RuntimeError(msg)
+    def _require_open(self) -> Open:
+        if isinstance(self._state, Open):
+            return self._state
+        msg = f"transaction is {self.state.value}"
+        raise RuntimeError(msg)
 
     @property
     def _attempts(self) -> int:
         return self._confirmation.attempts if isinstance(self._confirmation, Unconfirmed) else 1
-
-    @staticmethod
-    async def _complete(command: Command) -> None:
-        try:
-            await command.complete()
-        finally:
-            command.close()
 
     async def __aenter__(self) -> Self:
         async with self._lock:
@@ -91,19 +131,17 @@ class Transaction:
 
             async def begin(session: Session) -> Command:
                 self._connections.attach(self)
-                command = session.command(BeginFrame(headers={"transaction": self.id}), self._confirmation)
                 try:
-                    await command.submit()
+                    command = await session.submit(BeginFrame(headers={"transaction": self.id}), self._confirmation)
                 except BaseException:
                     self._connections.detach(self)
-                    command.close()
                     raise
-                self._state = TransactionState.OPEN
+                self._state = Open([])
                 return command
 
             command = await self._connections.run(begin, attempts=self._attempts)
             try:
-                await self._complete(command)
+                await command.complete()
             except BaseException:
                 self.retire()
                 command.invalidate("BEGIN was not confirmed")
@@ -137,27 +175,30 @@ class Transaction:
             headers=headers,
         )
         async with self._lock:
-            self._require_open()
+            opened = self._require_open()
+            entry = JournalEntry.from_frame(frame)
 
             async def submit(session: Session) -> Command:
-                command = session.command(frame, self._confirmation)
+                # The generation gate makes recording and draining one operation.
+                # A rejection removes its exact entry synchronously in the reader,
+                # before recovery can replay it, even when it arrives before drain.
+                opened.journal.append(entry)
                 try:
+                    command = session.command(frame, self._confirmation, lambda _error: opened.discard(entry))
                     await command.submit()
                 except BaseException:
-                    command.close()
+                    opened.discard(entry)
                     raise
-                # Journal insertion and submission share the generation lock. Recovery
-                # can never replay this triggering SEND and then submit it a second time.
-                self._journal.append(JournalEntry.from_frame(frame))
                 return command
 
             command = await self._connections.run(submit, attempts=self._attempts)
-            await self._complete(command)
+            await command.complete()
 
     async def restore(self, session: Session) -> None:
-        if self.state is TransactionState.OPEN:
+        if isinstance(self._state, Open):
+            journal = self._replay()
             await session.write(BeginFrame(headers={"transaction": self.id}), Unconfirmed())
-            for entry in self._journal:
+            for entry in journal:
                 await session.write(entry.frame(), Unconfirmed())
 
     @staticmethod
@@ -165,58 +206,51 @@ class Transaction:
         del session
 
     def retire(self) -> None:
-        self._state = TransactionState.ABORTED
+        self._state = Finished(TransactionState.ABORTED, self._journal)
         self._connections.detach(self)
 
     async def commit(self) -> None:
         async with self._lock:
-            self._require_open()
+            opened = self._require_open()
 
             async def submit(session: Session) -> Command:
-                # Exclude this transaction from recovery before COMMIT can reach the wire.
+                # Once COMMIT may reach the wire, this journal can never replay.
                 self._connections.detach(self)
-                self._state = TransactionState.COMMIT_REQUESTED
-                command = session.command(CommitFrame(headers={"transaction": self.id}), self._commit_confirmation)
-                try:
-                    await command.submit()
-                except BaseException:
-                    command.close()
-                    raise
-                return command
+                self._state = Committing(tuple(opened.journal), session)
+                return await session.submit(CommitFrame(headers={"transaction": self.id}), self._commit_confirmation)
 
-            try:  # ruff: ignore[too-many-statements-in-try-clause]
+            try:
                 command = await self._connections.run(submit)
-                try:
-                    await self._complete(command)
-                except asyncio.CancelledError:
-                    command.invalidate("commit was cancelled")
-                    raise
+                await command.complete()
             except BaseException as error:
-                if self.state is TransactionState.OPEN:
-                    if not isinstance(error, asyncio.CancelledError):
-                        self.retire()
-                    raise
-                self._state = TransactionState.UNCERTAIN
-                if isinstance(error, asyncio.CancelledError):
-                    raise
-                if isinstance(error, Exception):
-                    raise TransactionOutcomeUnknownError(transaction_id=self.id, reason=error) from error
+                self._commit_failed(error)
                 raise
-            else:
-                self._state = TransactionState.COMPLETED
+            self._state = Finished(TransactionState.COMPLETED, tuple(opened.journal))
+
+    def _commit_failed(self, error: BaseException) -> None:
+        state = self._state
+        if isinstance(state, Committing):
+            self._state = Finished(TransactionState.UNCERTAIN, state.journal)
+            if isinstance(error, asyncio.CancelledError):
+                state.session.fail(ConnectionLostError(reason="commit was cancelled"))
+            elif isinstance(error, Exception):
+                raise TransactionOutcomeUnknownError(transaction_id=self.id, reason=error) from error
+        elif not isinstance(error, asyncio.CancelledError):
+            self.retire()
 
     async def abort(self) -> None:
         async with self._lock:
             if self.state is not TransactionState.OPEN:
                 return
+            # Withdraw replay intent before waiting for a generation. Once abort
+            # is requested, its cleanup remains owned even if the caller cancels.
+            self.retire()
+            await await_cleanup(asyncio.create_task(self._abort_current()))
 
-            try:
-                command = await self._connections.submit_current(
-                    AbortFrame(headers={"transaction": self.id}), self._confirmation
-                )
-            except ConnectionLostError:
-                self.retire()
-            else:
-                self.retire()
-                if command is not None:
-                    await self._complete(command)
+    async def _abort_current(self) -> None:
+        with suppress(ConnectionLostError):
+            command = await self._connections.submit_current(
+                AbortFrame(headers={"transaction": self.id}), self._confirmation
+            )
+            if command is not None:
+                await command.complete()

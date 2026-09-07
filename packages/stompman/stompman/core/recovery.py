@@ -10,10 +10,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
-from ._tasks import await_cleanup
-from .config import DEFAULT_CONFIRMATION, Confirmation, Heartbeat, RuntimeConfig, Server, Unconfirmed
+from ._tasks import Cancellation, await_cleanup
+from .command import Command
+from .config import DEFAULT_CONFIRMATION, Confirmation, Heartbeat, RuntimeConfig, Unconfirmed
+from .connector import Connector, Unavailable
 from .errors import (
-    AllServersUnavailable,
     AnyConnectionIssue,
     ConnectionLostError,
     ConnectionLostOnLifespanEnter,
@@ -21,8 +22,7 @@ from .errors import (
     FailedAllWriteAttemptsError,
 )
 from .frames import AnyClientFrame, AnyServerFrame, ReceiptFrame
-from .session import Command, HandshakeFailedError, Session
-from .transport import TransportFactory
+from .session import Session
 
 T = TypeVar("T")
 
@@ -65,13 +65,13 @@ class ConnectionSupervisor:
     def __init__(
         self,
         config: RuntimeConfig,
-        factory: TransportFactory,
+        connector: Connector,
         receive: Callable[[AnyServerFrame, Session], None],
         generation: int,
     ) -> None:
         self.config = config
         self.generation = generation
-        self._factory = factory
+        self._connector = connector
         self._receive = receive
         self._state: Disconnected | Restoring | Connected | Failed | Closed = Disconnected(0)
         self._gate = asyncio.Lock()
@@ -100,40 +100,14 @@ class ConnectionSupervisor:
         if self._resources.get(resource.key) is resource:
             self._resources.pop(resource.key)
 
-    async def _candidate(self, server: Server) -> Session | AnyConnectionIssue:
-        try:
-            transport = await self._factory(server, self.config.connection)
-        except (OSError, ConnectionLostError):
-            return AllServersUnavailable(servers=[server], timeout=self.config.connection.timeout)
-        try:
-            return await Session.open(transport, server, self.config.connection, self.generation + 1)
-        except HandshakeFailedError as error:
-            return error.issue
-        except (OSError, ConnectionLostError, ValueError):
-            return ConnectionLostOnLifespanEnter()
-
-    async def _race(self) -> Session | list[AnyConnectionIssue]:
-        tasks = [asyncio.create_task(self._candidate(server)) for server in self.config.servers]
-        issues: list[AnyConnectionIssue] = []
-
-        async def cleanup(keep: Session | list[AnyConnectionIssue]) -> None:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            await asyncio.gather(*(item.close() for item in results if isinstance(item, Session) and item is not keep))
-
-        try:
-            for completed in asyncio.as_completed(tasks):
-                result = await completed
-                if isinstance(result, Session):
-                    await await_cleanup(asyncio.create_task(cleanup(result)))
-                    return result
-                issues.append(result)
-        except BaseException:
-            await await_cleanup(asyncio.create_task(cleanup(issues)))
-            raise
-        return issues
+    def rekey(self, resource: Restorable, previous_key: tuple[str, str]) -> None:
+        existing = self._resources.get(resource.key)
+        if existing is not None and existing is not resource:
+            msg = f"{resource.key[0]} id is already active"
+            raise ValueError(msg)
+        if self._resources.get(previous_key) is resource:
+            self._resources.pop(previous_key)
+        self._resources[resource.key] = resource
 
     async def _discard(self) -> None:
         state = self._state
@@ -161,13 +135,11 @@ class ConnectionSupervisor:
             raise RuntimeError(msg)
         task = asyncio.create_task(self._connect_ready(), name="stomp-acquisition")
         self._acquisitions.add(task)
-        caller = asyncio.current_task()
-        assert caller is not None  # ruff: ignore[assert]
-        cancelling = caller.cancelling()
+        cancellation = Cancellation.capture()
         try:
             return await task
         except asyncio.CancelledError as error:
-            if self._stopping.is_set() and caller.cancelling() == cancelling:
+            if self._stopping.is_set() and not cancellation.requested:
                 msg = "runtime closed during connection acquisition"
                 raise RuntimeError(msg) from error
             raise
@@ -179,17 +151,17 @@ class ConnectionSupervisor:
         for attempt in range(self.config.recovery.attempts):
             if isinstance(self._state, Disconnected):
                 await asyncio.sleep(max(0, self._state.not_before - time.monotonic()))
-            result = await self._race()
-            if isinstance(result, list):
-                issues.extend(result)
+            result = await self._connector.connect()
+            if isinstance(result, Unavailable):
+                issues.extend(result.issues)
             else:
-                restoring = Restoring(result, time.monotonic())
+                session = Session(result, self.config.connection, self.generation + 1, self._receive)
+                restoring = Restoring(session, time.monotonic())
                 self._state = restoring
-                result.start(self._receive)
-                if await self._restore(result):
-                    self.generation = result.generation
-                    self._state = Connected(result, restoring.since)
-                    return result
+                if await self._restore(session):
+                    self.generation = session.generation
+                    self._state = Connected(session, restoring.since)
+                    return session
                 issues.append(ConnectionLostOnLifespanEnter())
             if attempt + 1 < self.config.recovery.attempts:
                 await asyncio.sleep(self.config.recovery.delay * (attempt + 1))
@@ -215,13 +187,7 @@ class ConnectionSupervisor:
             state = self._state
             if self._stopping.is_set() or not isinstance(state, Connected) or state.session.ended.done():
                 return None
-            command = state.session.command(frame, confirmation)
-            try:
-                await command.submit()
-            except BaseException:
-                command.close()
-                raise
-            return command
+            return await state.session.submit(frame, confirmation)
 
     async def run(self, operation: Callable[[Session], Awaitable[T]], *, attempts: int = 1) -> T:
         """Run submission and its atomic state update in the current generation."""
@@ -243,20 +209,11 @@ class ConnectionSupervisor:
         self, frame: AnyClientFrame, confirmation: Confirmation = DEFAULT_CONFIRMATION
     ) -> ReceiptFrame | None:
         async def submit(session: Session) -> Command:
-            command = session.command(frame, confirmation)
-            try:
-                await command.submit()
-            except BaseException:
-                command.close()
-                raise
-            return command
+            return await session.submit(frame, confirmation)
 
         attempts = confirmation.attempts if isinstance(confirmation, Unconfirmed) else 1
         command = await self.run(submit, attempts=attempts)
-        try:
-            return await command.complete()
-        finally:
-            command.close()
+        return await command.complete()
 
     async def start(self) -> None:
         async with self._gate:

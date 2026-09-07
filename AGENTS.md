@@ -9,7 +9,9 @@ The project consists of two main packages:
 2. `faststream-stomp` - A FastStream broker implementation for STOMP
 
 FastStream is the primary facade. Both facades use the independent implementation
-in `stompman.core`; FastStream must not execute through the legacy `Client`.
+in `stompman.core`. Native FastStream execution must not use the legacy `Client`.
+An explicitly supplied Client selects a compatibility adapter that preserves
+that object's identity, overrides, lifecycle, and historical defaults.
 Keep `Client` as a separate compatibility adapter and preserve consumer contracts
 when evolving the core. See `docs/session-core.md` for recovery and migration details.
 
@@ -21,6 +23,12 @@ of optional fields and flags. Native operations confirm broker receipts by
 default. Compatibility behavior is selected explicitly by adapters. Favor small
 interfaces that own their complexity; moving branches between files is not a
 sufficient architecture improvement.
+
+Preserve the complete pre-core public contract through compatibility adapters,
+including object construction, mutation, subclass hooks, defaults, and exception
+payloads. Do not require existing consumers to migrate to complete a refactor.
+Prefer structures whose fields and types encode their invariants, and operations
+that own cancellation and cleanup so their callers read as ordinary domain code.
 
 ## Key Features
 

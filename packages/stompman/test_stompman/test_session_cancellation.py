@@ -6,6 +6,7 @@ import stompman
 from stompman._compat import LegacyTransport
 from stompman.core import Confirmed, Delivery, TransactionState, Unconfirmed
 from stompman.core._tasks import await_cleanup
+from stompman.core.handshake import NegotiatedConnection
 from stompman.core.session import Session
 
 from test_stompman.conftest import ScriptedBroker, ScriptedConnection, wait_until
@@ -16,9 +17,46 @@ pytestmark = pytest.mark.anyio
 async def start_session(broker: ScriptedBroker) -> tuple[Session, ScriptedConnection]:
     config = broker.config()
     connection = broker.connection_class(broker, "localhost")
-    session = await Session.open(LegacyTransport(connection), config.servers[0], config.connection, 1)
-    session.start(lambda frame, owner: None)
+    peer = await NegotiatedConnection.open(LegacyTransport(connection), config.servers[0], config.connection)
+    session = Session(peer, config.connection, 1, lambda frame, owner: None)
     return session, connection
+
+
+async def test_command_can_be_cancelled_before_its_task_starts(broker: ScriptedBroker) -> None:
+    session, connection = await start_session(broker)
+    try:
+        command = session.command(stompman.SendFrame(headers={"destination": "q"}, body=b"cancelled"))
+        command.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await command.complete()
+        assert session.receipts.pending_count == 0
+        assert not any(isinstance(frame, stompman.SendFrame) for frame in connection.writes)
+        await session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"still usable"))
+    finally:
+        await session.close()
+
+
+async def test_session_closes_commands_whose_callers_have_not_waited(broker: ScriptedBroker) -> None:
+    session, _ = await start_session(broker)
+    broker.receipts = False
+    command = session.command(stompman.SendFrame(headers={"destination": "q"}, body=b"pending"))
+    await command.submit()
+    assert session.receipts.pending_count == 1
+    await session.close()
+    with pytest.raises((asyncio.CancelledError, stompman.ConnectionLostError)):
+        await command.complete()
+    assert session.receipts.pending_count == 0
+
+
+async def test_completion_waiter_can_start_before_submission_waiter(broker: ScriptedBroker) -> None:
+    session, _ = await start_session(broker)
+    try:
+        command = session.command(stompman.SendFrame(headers={"destination": "q"}, body=b"complete"))
+        assert isinstance(await command.complete(), stompman.ReceiptFrame)
+        await command.submit()
+        assert session.receipts.pending_count == 0
+    finally:
+        await session.close()
 
 
 @pytest.mark.parametrize("ack", ["client", "client-individual"])

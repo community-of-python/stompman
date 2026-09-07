@@ -9,10 +9,11 @@ from typing import Any, Literal, Self, overload
 from uuid import uuid4
 
 from ._tasks import await_cleanup
-from .config import DEFAULT_CONFIRMATION, Confirmation, Confirmed, Heartbeat, RuntimeConfig, Unconfirmed
+from .config import DEFAULT_CONFIRMATION, Confirmation, Confirmed, Heartbeat, RuntimeConfig, Server, Unconfirmed
+from .connector import Connector
 from .delivery import Deliveries, Delivery
 from .errors import SubscriptionError
-from .frames import AckMode, AnyServerFrame, ErrorFrame, MessageFrame, ReceiptFrame, SendFrame
+from .frames import AckMode, AnyClientFrame, AnyServerFrame, ErrorFrame, MessageFrame, ReceiptFrame, SendFrame
 from .recovery import Connected, ConnectionSupervisor, Failed, Restoring
 from .session import Session
 from .subscriptions import Subscription, Subscriptions, SubscriptionSpec, log_subscription_error
@@ -65,12 +66,19 @@ class Runtime:
         *,
         transport_factory: TransportFactory = connect_tcp,
         on_error_frame: Callable[[ErrorFrame], Any] = log_error_frame,
+        server_source: Callable[[], tuple[Server, ...]] | None = None,
     ) -> None:
-        self.config = config
-        self._factory = transport_factory
+        self._config = config
+        self._connector = Connector(
+            (lambda: config.servers) if server_source is None else server_source, config.connection, transport_factory
+        )
         self._on_error = on_error_frame
         self._state: Stopped | Running | Draining = Stopped(0)
         self._lifecycle = asyncio.Lock()
+
+    @property
+    def config(self) -> RuntimeConfig:
+        return self._config
 
     @property
     def status(self) -> RuntimeStatus:
@@ -131,7 +139,7 @@ class Runtime:
                 elif isinstance(frame, MessageFrame):
                     subscriptions.receive(frame, session)
 
-            connections = ConnectionSupervisor(self.config, self._factory, receive, self._state.generation)
+            connections = ConnectionSupervisor(self.config, self._connector, receive, self._state.generation)
             subscriptions = Subscriptions(connections, deliveries)
             try:
                 await connections.start()
@@ -186,6 +194,26 @@ class Runtime:
 
     async def reconnect(self) -> None:
         await self._running().connections.reconnect()
+
+    async def ensure_connected(self) -> None:
+        """Wait for a ready generation, preserving an already healthy session."""
+        await self._running().connections.start()
+
+    async def write_frame(
+        self, frame: AnyClientFrame, confirmation: Confirmation = DEFAULT_CONFIRMATION
+    ) -> ReceiptFrame | None:
+        return await self._running().connections.write(frame, confirmation)
+
+    async def submit_if_connected(self, frame: AnyClientFrame, confirmation: Confirmation) -> bool:
+        command = await self._running().connections.submit_current(frame, confirmation)
+        if command is None:
+            return False
+        await command.complete()
+        return True
+
+    async def subscribe_from(self, source: Callable[[], SubscriptionSpec]) -> Subscription:
+        """Install immutable snapshots supplied at creation and each restoration."""
+        return await self._running().subscriptions.follow(source)
 
     @overload
     async def send(
@@ -249,9 +277,14 @@ class Runtime:
         confirmation: Confirmation = DEFAULT_CONFIRMATION,
         transaction_id: str = "",
         commit_confirmation: Confirmation = DEFAULT_CONFIRMATION,
+        replay_source: Callable[[], tuple[SendFrame, ...]] | None = None,
     ) -> Transaction:
         return Transaction(
-            self._running().connections, transaction_id or str(uuid4()), confirmation, commit_confirmation
+            self._running().connections,
+            transaction_id or str(uuid4()),
+            confirmation,
+            commit_confirmation,
+            replay_source=replay_source,
         )
 
     async def subscribe(

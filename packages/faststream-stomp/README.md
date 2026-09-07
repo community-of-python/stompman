@@ -65,8 +65,8 @@ broker = faststream_stomp.StompBroker(
 
 You can also pass an existing `stompman.core.runtime.Runtime`. The broker starts and closes that runtime;
 `broker.runtime.status` exposes connection state and delivery capacity. Existing `StompBroker(stompman.Client(...))`
-construction remains supported: the broker copies the Client's configuration once and creates its own runtime.
-It does not execute Client methods or share the Client's connection or lifecycle.
+construction preserves the injected object, its overridden methods and lifecycle hooks,
+and its historical write-only defaults. Subclasses, proxies, and mocks keep their behavior.
 
 Native operations wait for broker receipts by default. Publication and subscription
 confirmation do not block unrelated receipt waits or the session reader. See the

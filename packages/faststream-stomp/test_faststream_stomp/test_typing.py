@@ -7,6 +7,7 @@ if typing.TYPE_CHECKING:
     import stompman
     from faststream_stomp.opentelemetry import StompTelemetryMiddleware
     from faststream_stomp.prometheus import StompPrometheusMiddleware
+    from faststream_stomp.publisher import StompProducer
     from prometheus_client import CollectorRegistry
     from stompman.core.config import RuntimeConfig
     from stompman.core.runtime import Runtime
@@ -23,6 +24,8 @@ if typing.TYPE_CHECKING:
     explicit_runtime_broker = faststream_stomp.StompBroker(Runtime(RuntimeConfig(servers=())))
     servers_broker = faststream_stomp.StompBroker(servers=[])
     native_app = faststream.FastStream(native_broker)
+    legacy_producer = StompProducer(client=stompman.Client(servers=[]), serializer=None)
+    native_producer = StompProducer(client=Runtime(RuntimeConfig(servers=())), serializer=None)
 
     async def check_add_content_length_typing() -> None:
         await broker.publish("message", "destination", add_content_length=False)

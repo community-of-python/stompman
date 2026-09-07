@@ -338,13 +338,12 @@ async def test_recovery_reports_ready_only_after_restoration_finishes(
 
 @pytest.mark.anyio
 async def test_close_cancels_owned_reconnection_without_leaking_transport(broker: ScriptedBroker) -> None:
-    from stompman._compat import LegacyTransportFactory  # ruff: ignore[import-outside-top-level]
     from stompman.core import Runtime  # ruff: ignore[import-outside-top-level]
     from stompman.core.transport import Transport  # ruff: ignore[import-outside-top-level]
 
     entering = asyncio.Event()
     release = asyncio.Event()
-    connect = LegacyTransportFactory(broker.connection_class, {})
+    connect = broker.transport
 
     async def factory(server: Server, settings: ConnectionSettings) -> Transport:
         if broker.connections:
@@ -392,7 +391,7 @@ async def test_close_interrupts_unconfirmed_transport_write(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("operation", ["abort", "commit"])
-async def test_cancelled_finalization_during_restore_keeps_transaction_owned(
+async def test_cancelled_finalization_during_restore_has_a_defined_outcome(
     broker: ScriptedBroker,
     monkeypatch: pytest.MonkeyPatch,
     operation: str,
@@ -417,10 +416,15 @@ async def test_cancelled_finalization_during_restore_keeps_transaction_owned(
         finalizing = asyncio.create_task(transaction.abort() if operation == "abort" else transaction.commit())
         await asyncio.sleep(0)
         finalizing.cancel()
+        if operation == "abort":
+            await asyncio.sleep(0)
+            assert transaction.state == stompman.core.TransactionState.ABORTED
+            assert not finalizing.done()
+        release.set()
         with pytest.raises(asyncio.CancelledError):
             await finalizing
-        assert transaction.state == stompman.core.TransactionState.OPEN
-        release.set()
         await reconnect
-        await transaction.abort()
+        if operation == "commit":
+            assert transaction.state == stompman.core.TransactionState.OPEN
+            await transaction.abort()
         assert not broker.current.transactions

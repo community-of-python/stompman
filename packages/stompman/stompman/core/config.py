@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from ssl import SSLContext
 from types import MappingProxyType
-from typing import Self
+from typing import Self, final
 
 MAX_PORT = 65535
 
@@ -29,7 +29,7 @@ class Heartbeat:
 
     def __post_init__(self) -> None:
         for value in (self.will_send_interval_ms, self.want_to_receive_interval_ms):
-            if not isinstance(value, int) or value < 0:
+            if type(value) is not int or value < 0:
                 msg = "heartbeat intervals must be nonnegative integers"
                 raise ValueError(msg)
 
@@ -95,7 +95,8 @@ DEFAULT_CONFIRMATION = Confirmed()
 class ConnectionSettings:
     timeout: float = 2.0
     handshake_timeout: float = 2.0
-    disconnect_timeout: float = 2.0
+    disconnect: Confirmation = Confirmed(2)
+    protocol_version: str = "1.2"
     read_chunk_size: int = 1024 * 1024
     tls: bool | SSLContext = False
     heartbeat: Heartbeat = Heartbeat(1000, 1000)
@@ -103,8 +104,11 @@ class ConnectionSettings:
     idle_timeout: float = math.inf
 
     def __post_init__(self) -> None:
-        for name in ("timeout", "handshake_timeout", "disconnect_timeout", "heartbeat_tolerance"):
+        for name in ("timeout", "handshake_timeout", "heartbeat_tolerance"):
             positive(name, getattr(self, name))
+        if not self.protocol_version:
+            msg = "protocol version must not be empty"
+            raise ValueError(msg)
         positive_integer("read_chunk_size", self.read_chunk_size)
         if self.idle_timeout != math.inf:
             positive("idle_timeout", self.idle_timeout)
@@ -123,15 +127,31 @@ class RecoveryPolicy:
             raise ValueError(msg)
 
 
+@final
+@dataclass(frozen=True, slots=True)
+class Unbounded:
+    """Explicitly disable one delivery limit."""
+
+
+@final
+@dataclass(frozen=True, slots=True)
+class Paused:
+    """Accept deliveries without starting handlers."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DeliveryLimits:
-    concurrency: int = 100
-    pending_messages: int = 1024
-    pending_bytes: int = 64 * 1024 * 1024
+    concurrency: int | Unbounded | Paused = 100
+    pending_messages: int | Unbounded = 1024
+    pending_bytes: int | Unbounded = 64 * 1024 * 1024
 
     def __post_init__(self) -> None:
-        for name in ("concurrency", "pending_messages", "pending_bytes"):
-            positive_integer(name, getattr(self, name))
+        if not isinstance(self.concurrency, (Unbounded, Paused)):
+            positive_integer("concurrency", self.concurrency)
+        for name in ("pending_messages", "pending_bytes"):
+            value = getattr(self, name)
+            if not isinstance(value, Unbounded):
+                positive_integer(name, value)
 
 
 @dataclass(frozen=True, slots=True)

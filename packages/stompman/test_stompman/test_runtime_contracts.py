@@ -145,7 +145,6 @@ async def test_callback_error_is_fatal_and_preserved(broker: ScriptedBroker) -> 
         "max_concurrent_handlers",
         "max_pending_messages",
         "max_pending_bytes",
-        "write_retry_attempts",
         "connect_retry_attempts",
     ],
 )

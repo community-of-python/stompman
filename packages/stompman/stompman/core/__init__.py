@@ -6,9 +6,11 @@ from .config import (
     ConnectionSettings,
     DeliveryLimits,
     Heartbeat,
+    Paused,
     RecoveryPolicy,
     RuntimeConfig,
     Server,
+    Unbounded,
     Unconfirmed,
 )
 from .delivery import Delivery
@@ -24,6 +26,7 @@ __all__ = [
     "Delivery",
     "DeliveryLimits",
     "Heartbeat",
+    "Paused",
     "RecoveryPolicy",
     "Runtime",
     "RuntimeConfig",
@@ -34,5 +37,6 @@ __all__ = [
     "TransactionState",
     "Transport",
     "TransportFactory",
+    "Unbounded",
     "Unconfirmed",
 ]

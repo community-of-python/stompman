@@ -246,12 +246,12 @@ delivery. Native operations use `confirmation=Confirmed(timeout)` for custom
 deadlines. Both facades run this core; legacy behavior is selected by the adapter.
 
 Existing `Client.send()` calls still return `None` after an unconfirmed write.
-Request a broker receipt explicitly when acceptance confirmation is needed:
+Select the native interface explicitly when broker confirmation is needed:
 
 ```python
-receipt = await client.send(b"payload", "events", receipt_timeout=5)
+receipt = await client.core.send(b"payload", "events")
 
-async with client.begin(receipt_timeout=5) as transaction:
+async with client.core.begin() as transaction:
     await transaction.send(b"first", "events")
     await transaction.send(b"second", "events")
 ```
@@ -262,8 +262,9 @@ replay that operation. An ambiguous transaction commit raises
 `TransactionOutcomeUnknownError` instead of risking a duplicate commit. Open
 transactions are restored after reconnection with BEGIN and their send journal.
 
-Delivery admission defaults to 1,024 messages and 64 MiB, including unsettled
-messages. Configure `max_pending_messages`, `max_pending_bytes` and broker
-credit/prefetch together. Handler saturation leaves the session reader responsive;
+Native delivery admission defaults to 1,024 messages and 64 MiB, including unsettled
+messages. Legacy Client admission stays unlimited unless `max_pending_messages`
+or `max_pending_bytes` is supplied. Configure admission and broker credit/prefetch
+together. Handler saturation leaves the session reader responsive;
 exhausted admission raises `ConsumerOverloadedError`. Use `client-individual` ACK
 when messages must remain eligible for broker redelivery after failure.

@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 import stompman
-from stompman.core import Confirmed, Delivery
+from stompman.core import Confirmed, Delivery, Unconfirmed
 
 from test_stompman.conftest import ScriptedBroker, wait_until
 
@@ -301,3 +301,23 @@ async def test_overload_is_bounded_and_distinct_from_connection_loss(
     assert runtime.status.pending_messages == 0
     assert broker.connect_calls == 1
     assert broker.current.closed
+
+
+async def test_unconfirmed_restoration_retries_after_failed_subscribe(broker: ScriptedBroker) -> None:
+    received: list[bytes] = []
+
+    async def handle(delivery: Delivery) -> None:
+        received.append(delivery.body)
+        await delivery.ack()
+
+    async with broker.runtime() as runtime:
+        subscription = await runtime.subscribe("q", handle, confirmation=Unconfirmed())
+        broker.fail_before = lambda frame, connection: (
+            isinstance(frame, stompman.SubscribeFrame) and connection is broker.connections[1]
+        )
+        await runtime.reconnect()
+        assert len(broker.connections) == 3
+        assert subscription.id in broker.current.subscriptions
+        broker.current.deliver(subscription.id, b"after retry", ack_id="retry")
+        await wait_until(lambda: received == [b"after retry"])
+        await subscription.unsubscribe()

@@ -1,7 +1,28 @@
 import asyncio
-from typing import TypeVar
+from dataclasses import dataclass
+from typing import Self, TypeVar
 
 Result = TypeVar("Result")
+
+
+@dataclass(frozen=True, slots=True)
+class Cancellation:
+    """Distinguish cancellation of our caller from cancellation of owned work."""
+
+    task: asyncio.Task[object]
+    requests: int
+
+    @classmethod
+    def capture(cls) -> Self:
+        task = asyncio.current_task()
+        if task is None:
+            msg = "cancellation tracking requires an asyncio task"
+            raise RuntimeError(msg)
+        return cls(task, task.cancelling())
+
+    @property
+    def requested(self) -> bool:
+        return self.task.cancelling() > self.requests
 
 
 async def await_cleanup(task: asyncio.Task[Result]) -> Result:

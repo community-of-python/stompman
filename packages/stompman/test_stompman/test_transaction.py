@@ -1,8 +1,10 @@
+import asyncio
+
 import pytest
 import stompman
 from stompman.core import Confirmed, TransactionState, Unconfirmed
 
-from test_stompman.conftest import ScriptedBroker
+from test_stompman.conftest import ScriptedBroker, ScriptedConnection, wait_until
 
 pytestmark = pytest.mark.anyio
 
@@ -126,3 +128,74 @@ async def test_abort_after_connection_loss_does_not_reconnect(broker: ScriptedBr
         await transaction.abort()
         assert transaction.state is TransactionState.ABORTED
     assert broker.committed == []
+
+
+@pytest.mark.parametrize("reject_before_drain", [True, False])
+@pytest.mark.parametrize("accepted_body", [b"accepted", b"rejected"])
+async def test_rejected_send_is_removed_before_transaction_restoration(
+    broker: ScriptedBroker, monkeypatch: pytest.MonkeyPatch, accepted_body: bytes, *, reject_before_drain: bool
+) -> None:
+    original_write = broker.connection_class.write_frame
+    rejections: asyncio.Queue[tuple[ScriptedConnection, stompman.ErrorFrame]] = asyncio.Queue()
+    publications = 0
+
+    async def write(connection: ScriptedConnection, frame: stompman.AnyClientFrame) -> None:
+        nonlocal publications
+        if isinstance(frame, stompman.SendFrame) and "receipt" in frame.headers:
+            publications += 1
+        if isinstance(frame, stompman.SendFrame) and publications == 2 and "receipt" in frame.headers:
+            rejection = stompman.ErrorFrame(headers={"receipt-id": frame.headers["receipt"], "message": "rejected"})
+            if reject_before_drain:
+                connection.incoming.put_nowait(rejection)
+                await asyncio.sleep(0)
+            else:
+                rejections.put_nowait((connection, rejection))
+            return
+        await original_write(connection, frame)
+
+    monkeypatch.setattr(broker.connection_class, "write_frame", write)
+    async with broker.runtime() as runtime, runtime.begin(transaction_id="tx") as transaction:
+        await transaction.send(accepted_body, "q")
+        send = asyncio.create_task(transaction.send(b"rejected", "q"))
+        if not reject_before_drain:
+            connection, rejection = await rejections.get()
+            await wait_until(lambda: not runtime.status.writing)
+            connection.incoming.put_nowait(rejection)
+        with pytest.raises(stompman.ReceiptRejectedError):
+            await send
+        await runtime.reconnect()
+        assert [frame.body for frame in transaction.sent_frames] == [accepted_body]
+        assert [frame.body for frame in broker.current.transactions["tx"]] == [accepted_body]
+    assert [frame.body for frame in broker.committed[0]] == [accepted_body]
+
+
+async def test_external_replay_journal_is_snapshotted_before_begin(
+    broker: ScriptedBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source: list[stompman.SendFrame] = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_write = broker.connection_class.write_frame
+
+    async def write(connection: ScriptedConnection, frame: stompman.AnyClientFrame) -> None:
+        if isinstance(frame, stompman.BeginFrame):
+            entered.set()
+            await release.wait()
+        await original_write(connection, frame)
+
+    async with broker.runtime() as runtime, runtime.begin(replay_source=lambda: tuple(source)) as transaction:
+        await transaction.send(b"first", "original")
+        source[:] = transaction.sent_frames
+        monkeypatch.setattr(broker.connection_class, "write_frame", write)
+        reconnect = asyncio.create_task(runtime.reconnect())
+        try:
+            await entered.wait()
+            source[0].headers["destination"] = "mutated"
+            source.clear()
+        finally:
+            release.set()
+            await reconnect
+        replayed = broker.current.transactions[transaction.id]
+        assert len(replayed) == 1
+        assert replayed[0].headers["destination"] == "original"
+    assert broker.committed[0][0].headers["destination"] == "original"

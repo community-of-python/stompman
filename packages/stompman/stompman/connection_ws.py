@@ -29,7 +29,7 @@ class WebSocketConnection(AbstractConnection):
         *,
         host: str,
         port: int,
-        timeout: float,
+        timeout: int,
         read_max_chunk_size: int,
         ssl: Literal[True] | SSLContext | None,
         ws_uri_path: str | None = None,

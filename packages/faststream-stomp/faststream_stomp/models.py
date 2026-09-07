@@ -94,7 +94,7 @@ class StompPublishCommand(BatchPublishCommand):
 
 @dataclass(kw_only=True)
 class BrokerConfigWithStompClient(BrokerConfig):
-    client: Runtime
+    client: stompman.Client | Runtime
 
 
 @dataclass(kw_only=True)

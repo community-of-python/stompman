@@ -33,6 +33,8 @@ async def client(
             yield instance
         finally:
             await instance.core.close(cancel_handlers=True)
+            for subscription in instance._active_subscriptions.get_all():
+                await subscription.unsubscribe()
 
 
 async def noop_message_handler(frame: stompman.MessageFrame) -> None:
@@ -359,8 +361,8 @@ async def test_transaction_finalization_does_not_overtake_replay(
             await release_write.wait()
 
     monkeypatch.setattr(broker.connection_class, "write_frame", blocked_write)
-    transaction = client.begin()
-    await transaction.__aenter__()
+    context = client.begin()
+    transaction = await context.__aenter__()
     await transaction.send(b"buffered message", "test")
     remaining_frames(outgoing)
     connection.incoming.put_nowait(stompman.ConnectionLostError(reason="force replay"))
@@ -368,7 +370,7 @@ async def test_transaction_finalization_does_not_overtake_replay(
         try:
             restored_connection, restored = await next_subscribe(outgoing)
             receipt(restored_connection, restored)
-            commit = tasks.create_task(transaction.__aexit__(None, None, None))
+            commit = tasks.create_task(context.__aexit__(None, None, None))
             await asyncio.sleep(0)
             assert not commit.done()
             assert not any(isinstance(frame, stompman.CommitFrame) for frame in remaining_frames(outgoing))

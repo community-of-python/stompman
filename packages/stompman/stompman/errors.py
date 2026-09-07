@@ -1,7 +1,10 @@
-"""Compatibility exports for :mod:`stompman.core.errors`."""
+"""Legacy exception families and their original diagnostic payloads."""
 
+from dataclasses import dataclass
+
+from .config import ConnectionParameters
+from .core.errors import AllServersUnavailable as NativeAllServersUnavailable
 from .core.errors import (
-    AllServersUnavailable,
     AnyConnectionIssue,
     ConnectionConfirmationTimeout,
     ConnectionLostError,
@@ -17,6 +20,15 @@ from .core.errors import (
     TransactionOutcomeUnknownError,
     UnsupportedProtocolVersion,
 )
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class AllServersUnavailable(NativeAllServersUnavailable):
+    # The compatibility boundary restores the original payload type. The native
+    # diagnostic deliberately contains only native Server objects.
+    servers: list[ConnectionParameters]  # type: ignore[assignment]
+    timeout: int
+
 
 __all__ = [
     "AllServersUnavailable",

@@ -1,6 +1,7 @@
 import typing
 from typing import Any, NoReturn
 
+import stompman
 from fast_depends.library.serializer import SerializerProto
 from faststream import PublishCommand, PublishType
 from faststream._internal.basic_types import SendableMessage
@@ -28,7 +29,7 @@ class StompProducer(ProducerProto[StompPublishCommand]):
     def __init__(
         self,
         *,
-        client: Runtime,
+        client: stompman.Client | Runtime,
         serializer: SerializerProto | None,
         add_content_length: bool = True,
     ) -> None:

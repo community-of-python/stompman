@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import Any, NoReturn
 
 import stompman
 from faststream import PublishCommand, StreamMessage
@@ -11,17 +11,13 @@ from faststream._internal.endpoint.subscriber.call_item import CallsCollection
 from faststream._internal.producer import ProducerProto
 from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.schema import Message, Operation, SubscriberSpec
-from stompman.core.delivery import Delivery
-from stompman.subscription import AckableMessageFrame
 
+from faststream_stomp._client import SubscriptionAdapter, adapt_client
 from faststream_stomp.models import (
     StompPublishCommand,
     StompSubscriberSpecificationConfig,
     StompSubscriberUsecaseConfig,
 )
-
-if TYPE_CHECKING:
-    from stompman.core.subscriptions import Subscription
 
 
 class StompSubscriberSpecification(SubscriberSpecification[BrokerConfig, StompSubscriberSpecificationConfig]):
@@ -70,23 +66,20 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         calls: CallsCollection[stompman.MessageFrame],
     ) -> None:
         self.config = config
-        self._subscription: Subscription | None = None
+        self._subscription: SubscriptionAdapter | None = None
         super().__init__(config=config, specification=specification, calls=calls)  # type: ignore[arg-type]
 
     async def start(self) -> None:
         if self._subscription is not None:
             return
         await super().start()
-        self._subscription = await self.config._outer_config.client.subscribe(
+        self._subscription = await adapt_client(self.config._outer_config.client).subscribe(
             destination=self.config.full_destination,
-            handler=self._consume_delivery,
+            handler=self.consume,
             ack=self.config.ack_mode,
             headers=self.config.headers,
         )
         self._post_start()
-
-    async def _consume_delivery(self, delivery: Delivery) -> None:
-        await self.consume(AckableMessageFrame.from_delivery(delivery))
 
     async def stop(self) -> None:
         if self._subscription is not None:

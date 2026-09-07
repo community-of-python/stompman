@@ -25,6 +25,7 @@ from stompman.core.config import RuntimeConfig
 from stompman.core.runtime import Runtime
 from stompman.core.transport import TransportFactory, connect_tcp
 
+from faststream_stomp._client import adapt_client
 from faststream_stomp.models import BrokerConfigWithStompClient, StompPublishCommand
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
@@ -71,7 +72,7 @@ class StompBroker(
     StompRegistrator,
     BrokerUsecase[
         stompman.MessageFrame,
-        Runtime,
+        stompman.Client | Runtime,
         BrokerConfig,  # Using BrokerConfig to avoid typing issues when passing broker to FastStream app
     ],
 ):
@@ -108,12 +109,9 @@ class StompBroker(
         if client is None:
             msg = "provide a runtime, runtime configuration, Client, or servers"
             raise TypeError(msg)
-        if isinstance(client, Runtime):
-            runtime = client
-        elif isinstance(client, stompman.Client):
-            runtime = client.to_runtime()
-        else:
-            runtime = Runtime(client, transport_factory=transport_factory)
+        connection = (
+            Runtime(client, transport_factory=transport_factory) if isinstance(client, RuntimeConfig) else client
+        )
         fd_config = FastDependsConfig(use_fastdepends=apply_types)
         broker_config = BrokerConfigWithStompClient(
             broker_middlewares=middlewares,  # type: ignore[arg-type]
@@ -129,14 +127,17 @@ class StompBroker(
             graceful_timeout=graceful_timeout,
             extra_context={"broker": self},
             producer=StompProducer(
-                client=runtime,
+                client=connection,
                 serializer=fd_config._serializer,
                 add_content_length=add_content_length,
             ),
-            client=runtime,
+            client=connection,
         )
         specification = BrokerSpec(
-            url=[f"{one_server.host}:{one_server.port}" for one_server in runtime.config.servers],
+            url=[
+                f"{one_server.host}:{one_server.port}"
+                for one_server in (connection.config.servers if isinstance(connection, Runtime) else connection.servers)
+            ],
             protocol="STOMP",
             protocol_version="1.2",
             description=description,
@@ -149,12 +150,14 @@ class StompBroker(
 
     @property
     def runtime(self) -> Runtime:
-        return self.config.broker_config.client
+        client = self.config.broker_config.client
+        return client if isinstance(client, Runtime) else client.core
 
-    async def _connect(self) -> Runtime:
-        await self.runtime.start()
+    async def _connect(self) -> stompman.Client | Runtime:
+        client = self.config.broker_config.client
+        await adapt_client(client).open()
         self._stopping = False
-        return self.runtime
+        return client
 
     async def start(self) -> None:
         if self.running:
@@ -175,10 +178,13 @@ class StompBroker(
         self._stopping = True
         try:
             await super().stop(exc_type, exc_val, exc_tb)
+        except BaseException as error:
+            exc_type, exc_val, exc_tb = type(error), error, error.__traceback__
+            raise
         finally:
             try:
                 if self._connection is not None:
-                    await self._connection.close(exc_type, exc_val, exc_tb, cancel_handlers=True)
+                    await adapt_client(self._connection).close(exc_type, exc_val, exc_tb)
             finally:
                 self._connection = None
                 self.running = False

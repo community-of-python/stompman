@@ -3,17 +3,22 @@
 `stompman.core` is a self-contained STOMP library. It imports its own modules and
 the standard library. Importing it does not load the legacy facade. Frames, codec,
 configuration, errors, TCP transport, session execution, and recovery all live in
-core. The legacy `stompman.frames`, `stompman.serde`, and `stompman.errors` paths
-re-export the canonical definitions, preserving class identity.
+core. The legacy `stompman.frames` and `stompman.serde` paths re-export the
+canonical protocol definitions, preserving class identity. Legacy error names
+remain available; diagnostic adapters retain the original connection-parameter
+payloads where the native configuration uses different types.
 
-FastStream is the primary facade and executes core directly. `Client` is a
-separate compatibility adapter. Supplying a Client to StompBroker takes an
-independent configuration and transport snapshot; Client execution methods and
-lifecycle state are not shared.
+FastStream is the primary facade and executes core directly when configured with
+servers, `RuntimeConfig`, or `Runtime`. `Client` is a separate compatibility
+adapter. Explicitly supplying a Client to StompBroker preserves that exact object,
+its execution overrides, lifecycle hooks, and historical write-only defaults.
 
 ```mermaid
 flowchart TD
-    FastStream[FastStream facade] --> Runtime
+    FastStream[FastStream facade] --> Native[Native adapter]
+    Native --> Runtime
+    FastStream --> Injected[Injected Client adapter]
+    Injected --> Client
     Client[Client compatibility adapter] --> Runtime
     Client --> Compatibility[Legacy configuration and transport bridge]
     Runtime --> Recovery[ConnectionSupervisor]
@@ -24,11 +29,16 @@ flowchart TD
     Transaction --> Recovery
     Subscriptions --> Deliveries
     Recovery --> Session
+    Recovery --> Connector
+    Connector --> Handshake[NegotiatedConnection]
     Deliveries --> Session
     Session --> Transport[Transport interface]
     Transport --> TCP[Native TCP]
     Transport --> Compatibility
-    Session --> Receipts
+    Session --> Commands
+    Commands --> Receipts
+    Deliveries --> Capacity
+    Deliveries --> Settlement
     TCP --> Codec[Core frames and codec]
 ```
 
@@ -37,12 +47,24 @@ flowchart TD
 | Module | Interface | Invariants it owns |
 | --- | --- | --- |
 | `Runtime` | Start, close, send, subscribe, begin, status | Complete running resources; draining handlers can still publish and settle |
-| `ConnectionSupervisor` | Run a submission, reconnect, attach/detach restoration intent | Connection races, retry spacing, generation changes, consistent journal restoration |
-| `Session` | Open, create a command, write, close | One transport and reader, write order, heartbeats, cancellation, deterministic cleanup |
+| `Connector` / `NegotiatedConnection` | Connect, close | Handshake success before construction; every losing connection is closed |
+| `ConnectionSupervisor` | Run a submission, reconnect, attach/detach restoration intent | Retry spacing, generation changes, consistent journal restoration |
+| `Session` | Create a command, write, close | One negotiated transport and reader, write order, heartbeats, deterministic cleanup |
+| `Commands` / `Command` | Submit, complete, cancel | Owned execution and receipt lifetime; callers never need a separate command cleanup step |
 | `Receipts` | Reserve, receive, discard, fail | Exact receipt correlation; retire correlations before rejection observers |
-| `Subscriptions` / `Subscription` | Subscribe, receive, restore, unsubscribe | Immutable intent, installing/active/removed states, callback ordering, safe ID reuse |
-| `Deliveries` / `Channel` | Admit, pause, drain, settle | Capacity reservations, handler scheduling, ordered settlement on the original session |
-| `Transaction` | Enter, send, commit, abort | Immutable replay journal, transaction state, ambiguous commit handling |
+| `Subscriptions` / `Subscription` | Subscribe, receive, restore, unsubscribe | Immutable intent, explicit waiting/installing/active/removed states, callback ordering, safe ID reuse |
+| `Deliveries` / `Channel` | Admit, pause, drain | Handler scheduling and channel lifetime |
+| `Capacity` / `Reservation` | Reserve, finish handler, finish settlement | Admission stays charged until both owners finish exactly once |
+| `ManualAcknowledgements` | Register, settle, finish | Ordered ACK/NACK on the original session; queue membership means unsettled |
+| `Transaction` | Enter, send, commit, abort | Immutable journal entries, typed open/committing/finished states, ambiguous commit handling |
+
+Start reading with `core/runtime.py`: it composes the owners and describes the
+application lifecycle. Follow a publication through `recovery.py` and `command.py`;
+the command owns the asynchronous work and exposes just submission and completion.
+Then read `subscriptions.py` for installation and recovery, `delivery.py` for handler
+execution, and `transaction.py` for the journal. `session.py`, `handshake.py`, and
+`connector.py` contain the transport lifecycle. Capacity and settlement details
+stay in their own modules and do not spread into facade methods.
 
 Transactions and subscriptions implement the same small restoration interface.
 They never inspect Runtime fields. Delivery settlement holds a capability tied to
@@ -55,12 +77,22 @@ session waits for subscription confirmations before allowing new submissions.
 A command succeeds only after both transport drain and its exact receipt succeed;
 a receipt arriving before a stalled drain cannot hide a write timeout.
 
-A capacity reservation contains two obligations: handler completion and settlement.
-Capacity is released when both finish. Queued deliveries, running handlers, and
+A capacity reservation gives the handler and settlement separate idempotent
+completion capabilities. Capacity is released when both finish. Queued deliveries, running handlers, and
 completed handlers with unsettled messages all count toward admission. Channels
 serialize their settlement ledger and retire old generations without redirecting
 ACK/NACK. Unsubscribe waits for already requested settlements before its wire
 command; graceful shutdown first pauses admission and drains running handlers.
+
+An open transaction appends immutable entries under the generation gate; finished
+transactions retain a frozen snapshot. A rejected SEND removes its own entry in
+the reader before any recovery can replay it. A failed unconfirmed resubscription
+returns to waiting for a session, preserving intent for the next connection attempt.
+
+Cancellation before COMMIT submission leaves the transaction open. An ABORT
+request immediately withdraws replay intent and owns its cleanup; cancellation is
+propagated after that cleanup completes. This prevents a transaction being replayed
+while its caller is already trying to abort it.
 
 ## Native interface
 
@@ -138,11 +170,33 @@ diagnostics still describe the session being restored.
 
 ## Compatibility and FastStream
 
-Client retains its constructor fields, dataclass extension, methods, callback
-shapes, and context behavior. Normal Client context exit waits for subscriptions
+Client retains its constructor fields, dataclass extension, method signatures,
+mutable public objects, callback shapes, exception payloads, and context behavior.
+Normal Client context exit waits for subscriptions
 to be removed. `_compat.LegacyOptions` translates old flat options into native
 configuration and explicitly chooses unconfirmed operation policies. The core
 contains no legacy fallback detection.
+
+Legacy subscription handlers and callbacks are consulted at execution time.
+Destination, headers, IDs, and server lists produce fresh immutable core snapshots
+for restoration. The original subscription, acknowledgement, and transaction
+constructors remain available. `Client.begin()` remains a lazy async context manager
+and decorator, and the legacy transaction retains its stable mutable `sent_frames`
+list. Changes to that list affect recovery through an explicit replay supplier;
+the currently submitting frame stays outside replay because its sender owns retry.
+Raw `ConnectionManager` and `ConnectionLifespan` extension modules remain
+available through adapters.
+
+Native admission defaults to 1,024 messages and 64 MiB. Legacy admission remains
+unlimited unless `max_pending_messages` or `max_pending_bytes` is supplied;
+`max_concurrent_handlers=None` remains unlimited and zero pauses dispatch.
+The adapter expresses these choices as `Unbounded()` and `Paused()` policies.
+Native numeric limits and timeouts still require valid positive values.
+
+Legacy expired deadlines still invoke custom transport hooks and retain retry
+spacing. Connection failures preserve the original server objects and timeout
+values, including failures nested in background exception groups. A custom
+restoration hook that loses its connection invalidates that session and retries.
 
 Both Client subscription methods retain `receipt_timeout` and
 `on_subscription_error`. Receipt confirmation is opt-in on this facade only.
@@ -163,8 +217,9 @@ Its factory returns a connected transport or raises; it never returns None.
 FastStream accepts `StompBroker(RuntimeConfig(...))`, an owned Runtime, or
 `StompBroker(servers=[ConnectionParameters(...)])`. Native configuration can be
 paired with an explicit `transport_factory`. Existing `StompBroker(Client(...))`
-continues working while using native execution and confirmed defaults. Custom
-Client execution overrides should move to middleware or a transport adapter.
+uses the injected object's `send`, `begin`, subscription, health, and lifecycle
+methods. Existing subclasses, proxies, and mocks therefore keep working. Use
+`RuntimeConfig` or `Runtime` when selecting native receipt-confirmed defaults.
 
 FastStream continues delivering the actual `stompman.AckableMessageFrame` class.
 Publish command headers remain mutable for middleware. Router, subscriber
@@ -177,9 +232,12 @@ Tests import core with every legacy module blocked and relocate it under a
 different package name, then perform a confirmed TCP publication. Behavioral
 regressions cover independent receipt waits, cancellation at each write phase,
 restoration, stale settlement, capacity, cumulative ACK/NACK, replacement IDs,
-transaction replay, and graceful draining. FastStream tests disable Client
-execution methods while exercising core publication, handlers, replies, restart,
-and shutdown. Integration suites use both asyncio backends and both brokers.
+transaction replay, and graceful draining. FastStream tests disable Client execution
+methods for the native path and exercise the injected object's methods on the legacy
+path. Both paths cover publication, handlers, replies, restart, and shutdown.
+Differential probes and permanent compatibility regressions compare constructors,
+mutation, typing, defaults, and exception payloads with the pre-core implementation.
+Integration suites use both asyncio backends and both brokers.
 
 Set `STOMPMAN_ARTEMIS_PORT` and `STOMPMAN_CLASSIC_PORT` before Docker Compose and
 pytest when using isolated broker ports. Run `scripts/wait_for_stomp_brokers.py`

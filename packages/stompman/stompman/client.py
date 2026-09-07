@@ -1,33 +1,64 @@
-from collections.abc import Awaitable, Callable, Coroutine
+"""The original mutable Client API, adapted to the independent session core."""
+
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from types import TracebackType
-from typing import Any, ClassVar, Self, overload
+from typing import Any, ClassVar, Self
 
 from stompman._compat import LegacyOptions
-from stompman.core import Delivery, Runtime
-from stompman.core.subscriptions import log_subscription_error
+from stompman.connection_lifespan import ConnectionLifespan
+from stompman.connection_manager import ConnectionManager
+from stompman.core import Runtime
 from stompman.errors import SubscriptionError
-from stompman.frames import AckMode, MessageFrame, ReceiptFrame
-from stompman.subscription import AckableMessageFrame, AutoAckSubscription, ManualAckSubscription, _make_subscription_id
-from stompman.transaction import Transaction, _make_transaction_id
+from stompman.frames import AckMode, MessageFrame, SendFrame
+from stompman.subscription import AckableMessageFrame, ActiveSubscriptions, AutoAckSubscription, ManualAckSubscription
+from stompman.transaction import Transaction
 
 
 @dataclass(kw_only=True, slots=True)
 class Client(LegacyOptions):
-    """Compatibility facade. Runtime owns all protocol and connection state."""
+    """Compatibility facade. Runtime owns protocol, recovery, and delivery state."""
 
     PROTOCOL_VERSION: ClassVar = "1.2"
-    _runtime: Runtime = field(init=False, repr=False)
+    _runtime: Runtime | None = field(default=None, init=False, repr=False, compare=False)
+    _connection_manager: ConnectionManager = field(init=False)
+    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
+    _active_transactions: set[Transaction] = field(default_factory=set, init=False)
 
     def __post_init__(self) -> None:
-        self._runtime = self.to_runtime()
+        self._connection_manager = ConnectionManager(
+            servers=self.servers,
+            lifespan_factory=partial(
+                ConnectionLifespan,
+                protocol_version=self.PROTOCOL_VERSION,
+                client_heartbeat=self.heartbeat,
+                connection_confirmation_timeout=self.connection_confirmation_timeout,
+                disconnect_confirmation_timeout=self.disconnect_confirmation_timeout,
+                active_subscriptions=self._active_subscriptions,
+            ),
+            connection_class=self.connection_class,
+            connect_retry_attempts=self.connect_retry_attempts,
+            connect_retry_interval=self.connect_retry_interval,
+            connect_timeout=self.connect_timeout,
+            read_max_chunk_size=self.read_max_chunk_size,
+            write_retry_attempts=self.write_retry_attempts,
+            check_server_alive_interval_factor=self.check_server_alive_interval_factor,
+            no_message_restart_interval=self.no_message_restart_interval,
+            keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
+            ssl=self.ssl,
+        )
+        self._connection_manager.bind(lambda: self.core)
 
     @property
     def core(self) -> Runtime:
+        if self._runtime is None:
+            self._runtime = self.to_runtime(wrap_transport=self._connection_manager.observe_transport)
         return self._runtime
 
     async def __aenter__(self) -> Self:
-        await self._runtime.start()
+        await self._connection_manager.__aenter__()
         return self
 
     async def __aexit__(
@@ -35,36 +66,16 @@ class Client(LegacyOptions):
     ) -> None:
         try:
             if exc_type is None:
-                await self._runtime.wait_until_unsubscribed()
+                await self._active_subscriptions.wait_until_empty()
         except BaseException as error:
-            await self._runtime.close(type(error), error, error.__traceback__)
+            await self._connection_manager.__aexit__(type(error), error, error.__traceback__)
             raise
         else:
-            await self._runtime.close(exc_type, exc_value, traceback)
-
-    @overload
-    async def send(
-        self,
-        body: bytes,
-        destination: str,
-        *,
-        content_type: str | None = None,
-        add_content_length: bool = True,
-        headers: dict[str, str] | None = None,
-        receipt_timeout: None = None,
-    ) -> None: ...
-
-    @overload
-    async def send(
-        self,
-        body: bytes,
-        destination: str,
-        *,
-        content_type: str | None = None,
-        add_content_length: bool = True,
-        headers: dict[str, str] | None = None,
-        receipt_timeout: float,
-    ) -> ReceiptFrame: ...
+            await self._connection_manager.__aexit__(exc_type, exc_value, traceback)
+        finally:
+            for subscription in self._active_subscriptions.get_all():
+                self._active_subscriptions.delete_by_id(subscription.id)
+            self._active_transactions.clear()
 
     async def send(
         self,
@@ -74,25 +85,24 @@ class Client(LegacyOptions):
         content_type: str | None = None,
         add_content_length: bool = True,
         headers: dict[str, str] | None = None,
-        receipt_timeout: float | None = None,
-    ) -> ReceiptFrame | None:
-        return await self._runtime.send(
-            body,
-            destination,
-            content_type=content_type,
-            add_content_length=add_content_length,
-            headers=headers,
-            confirmation=self.confirmation(receipt_timeout),
-        )
-
-    def begin(self, *, receipt_timeout: float | None = None) -> Transaction:
-        return Transaction(
-            self._runtime.begin(
-                confirmation=self.confirmation(None),
-                commit_confirmation=self.confirmation(receipt_timeout),
-                transaction_id=_make_transaction_id(),
+    ) -> None:
+        await self._connection_manager.write_frame_reconnecting(
+            SendFrame.build(
+                body=body,
+                destination=destination,
+                transaction=None,
+                content_type=content_type,
+                add_content_length=add_content_length,
+                headers=headers,
             )
         )
+
+    @asynccontextmanager
+    async def begin(self) -> AsyncGenerator[Transaction, None]:
+        async with Transaction(
+            _connection_manager=self._connection_manager, _active_transactions=self._active_transactions
+        ) as transaction:
+            yield transaction
 
     async def subscribe(
         self,
@@ -106,36 +116,20 @@ class Client(LegacyOptions):
         receipt_timeout: float | None = None,
         on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> AutoAckSubscription:
-        async def consume(delivery: Delivery) -> None:
-            frame = MessageFrame(headers=delivery.headers, body=delivery.body)
-            try:
-                await handler(frame)
-            except suppressed_exception_classes as error:
-                if ack != "auto":
-                    await delivery.nack()
-                on_suppressed_exception(error, frame)
-            else:
-                if ack != "auto":
-                    await delivery.ack()
-
-        subscription = await self._runtime.subscribe(
-            destination,
-            consume,
-            ack=ack,
+        subscription = AutoAckSubscription(
+            destination=destination,
+            handler=handler,
             headers=headers,
-            subscription_id=_make_subscription_id(),
-            confirmation=self.confirmation(receipt_timeout),
-            operation_confirmation=self.confirmation(None),
-            on_subscription_error=on_subscription_error or log_subscription_error,
+            ack=ack,
+            on_suppressed_exception=on_suppressed_exception,
+            suppressed_exception_classes=suppressed_exception_classes,
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
+            _connection_manager=self._connection_manager,
+            _active_subscriptions=self._active_subscriptions,
         )
-        return AutoAckSubscription(
-            subscription,
-            headers.copy() if headers is not None else None,
-            on_subscription_error,
-            handler,
-            on_suppressed_exception,
-            suppressed_exception_classes,
-        )
+        await subscription._subscribe()
+        return subscription
 
     async def subscribe_with_manual_ack(
         self,
@@ -147,22 +141,18 @@ class Client(LegacyOptions):
         receipt_timeout: float | None = None,
         on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
     ) -> ManualAckSubscription:
-        async def consume(delivery: Delivery) -> None:
-            await handler(AckableMessageFrame.from_delivery(delivery))
-
-        subscription = await self._runtime.subscribe(
-            destination,
-            consume,
-            ack=ack,
+        subscription = ManualAckSubscription(
+            destination=destination,
+            handler=handler,
             headers=headers,
-            subscription_id=_make_subscription_id(),
-            confirmation=self.confirmation(receipt_timeout),
-            operation_confirmation=self.confirmation(None),
-            on_subscription_error=on_subscription_error or log_subscription_error,
+            ack=ack,
+            receipt_timeout=receipt_timeout,
+            on_subscription_error=on_subscription_error,
+            _connection_manager=self._connection_manager,
+            _active_subscriptions=self._active_subscriptions,
         )
-        return ManualAckSubscription(
-            subscription, headers.copy() if headers is not None else None, on_subscription_error, handler
-        )
+        await subscription._subscribe()
+        return subscription
 
     def is_alive(self) -> bool:
-        return self._runtime.is_alive()
+        return self._runtime is not None and self._runtime.is_alive()

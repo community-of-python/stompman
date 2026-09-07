@@ -1,6 +1,7 @@
 # The scripted broker models wire commands explicitly and factories accept config overrides.
 import asyncio
 import copy
+import math
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
@@ -11,9 +12,20 @@ from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
 import pytest
 import stompman
 from polyfactory.factories.dataclass_factory import DataclassFactory
-from stompman._compat import LegacyOptions
+from stompman._compat import LegacyTransport
 from stompman.connection import AbstractConnection
-from stompman.core import Runtime, RuntimeConfig
+from stompman.core import (
+    Confirmed,
+    ConnectionSettings,
+    DeliveryLimits,
+    Heartbeat,
+    RecoveryPolicy,
+    Runtime,
+    RuntimeConfig,
+    Server,
+)
+from stompman.core.runtime import log_error_frame
+from stompman.core.transport import Transport
 
 if TYPE_CHECKING:
     from stompman.frames import MessageHeaders
@@ -192,10 +204,48 @@ class ScriptedBroker:
         return options | kwargs
 
     def config(self, **kwargs: Any) -> RuntimeConfig:  # ruff: ignore[any-type]
-        return LegacyOptions(**self.options(**kwargs)).to_config()
+        options = self.options(**kwargs)
+        heartbeat = options["heartbeat"]
+        idle = options["no_message_restart_interval"]
+        return RuntimeConfig(
+            tuple(Server(s.host, s.port, s.login, s.unescaped_passcode, s.connect_headers) for s in options["servers"]),
+            connection=ConnectionSettings(
+                timeout=options.get("connect_timeout", 2),
+                handshake_timeout=options["connection_confirmation_timeout"],
+                disconnect=Confirmed(options["disconnect_confirmation_timeout"]),
+                heartbeat=Heartbeat(heartbeat.will_send_interval_ms, heartbeat.want_to_receive_interval_ms),
+                idle_timeout=math.inf if idle is None else idle.total_seconds(),
+            ),
+            recovery=RecoveryPolicy(
+                attempts=options.get("connect_retry_attempts", 3),
+                delay=options["connect_retry_interval"],
+                keep_trying=options.get("keep_alive_on_connection_failure", False),
+            ),
+            delivery=DeliveryLimits(
+                concurrency=options.get("max_concurrent_handlers", 100),
+                pending_messages=options.get("max_pending_messages", 1024),
+                pending_bytes=options.get("max_pending_bytes", 64 * 1024 * 1024),
+            ),
+        )
+
+    async def transport(self, server: Server, settings: ConnectionSettings) -> Transport:
+        connection = await self.connection_class.connect(
+            host=server.host,
+            port=server.port,
+            timeout=settings.timeout,
+            read_max_chunk_size=settings.read_chunk_size,
+            ssl=settings.tls or None,
+        )
+        if connection is None:
+            raise stompman.ConnectionLostError(reason="scripted connection unavailable")
+        return LegacyTransport(connection)
 
     def runtime(self, **kwargs: Any) -> Runtime:  # ruff: ignore[any-type]
-        return LegacyOptions(**self.options(**kwargs)).to_runtime()
+        return Runtime(
+            self.config(**kwargs),
+            transport_factory=self.transport,
+            on_error_frame=kwargs.get("on_error_frame", log_error_frame),
+        )
 
     def client(self, **kwargs: Any) -> stompman.Client:  # ruff: ignore[any-type]
         return EnrichedClient(**self.options(**kwargs))
