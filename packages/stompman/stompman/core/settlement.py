@@ -134,7 +134,14 @@ class ManualAcknowledgements:
             if isinstance(decision, Pending):
                 break
             del self._pending[settlement]
-            await self._send(settlement, decision)
+            try:
+                await self._send(settlement, decision)
+            except BaseException:
+                # Later decisions already returned to their callers. Retiring the
+                # session lets the broker redeliver them without replaying an
+                # acknowledgement whose outcome is unknown.
+                self._session.fail(ConnectionLostError(reason="cumulative settlement was interrupted"))
+                raise
 
     async def _send(self, settlement: ManualSettlement, decision: Decision) -> None:
         try:

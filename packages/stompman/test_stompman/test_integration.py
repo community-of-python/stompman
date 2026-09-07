@@ -156,12 +156,15 @@ async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
 def generate_frames(
     cases: list[tuple[bytes, list[stompman.AnyClientFrame | stompman.AnyServerFrame]]],
 ) -> tuple[list[bytes], list[stompman.AnyClientFrame | stompman.AnyServerFrame]]:
-    all_bytes, all_frames = [], []
+    all_bytes: list[bytes] = []
+    all_frames: list[stompman.AnyClientFrame | stompman.AnyServerFrame] = []
 
     for noise, frames in cases:
         current_all_bytes = []
         if noise:
             current_all_bytes.append(noise + NEWLINE)
+            if noise == b"\r":
+                all_frames.append(stompman.HeartbeatFrame())
 
         for frame in frames:
             current_all_bytes.append(NEWLINE if isinstance(frame, stompman.HeartbeatFrame) else dump_frame(frame))

@@ -1,4 +1,5 @@
 import pytest
+from hypothesis import given, strategies
 from stompman import (
     AckFrame,
     AnyClientFrame,
@@ -9,6 +10,7 @@ from stompman import (
     FrameParser,
     HeartbeatFrame,
     MessageFrame,
+    ReceiptFrame,
     SendFrame,
     dump_frame,
 )
@@ -320,3 +322,64 @@ def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
 )
 def test_load_frames(raw_frames: bytes, loaded_frames: list[AnyServerFrame]) -> None:
     assert list(FrameParser().parse_frames_from_chunk(raw_frames)) == loaded_frames
+
+
+@pytest.mark.parametrize("line_ending", [b"\n", b"\r\n"])
+@pytest.mark.parametrize("chunk_size", [1, 2, 1024])
+def test_heartbeats_survive_chunk_boundaries(line_ending: bytes, chunk_size: int) -> None:
+    receipt = ReceiptFrame(headers={"receipt-id": "after-heartbeat"})
+    wire = line_ending + dump_frame(receipt) + line_ending
+    parser = FrameParser()
+
+    received = [
+        frame
+        for offset in range(0, len(wire), chunk_size)
+        for frame in parser.parse_frames_from_chunk(wire[offset : offset + chunk_size])
+    ]
+
+    assert received == [HeartbeatFrame(), receipt, HeartbeatFrame()]
+
+
+@pytest.mark.parametrize("content_length", ["-1", "invalid"])
+def test_invalid_content_length_does_not_swallow_the_next_frame(content_length: str) -> None:
+    message = MessageFrame(
+        headers={"destination": "events", "message-id": "first", "subscription": "consumer"}, body=b"payload"
+    )
+    message.headers["content-length"] = content_length
+    receipt = ReceiptFrame(headers={"receipt-id": "after-message"})
+
+    received = list(FrameParser().parse_frames_from_chunk(dump_frame(message) + dump_frame(receipt)))
+
+    assert received == [message, receipt]
+
+
+@given(
+    frame_body=strategies.binary(max_size=512),
+    header_value=strategies.text(
+        alphabet=strategies.characters(exclude_categories=["Cs"], exclude_characters="\x00"), max_size=32
+    ),
+    chunk_size=strategies.integers(min_value=1, max_value=128),
+)
+def test_frames_round_trip_with_fragmented_binary_and_unicode(
+    frame_body: bytes, header_value: str, chunk_size: int
+) -> None:
+    message = MessageFrame(
+        headers={
+            "destination": header_value,
+            "message-id": "first",
+            "subscription": "consumer",
+            "content-length": str(len(frame_body)),
+        },
+        body=frame_body,
+    )
+    receipt = ReceiptFrame(headers={"receipt-id": "after-message"})
+    wire = dump_frame(message) + dump_frame(receipt)
+    parser = FrameParser()
+
+    received = [
+        frame
+        for offset in range(0, len(wire), chunk_size)
+        for frame in parser.parse_frames_from_chunk(wire[offset : offset + chunk_size])
+    ]
+
+    assert received == [message, receipt]

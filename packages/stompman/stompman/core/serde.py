@@ -2,7 +2,8 @@ import struct
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Final, cast
+from enum import Enum, auto
+from typing import Any, Final, cast, final
 
 from .frames import (
     AbortFrame,
@@ -29,6 +30,8 @@ from .frames import (
 NEWLINE: Final = b"\n"
 CARRIAGE: Final = b"\r"
 NULL: Final = b"\x00"
+_NULL_BYTE: Final = ord(NULL)
+_NEWLINE_BYTE: Final = ord(NEWLINE)
 BACKSLASH = b"\\"
 COLON_ = b":"
 
@@ -142,83 +145,97 @@ def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: byte
     return frame_type(headers=headers_, body=body) if frame_type in FRAMES_WITH_BODY else frame_type(headers=headers_)  # type: ignore[call-arg]
 
 
+class _CommandLine(Enum):
+    WAITING = auto()
+
+
+@final
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _ReadingHeaders:
+    command: bytes
+    headers: dict[str, str]
+
+
+@final
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _ReadingBody:
+    command: bytes
+    headers: dict[str, str]
+    content_length: int | None
+
+
+def _body_length(headers: dict[str, str]) -> int | None:
+    content_length = None
+    for header_name, header_value in headers.items():
+        if header_name.lower() == "content-length":
+            with suppress(ValueError):
+                candidate = int(header_value)
+                if candidate >= 0:
+                    content_length = candidate
+    return content_length
+
+
 @dataclass(kw_only=True, slots=True, init=False)
 class FrameParser:
-    _current_buf: bytearray
-    _previous_byte: bytes | None
-    _headers_processed: bool
-    _command: bytes | None
-    _headers: dict[str, str]
-    _content_length: int | None
+    """Decode a byte stream while retaining only its current line or body.
+
+    Each phase carries the data that is already known. Header dictionaries move
+    into emitted frames; later input never mutates a previously emitted frame.
+    """
+
+    _buffer: bytearray
+    _state: _CommandLine | _ReadingHeaders | _ReadingBody
 
     def __init__(self) -> None:
-        self._previous_byte = None
         self._reset()
 
     def _reset(self) -> None:
-        self._current_buf = bytearray()
-        self._headers_processed = False
-        self._command = None
-        self._headers = {}
-        self._content_length = None
+        self._buffer = bytearray()
+        self._state = _CommandLine.WAITING
 
-    def _handle_null_byte(self) -> Iterator[AnyClientFrame | AnyServerFrame]:
-        if not self._command or not self._headers_processed:
-            self._reset()
-            return
-        if self._content_length is not None and self._content_length != len(self._current_buf):
-            self._current_buf += NULL
-            return
-        yield make_frame_from_parts(command=self._command, headers=self._headers, body=bytes(self._current_buf))
-        self._reset()
-
-    def _handle_newline_byte(self) -> Iterator[HeartbeatFrame]:
-        if not self._current_buf and not self._command:
-            yield HeartbeatFrame()
-            return
-        if self._previous_byte == CARRIAGE:
-            self._current_buf.pop()
-        self._headers_processed = not self._current_buf  # extra empty line after headers
-
-        if self._command:
-            self._process_header()
+    def _read_line(self, state: _CommandLine | _ReadingHeaders) -> HeartbeatFrame | None:
+        line = self._buffer.removesuffix(CARRIAGE)
+        self._buffer.clear()
+        if isinstance(state, _CommandLine):
+            if not line:
+                return HeartbeatFrame()
+            command = bytes(line)
+            if command in COMMANDS_TO_FRAMES:
+                self._state = _ReadingHeaders(command=command, headers={})
+        elif not line:
+            self._state = _ReadingBody(
+                command=state.command, headers=state.headers, content_length=_body_length(state.headers)
+            )
         else:
-            self._process_command()
+            header = parse_header(line, unescape=state.command not in {b"CONNECT", b"CONNECTED"})
+            if header is not None:
+                header_name, header_value = header
+                state.headers.setdefault(header_name, header_value)
+        return None
 
-    def _process_command(self) -> None:
-        current_buf_bytes = bytes(self._current_buf)
-        if current_buf_bytes not in COMMANDS_TO_FRAMES:
-            self._reset()
-        else:
-            self._command = current_buf_bytes
-            self._current_buf = bytearray()
-
-    def _process_header(self) -> None:
-        header = parse_header(self._current_buf, unescape=self._command not in {b"CONNECT", b"CONNECTED"})
-        if not header:
-            self._current_buf = bytearray()
-            return
-        header_key, header_value = header
-        if header_key not in self._headers:
-            self._headers[header_key] = header_value
-            if header_key.lower() == "content-length":
-                with suppress(ValueError):
-                    self._content_length = int(header_value)
-        self._current_buf = bytearray()
-
-    def _handle_body_byte(self, byte: bytes) -> None:
-        if self._content_length is None or self._content_length != len(self._current_buf):
-            self._current_buf += byte
+    def _read_body(self, state: _ReadingBody, byte: int) -> AnyClientFrame | AnyServerFrame | None:
+        if byte == _NULL_BYTE:
+            if state.content_length is None or len(self._buffer) == state.content_length:
+                frame = make_frame_from_parts(command=state.command, headers=state.headers, body=bytes(self._buffer))
+                self._reset()
+                return frame
+            self._buffer.append(byte)
+        elif state.content_length is None or len(self._buffer) < state.content_length:
+            self._buffer.append(byte)
+        return None
 
     def parse_frames_from_chunk(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:
-        for byte in iter_bytes(chunk):
-            if byte == NULL:
-                yield from self._handle_null_byte()
-            elif self._headers_processed:
-                self._handle_body_byte(byte)
-            elif byte == NEWLINE:
-                yield from self._handle_newline_byte()
+        for byte in chunk:
+            state = self._state
+            if isinstance(state, _ReadingBody):
+                frame = self._read_body(state, byte)
+                if frame is not None:
+                    yield frame
+            elif byte == _NULL_BYTE:
+                self._reset()
+            elif byte == _NEWLINE_BYTE:
+                heartbeat = self._read_line(state)
+                if heartbeat is not None:
+                    yield heartbeat
             else:
-                self._current_buf += byte
-
-            self._previous_byte = byte
+                self._buffer.append(byte)

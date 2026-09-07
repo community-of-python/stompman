@@ -52,7 +52,8 @@ flowchart TD
 | `Session` | Create a command, write, close | One negotiated transport and reader, write order, heartbeats, deterministic cleanup |
 | `Commands` / `Command` | Submit, complete, cancel | Owned execution and receipt lifetime; callers never need a separate command cleanup step |
 | `Receipts` | Reserve, receive, discard, fail | Exact receipt correlation; retire correlations before rejection observers |
-| `Subscriptions` / `Subscription` | Subscribe, receive, restore, unsubscribe | Immutable intent, explicit waiting/installing/active/removed states, callback ordering, safe ID reuse |
+| `FrameParser` | Parse a chunk | Command, headers, and body are distinct phases; completed frames own their headers |
+| `Subscriptions` / `Subscription` | Subscribe, receive, restore, unsubscribe | Immutable intent, explicit waiting/installing/active/removing/removed states, callback ordering, safe ID reuse |
 | `Deliveries` / `Channel` | Admit, pause, drain | Handler scheduling and channel lifetime |
 | `Capacity` / `Reservation` | Reserve, finish handler, finish settlement | Admission stays charged until both owners finish exactly once |
 | `ManualAcknowledgements` | Register, settle, finish | Ordered ACK/NACK on the original session; queue membership means unsettled |
@@ -82,7 +83,20 @@ completion capabilities. Capacity is released when both finish. Queued deliverie
 completed handlers with unsettled messages all count toward admission. Channels
 serialize their settlement ledger and retire old generations without redirecting
 ACK/NACK. Unsubscribe waits for already requested settlements before its wire
-command; graceful shutdown first pauses admission and drains running handlers.
+command and reserves its subscription ID until removal finishes. Concurrent
+unsubscribe calls join the same cleanup task. A failed removal confirmation
+retires the original session before that ID can be reused. Graceful shutdown
+first pauses admission and drains running handlers.
+
+If a cumulative ACK/NACK sequence is interrupted, its original session is retired.
+This allows the broker to redeliver later messages whose decisions were already
+queued, without replaying an acknowledgement with an unknown outcome.
+
+The incremental parser retains one line or body buffer. Header and body phases
+require a recognized command, so there are no partially initialized combinations
+of command and parsing flags. Both LF and CRLF heartbeats survive chunk boundaries.
+Malformed content lengths use the existing delimiter-based fallback, including
+negative lengths, so they cannot consume all following frames.
 
 An open transaction appends immutable entries under the generation gate; finished
 transactions retain a frozen snapshot. A rejected SEND removes its own entry in

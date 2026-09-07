@@ -80,12 +80,17 @@ class Rejected:
     error: SubscriptionError
 
 
+@dataclass(frozen=True, slots=True)
+class Removing:
+    task: asyncio.Task[None]
+
+
 class Subscription:
     def __init__(self, source: Callable[[], SubscriptionSpec], owner: "Subscriptions") -> None:
         self._source = source
         self._spec = source()
         self._owner = owner
-        self._state: Dormant | Active | Installing | Rejected = Dormant.NEW
+        self._state: Dormant | Active | Installing | Rejected | Removing = Dormant.NEW
 
     @property
     def spec(self) -> SubscriptionSpec:
@@ -264,16 +269,27 @@ class Subscription:
             self._remove(Rejected(SubscriptionError(subscription_id=self.id, reason="unsubscribed")))
             state.command.cancel()
         elif isinstance(state, Active):
-            self._state = Dormant.REMOVED
-            self._owner.remove(self)
             state.channel.pause()
-            await await_cleanup(asyncio.create_task(self._unsubscribe_active(state)))
+            state = Removing(asyncio.create_task(self._unsubscribe_active(state), name="stomp-unsubscribe"))
+            self._state = state
+        if isinstance(state, Removing):
+            try:
+                await await_cleanup(state.task)
+            finally:
+                self.retire()
 
     async def _unsubscribe_active(self, state: Active) -> None:
-        await state.channel.finish()
-        if not state.session.ended.done() and self.id not in self._owner.ids:
-            with suppress(ConnectionLostError):
+        try:
+            await state.channel.finish()
+            if not state.session.ended.done():
                 await state.session.write(UnsubscribeFrame(headers={"id": self.id}), self.spec.operations)
+        except ConnectionLostError:
+            pass
+        except BaseException:
+            # The ID remains reserved until removal is confirmed or this session
+            # can no longer accept a replacement with the same ID.
+            state.session.fail(ConnectionLostError(reason="UNSUBSCRIBE was not confirmed"))
+            raise
 
 
 class Subscriptions:
