@@ -1,128 +1,189 @@
 # Session core and adapters
 
-FastStream is the primary facade. Its producer, subscriber and lifecycle code use
-`stompman.core.Runtime` directly. `stompman.Client` is a separate compatibility
-adapter. Supplying a Client to StompBroker extracts its configuration once; it
-does not execute Client methods or share the Client's lifecycle.
+`stompman.core` is a self-contained STOMP library. It imports its own modules and
+the standard library. Importing it does not load the legacy facade. Frames, codec,
+configuration, errors, TCP transport, session execution, and recovery all live in
+core. The legacy `stompman.frames`, `stompman.serde`, and `stompman.errors` paths
+re-export the canonical definitions, preserving class identity.
+
+FastStream is the primary facade and executes core directly. `Client` is a
+separate compatibility adapter. Supplying a Client to StompBroker takes an
+independent configuration and transport snapshot; Client execution methods and
+lifecycle state are not shared.
 
 ```mermaid
 flowchart TD
-    FastStream[FastStream adapter] --> Runtime
-    Client[Legacy Client adapter] --> Runtime
-    Runtime --> Session
-    Runtime --> Delivery[Bounded delivery and settlement]
-    Runtime --> Transactions[Transaction state and journal]
-    Session --> Connection[TCP or WebSocket transport]
-    Connection --> Codec[Frames and codec]
+    FastStream[FastStream facade] --> Runtime
+    Client[Client compatibility adapter] --> Runtime
+    Client --> Compatibility[Legacy configuration and transport bridge]
+    Runtime --> Recovery[ConnectionSupervisor]
+    Runtime --> Subscriptions
+    Runtime --> Deliveries
+    Runtime --> Transaction
+    Subscriptions --> Recovery
+    Transaction --> Recovery
+    Subscriptions --> Deliveries
+    Recovery --> Session
+    Deliveries --> Session
+    Session --> Transport[Transport interface]
+    Transport --> TCP[Native TCP]
+    Transport --> Compatibility
+    Session --> Receipts
+    TCP --> Codec[Core frames and codec]
 ```
 
-Runtime owns desired subscriptions, serialized recovery and operations, bounded
-delivery admission, and transaction state. A Session represents exactly one
-physical connection and generation. It has one continuous reader, ordered
-writes, negotiated heartbeats, receipt correlation and deterministic cleanup.
-Frames, configuration and errors are shared leaf modules; the core never imports
-the legacy Client, subscription adapter, transaction adapter, manager or lifespan.
+## Ownership and review map
 
-## Compatibility
+| Module | Interface | Invariants it owns |
+| --- | --- | --- |
+| `Runtime` | Start, close, send, subscribe, begin, status | Complete running resources; draining handlers can still publish and settle |
+| `ConnectionSupervisor` | Run a submission, reconnect, attach/detach restoration intent | Connection races, retry spacing, generation changes, consistent journal restoration |
+| `Session` | Open, create a command, write, close | One transport and reader, write order, heartbeats, cancellation, deterministic cleanup |
+| `Receipts` | Reserve, receive, discard, fail | Exact receipt correlation; retire correlations before rejection observers |
+| `Subscriptions` / `Subscription` | Subscribe, receive, restore, unsubscribe | Immutable intent, installing/active/removed states, callback ordering, safe ID reuse |
+| `Deliveries` / `Channel` | Admit, pause, drain, settle | Capacity reservations, handler scheduling, ordered settlement on the original session |
+| `Transaction` | Enter, send, commit, abort | Immutable replay journal, transaction state, ambiguous commit handling |
 
-Keep the current Client constructor options, dataclass extension, context manager,
-send/begin/subscribe methods, callbacks, ACK modes and custom headers. Normal
-Client context exit continues waiting for subscriptions to be removed. Preserve
-Connection.connect, read_frames, write_frame, close, reader/writer fields and
-custom Connection subclasses. Preserve the actual legacy AckableMessageFrame
-class identity, including messages passed to FastStream consumers. Preserve
-mutable StompPublishCommand headers, routers, middleware, testing helpers,
-subscriber specifications and content-length overrides.
+Transactions and subscriptions implement the same small restoration interface.
+They never inspect Runtime fields. Delivery settlement holds a capability tied to
+its original channel and session; it cannot obtain a replacement session.
 
-The old private manager/lifespan graph is replaced. Tests and diagnostics should
-use Runtime's observable status, scripted transports and wire frames. Older major
-versions of stompman or FastStream require their existing version migration;
-this change does not restore APIs removed in previous releases.
+The generation gate covers session acquisition, restoration, transport submission,
+and the corresponding journal update. Normal receipt waits happen after releasing
+the gate, allowing unrelated commands to finish in any receipt order. Restoring a
+session waits for subscription confirmations before allowing new submissions.
+A command succeeds only after both transport drain and its exact receipt succeed;
+a receipt arriving before a stalled drain cannot hide a write timeout.
 
-## Delivery and failure semantics
+A capacity reservation contains two obligations: handler completion and settlement.
+Capacity is released when both finish. Queued deliveries, running handlers, and
+completed handlers with unsettled messages all count toward admission. Channels
+serialize their settlement ledger and retire old generations without redirecting
+ACK/NACK. Unsubscribe waits for already requested settlements before its wire
+command; graceful shutdown first pauses admission and drains running handlers.
 
-Unconfirmed SEND keeps bounded write retries; a network failure may therefore
-produce duplicates. Optional receipt confirmation correlates the exact receipt
-and reports timeout or loss, without automatically repeating an uncertain send.
-Receipt confirmation means broker acceptance, not consumer processing.
-Receipt timeouts bound both the transport write and the confirmation wait.
+## Native interface
 
-`Runtime.subscribe` and both Client subscription methods preserve opt-in
-`receipt_timeout` and `on_subscription_error`. The timeout covers writing and
-confirmation after connection restoration. `SubscriptionError` reports rejection,
-timeout, connection loss or unsubscribe; its raw ERROR frame is excluded from
-the exception representation. Failed subscriptions are removed before callbacks,
-and callback exceptions are logged. Only previously confirmed subscriptions are
-restored, with fresh receipt IDs, and recovery failures notify their owners.
+Native configuration is frozen and validated at construction. Server collections
+are tuples; CONNECT headers are immutable snapshots. Connection settings,
+recovery policy, and delivery limits are distinct values. Credentials and endpoint
+fields are required. Passwords passed to native `Server` are literal, while the
+legacy adapter preserves URL decoding of `ConnectionParameters.passcode`.
 
-An open transaction is restored with BEGIN and an immutable send journal. It is
-never committed before its context exits, and a failed triggering SEND appears
-once in the replacement session. COMMIT is never replayed after an ambiguous
-write or missing receipt; TransactionOutcomeUnknownError exposes the uncertainty.
-Applications requiring deduplication must provide application message identifiers.
+```python
+from stompman.core import (
+    Confirmed,
+    Delivery,
+    DeliveryLimits,
+    Runtime,
+    RuntimeConfig,
+    Server,
+)
 
-Cumulative client ACK/NACK settlement waits for the completed prefix of deliveries.
-Settlement from an obsolete generation, removed subscription or already settled
-delivery never writes to a new session. Unhandled handler exceptions are logged;
-the connection stays usable.
+config = RuntimeConfig(
+    servers=(Server("localhost", 61616, "guest", "guest"),),
+    delivery=DeliveryLimits(concurrency=32, pending_messages=512),
+)
 
-Admission is bounded by message count and bytes, including unsettled deliveries.
-Handler saturation does not block the session reader, receipts, ERROR frames or
-heartbeats. Exhausting admission raises a distinct ConsumerOverloadedError and
-closes the session; it is a local capacity failure, not a heartbeat failure.
-Configure broker credit/prefetch and application capacity together. With STOMP
-auto ACK, a connection failure can lose messages already accepted by the broker;
-use client-individual ACK for recoverable delivery.
 
-Heartbeat intervals follow STOMP's max/zero negotiation. The session watchdog
-observes transport read activity independently of handlers. A disabled receive
-heartbeat does not make a healthy connection appear dead. Failed handshake
-candidates and losing connection attempts are closed and awaited.
+async def handle(message: Delivery) -> None:
+    print(message.body)
+    await message.ack()
 
-Cancellation during an active transport write invalidates the session because
-broker state may already have changed. Cancellation before acquiring the write
-lock or while awaiting a receipt leaves the connection usable. Owned cleanup
-finishes before caller cancellation propagates, including repeated cancellation.
 
-## Migration sequence and validation
+async with Runtime(config) as runtime:
+    subscription = await runtime.subscribe("events", handle)
+    receipt = await runtime.send(b"hello", "events")
+    await runtime.send(b"custom deadline", "events", confirmation=Confirmed(10))
+    async with runtime.begin() as transaction:
+        await transaction.send(b"one", "events")
+        await transaction.send(b"two", "events")
+    await subscription.unsubscribe()
+```
 
-1. Add the independent core and behavioral tests at its transport seam.
-2. Replace Client execution with a legacy adapter and preserve consumer-shaped contracts.
-3. Move FastStream execution to the core; test it with Client execution patched to fail.
-4. Retain codec, configuration, typing, middleware and broker integration coverage;
-   replace tests that assert the discarded private object graph.
-5. Run both asyncio backends, type/lint/build checks and isolated broker tests.
+SEND, SUBSCRIBE, ACK/NACK, UNSUBSCRIBE, and transaction operations wait for broker
+receipts by default, with a five-second operation deadline. DISCONNECT has its
+own connection setting. Confirmation proves broker acceptance, not consumer
+processing. A timeout includes transport submission and receipt waiting after a
+connection becomes available. Confirmed publication never retries an ambiguous
+write automatically.
 
-No consumer deployment or dependency upgrade is performed as part of this change.
+`Unconfirmed(attempts=3)` explicitly selects write-only delivery with bounded
+retries and possible duplicates. The default `Unconfirmed()` makes one attempt.
+A subscription's `confirmation` controls installation and restoration;
+`operation_confirmation` controls its settlement and removal. A transaction's
+`confirmation` controls BEGIN, SEND, and ABORT; `commit_confirmation` controls
+COMMIT. All of these default to `Confirmed()`.
 
-## Adoption
+An open transaction is restored with BEGIN and a private immutable send journal.
+These reconstruction writes remain inside the transaction and use write-only
+submission; the eventual confirmed COMMIT determines acceptance. The triggering
+SEND enters the journal once, after its transport submission succeeds. COMMIT is
+removed from restoration before it reaches the wire. Missing confirmation or
+connection loss during COMMIT raises `TransactionOutcomeUnknownError`; COMMIT is
+never blindly replayed.
 
-New FastStream applications can construct `StompBroker(servers=[...])` directly,
-pass `RuntimeConfig(...)` for connection and capacity settings, or supply an owned
-`Runtime`. Existing `StompBroker(Client(...))` calls keep working by taking a
-configuration snapshot. A Client subclass that overrides send or connection
-lifecycle methods must migrate those customizations to middleware or a transport
-adapter; FastStream deliberately does not execute that subclass.
+By default, reconnect attempts are bounded and a quiet subscription does not
+cause idle reconnects. Heartbeats still detect a dead peer. `ConnectionSettings`
+can enable an idle deadline and configure TLS, heartbeat tolerance, read size,
+and connection deadlines. `RecoveryPolicy` controls retry count, spacing, and
+whether background recovery keeps trying after exhausting one cycle.
 
-Existing direct consumers can retain Client unchanged. `client.core.status`
-replaces inspection of the private manager graph. `client.core.reconnect()` is an
-explicit recovery operation useful for operational checks. Raw Connection,
-FrameParser and frame consumers remain supported.
+`RuntimeStatus` exposes generation, health, pending message/byte counts, running
+handlers, subscription IDs, outstanding receipts, and active transport writes.
+Applications need not inspect internal session or subscription dictionaries.
 
-Tests injecting `broker.config.broker_config.client` or `StompProducer(client=...)`
-should inject a Runtime or a mock with its interface. `TestStompBroker` remains the
-preferred in-process testing helper. Its publish command remains mutable so
-middleware can add headers before serialization.
+## Compatibility and FastStream
 
-Publish stompman 3.16.0 or newer before publishing this faststream-stomp release;
-the adapter's dependency minimum now enforces the new core's availability.
+Client retains its constructor fields, dataclass extension, methods, callback
+shapes, and context behavior. Normal Client context exit waits for subscriptions
+to be removed. `_compat.LegacyOptions` translates old flat options into native
+configuration and explicitly chooses unconfirmed operation policies. The core
+contains no legacy fallback detection.
 
-The adapter temporarily requires AnyIO below 4.15: FastDepends 3.0.8 accesses
-`anyio.to_thread` without explicitly importing it, which fails with AnyIO 4.15's
-lazy imports in a fresh process. Remove this bound after an upstream fix and an
-installed-package smoke test. The WebSocket extra supports websockets 14 or newer.
+Both Client subscription methods retain `receipt_timeout` and
+`on_subscription_error`. Receipt confirmation is opt-in on this facade only.
+`SubscriptionError` retains the reasons rejected, timeout, connection_lost, and
+unsubscribed; raw ERROR frames are excluded from its representation. Failed
+intent and receipt correlation are removed before callbacks. Callback exceptions
+are logged and suppressed. Confirmed subscriptions restore with fresh receipt IDs;
+failed or still-unconfirmed installations do not replay. Legacy write-only
+subscriptions retain their restoration behavior.
 
-For isolated broker testing, set `STOMPMAN_ARTEMIS_PORT` and
-`STOMPMAN_CLASSIC_PORT` before both Docker Compose and pytest. The readiness script
-checks STOMP handshakes on both brokers. Their default host ports remain 9000 and
-9001.
+The legacy transport bridge preserves custom Connection classes, `connect()`
+returning None on failure, wall-clock `last_read_time`, synchronous heartbeat
+fallbacks, WebSocket paths, and TLS. Existing raw Connection, WebSocketConnection,
+FrameParser, and frame users keep their interfaces. A custom native transport
+implements `Transport` and is supplied through `Runtime(transport_factory=...)`.
+Its factory returns a connected transport or raises; it never returns None.
+
+FastStream accepts `StompBroker(RuntimeConfig(...))`, an owned Runtime, or
+`StompBroker(servers=[ConnectionParameters(...)])`. Native configuration can be
+paired with an explicit `transport_factory`. Existing `StompBroker(Client(...))`
+continues working while using native execution and confirmed defaults. Custom
+Client execution overrides should move to middleware or a transport adapter.
+
+FastStream continues delivering the actual `stompman.AckableMessageFrame` class.
+Publish command headers remain mutable for middleware. Router, subscriber
+specification, publisher, reply metadata, content-length overrides, and
+`TestStompBroker` contracts remain covered by their existing tests.
+
+## Validation
+
+Tests import core with every legacy module blocked and relocate it under a
+different package name, then perform a confirmed TCP publication. Behavioral
+regressions cover independent receipt waits, cancellation at each write phase,
+restoration, stale settlement, capacity, cumulative ACK/NACK, replacement IDs,
+transaction replay, and graceful draining. FastStream tests disable Client
+execution methods while exercising core publication, handlers, replies, restart,
+and shutdown. Integration suites use both asyncio backends and both brokers.
+
+Set `STOMPMAN_ARTEMIS_PORT` and `STOMPMAN_CLASSIC_PORT` before Docker Compose and
+pytest when using isolated broker ports. Run `scripts/wait_for_stomp_brokers.py`
+before the integration suite. Tests on different Python versions must run
+sequentially against shared brokers.
+
+Publish stompman 3.16.0 or newer before this faststream-stomp release. The adapter
+requires that version for core. Its temporary AnyIO <4.15 bound remains necessary
+until FastDepends imports `anyio.to_thread` explicitly; verify an installed-package
+smoke test before removing it. The WebSocket extra supports websockets 14 or newer.

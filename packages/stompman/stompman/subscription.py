@@ -3,7 +3,9 @@ from dataclasses import dataclass
 from typing import Any, Self
 from uuid import uuid4
 
-from stompman.core.delivery import Delivery, Subscription
+from stompman.core.config import Confirmed
+from stompman.core.delivery import Delivery
+from stompman.core.subscriptions import Subscription
 from stompman.errors import SubscriptionError
 from stompman.frames import AckMode, MessageFrame
 
@@ -17,15 +19,15 @@ class AckableMessageFrame(Delivery):
         return cls(
             headers=delivery.headers,
             body=delivery.body,
-            _subscription=delivery._subscription,
-            _generation=delivery._generation,
-            _sequence=delivery._sequence,
+            _settlement=delivery._settlement,
         )
 
 
 @dataclass(slots=True)
 class BaseSubscription:
     _subscription: Subscription
+    _legacy_headers: dict[str, str] | None
+    _legacy_callback: Callable[[SubscriptionError], Any] | None
 
     @property
     def id(self) -> str:
@@ -37,7 +39,7 @@ class BaseSubscription:
 
     @property
     def headers(self) -> dict[str, str] | None:
-        return self._subscription.headers
+        return self._legacy_headers
 
     @property
     def ack(self) -> AckMode:
@@ -45,11 +47,12 @@ class BaseSubscription:
 
     @property
     def receipt_timeout(self) -> float | None:
-        return self._subscription.receipt_timeout
+        confirmation = self._subscription.spec.confirmation
+        return confirmation.timeout if isinstance(confirmation, Confirmed) else None
 
     @property
     def on_subscription_error(self) -> Callable[[SubscriptionError], Any] | None:
-        return self._subscription.on_subscription_error
+        return self._legacy_callback
 
     async def unsubscribe(self) -> None:
         await self._subscription.unsubscribe()

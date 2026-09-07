@@ -52,15 +52,13 @@ Also there are `StompRouter` and `TestStompBroker` for testing. It works similar
 For connection, retry, heartbeat, and delivery-capacity options, pass a core configuration:
 
 ```python
-from stompman.core.config import RuntimeConfig
+from stompman.core import DeliveryLimits, RecoveryPolicy, RuntimeConfig, Server
 
 broker = faststream_stomp.StompBroker(
     RuntimeConfig(
-        [server],
-        connect_retry_attempts=5,
-        max_concurrent_handlers=100,
-        max_pending_messages=1000,
-        max_pending_bytes=64 * 1024 * 1024,
+        servers=(Server("localhost", 61616, "guest", "guest"),),
+        recovery=RecoveryPolicy(attempts=5),
+        delivery=DeliveryLimits(concurrency=100, pending_messages=1000),
     )
 )
 ```
@@ -69,6 +67,11 @@ You can also pass an existing `stompman.core.runtime.Runtime`. The broker starts
 `broker.runtime.status` exposes connection state and delivery capacity. Existing `StompBroker(stompman.Client(...))`
 construction remains supported: the broker copies the Client's configuration once and creates its own runtime.
 It does not execute Client methods or share the Client's connection or lifecycle.
+
+Native operations wait for broker receipts by default. Publication and subscription
+confirmation do not block unrelated receipt waits or the session reader. See the
+[core design and migration guide](../../docs/session-core.md) for configuration,
+transport adapters, and explicit unconfirmed policies.
 
 By default, published frames include the STOMP `content-length` header. You can change this for the whole broker or
 override it for a publisher or individual publish call:

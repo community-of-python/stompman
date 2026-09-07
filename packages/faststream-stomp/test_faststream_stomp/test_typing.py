@@ -19,8 +19,8 @@ if typing.TYPE_CHECKING:
         ),
     )
     app = faststream.FastStream(broker)
-    native_broker = faststream_stomp.StompBroker(RuntimeConfig(servers=[]))
-    explicit_runtime_broker = faststream_stomp.StompBroker(Runtime(RuntimeConfig(servers=[])))
+    native_broker = faststream_stomp.StompBroker(RuntimeConfig(servers=()))
+    explicit_runtime_broker = faststream_stomp.StompBroker(Runtime(RuntimeConfig(servers=())))
     servers_broker = faststream_stomp.StompBroker(servers=[])
     native_app = faststream.FastStream(native_broker)
 

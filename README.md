@@ -231,6 +231,20 @@ The FastStream facade and the legacy `Client` facade share an independent runtim
 See [the architecture and migration notes](docs/session-core.md) for ownership,
 recovery, delivery capacity and compatibility details.
 
+The native interface uses immutable configuration and waits for broker receipts
+by default:
+
+```python
+from stompman.core import Runtime, RuntimeConfig, Server
+
+async with Runtime(RuntimeConfig((Server("localhost", 61616, "guest", "guest"),))) as runtime:
+    receipt = await runtime.send(b"payload", "events")
+```
+
+`Unconfirmed(attempts=3)` explicitly selects write retries with possible duplicate
+delivery. Native operations use `confirmation=Confirmed(timeout)` for custom
+deadlines. Both facades run this core; legacy behavior is selected by the adapter.
+
 Existing `Client.send()` calls still return `None` after an unconfirmed write.
 Request a broker receipt explicitly when acceptance confirmation is needed:
 

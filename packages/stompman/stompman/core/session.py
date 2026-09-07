@@ -1,17 +1,17 @@
-# Session task entrypoints forward failures to the supervisor and pending receipts.
-import asyncio
-import time
-from collections.abc import Callable, Coroutine
-from contextlib import suppress
-from dataclasses import replace
-from typing import Any, Protocol, cast, runtime_checkable
-from uuid import uuid4
+"""One ready STOMP connection. Transport writes and receipt waits are separate phases."""
 
-from stompman.config import ConnectionParameters, Heartbeat
-from stompman.connection import AbstractConnection
-from stompman.core._tasks import await_cleanup
-from stompman.core.config import RuntimeConfig
-from stompman.errors import (
+import asyncio
+import math
+import time
+from collections.abc import AsyncGenerator, Callable, Coroutine
+from contextlib import suppress
+from dataclasses import dataclass, replace
+from enum import Enum, auto
+from typing import Any, cast
+
+from ._tasks import await_cleanup
+from .config import DEFAULT_CONFIRMATION, Confirmation, Confirmed, ConnectionSettings, Heartbeat, Server, Unconfirmed
+from .errors import (
     ConnectionConfirmationTimeout,
     ConnectionLostError,
     ReceiptRejectedError,
@@ -19,7 +19,7 @@ from stompman.errors import (
     StompProtocolConnectionIssue,
     UnsupportedProtocolVersion,
 )
-from stompman.frames import (
+from .frames import (
     AnyClientFrame,
     AnyServerFrame,
     ConnectedFrame,
@@ -31,256 +31,304 @@ from stompman.frames import (
     MessageFrame,
     ReceiptFrame,
 )
+from .receipts import Receipt, Receipts, ignore_rejection
+from .transport import Transport
 
 
-@runtime_checkable
-class _HeartbeatSender(Protocol):
-    async def send_heartbeat(self) -> None: ...
+@dataclass(kw_only=True)
+class HandshakeFailedError(Exception):
+    issue: StompProtocolConnectionIssue
+
+
+async def handshake(
+    transport: Transport, server: Server, settings: ConnectionSettings, frames: AsyncGenerator[AnyServerFrame, None]
+) -> Heartbeat:
+    headers = cast(
+        "ConnectHeaders",
+        dict(server.connect_headers)
+        | {
+            "accept-version": "1.2",
+            "host": server.host,
+            "login": server.login,
+            "passcode": server.passcode,
+            "heart-beat": settings.heartbeat.to_header(),
+        },
+    )
+    collected: list[MessageFrame | ReceiptFrame | ErrorFrame | HeartbeatFrame] = []
+    try:  # ruff: ignore[too-many-statements-in-try-clause]
+        async with asyncio.timeout(settings.handshake_timeout):
+            await transport.write_frame(ConnectFrame(headers=headers))
+            async for frame in frames:
+                if isinstance(frame, ConnectedFrame):
+                    version = frame.headers.get("version", "")
+                    if version != "1.2":
+                        raise HandshakeFailedError(
+                            issue=UnsupportedProtocolVersion(given_version=version, supported_version="1.2")
+                        )
+                    return settings.heartbeat.negotiate(Heartbeat.from_header(frame.headers.get("heart-beat", "0,0")))
+                collected.append(frame)
+                if isinstance(frame, ErrorFrame):
+                    break
+    except TimeoutError:
+        pass
+    raise HandshakeFailedError(
+        issue=ConnectionConfirmationTimeout(timeout=settings.handshake_timeout, frames=collected)
+    )
+
+
+class CommandPhase(Enum):
+    PREPARED = auto()
+    SUBMITTING = auto()
+    SUBMITTED = auto()
+    CLOSED = auto()
+
+
+class Command:
+    """Own a receipt reservation from before submission until both phases finish."""
+
+    def __init__(
+        self,
+        session: "Session",
+        frame: AnyClientFrame,
+        confirmation: Confirmation,
+        rejected: Callable[[ReceiptRejectedError], None],
+    ) -> None:
+        self._session = session
+        self._phase = CommandPhase.PREPARED
+        self._confirmation = confirmation
+        self._receipt: Receipt | Unconfirmed
+        if isinstance(confirmation, Confirmed):
+            self._receipt = session.receipts.reserve(rejected)
+            self._frame = replace(frame, headers=frame.headers | {"receipt": self._receipt.id})  # type: ignore[arg-type]
+            self._deadline = asyncio.get_running_loop().time() + confirmation.timeout
+        else:
+            self._receipt = confirmation
+            self._frame = frame
+            self._deadline = math.inf
+
+    def _timeout(self) -> ReceiptTimeoutError:
+        if not isinstance(self._receipt, Receipt) or not isinstance(self._confirmation, Confirmed):
+            msg = "only a confirmed command can time out"
+            raise TypeError(msg)
+        return ReceiptTimeoutError(receipt_id=self._receipt.id, timeout=self._confirmation.timeout)
+
+    async def submit(self) -> None:
+        if self._phase is not CommandPhase.PREPARED:
+            msg = "command has already been submitted or closed"
+            raise RuntimeError(msg)
+        self._phase = CommandPhase.SUBMITTING
+        try:
+            async with asyncio.timeout_at(self._deadline):
+                await self._session.transmit(self._frame)
+            self._phase = CommandPhase.SUBMITTED
+        except TimeoutError as error:
+            raise self._timeout() from error
+
+    async def complete(self) -> ReceiptFrame | None:
+        if self._phase is not CommandPhase.SUBMITTED:
+            msg = "command must be submitted before completion"
+            raise RuntimeError(msg)
+        if isinstance(self._receipt, Unconfirmed):
+            return None
+        try:
+            async with asyncio.timeout_at(self._deadline):
+                return await self._receipt.result
+        except TimeoutError as error:
+            raise self._timeout() from error
+
+    def invalidate(self, reason: str) -> None:
+        self._session.fail(ConnectionLostError(reason=reason))
+
+    def close(self) -> None:
+        self._phase = CommandPhase.CLOSED
+        if isinstance(self._receipt, Receipt):
+            self._session.receipts.discard(self._receipt)
+
+
+class SessionPhase(Enum):
+    OPEN = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class Closing:
+    task: asyncio.Task[None]
 
 
 class Session:
-    """Own one transport, reader, write order and receipt namespace."""
+    """Constructed only after handshake, with a permanent generation and transport."""
 
-    def __init__(self, connection: AbstractConnection, server: ConnectionParameters, config: RuntimeConfig) -> None:
-        self.connection = connection
-        self.server = server
-        self.config = config
-        self.generation = 0
-        self.heartbeat = Heartbeat(0, 0)
-        self.failed = asyncio.Event()
-        self.failure: Exception | None = None
-        self._frames = connection.read_frames()
+    def __init__(
+        self,
+        transport: Transport,
+        frames: AsyncGenerator[AnyServerFrame, None],
+        settings: ConnectionSettings,
+        generation: int,
+        heartbeat: Heartbeat,
+    ) -> None:
+        self.transport = transport
+        self.generation = generation
+        self.heartbeat = heartbeat
+        self.ended: asyncio.Future[Exception] = asyncio.get_running_loop().create_future()
+        self.receipts = Receipts()
+        self._frames = frames
+        self._settings = settings
         self._writes = asyncio.Lock()
-        self._active_write: asyncio.Task[None] | None = None
-        self._receipts: dict[str, asyncio.Future[ReceiptFrame]] = {}
+        self._writing: set[asyncio.Task[None]] = set()
         self._tasks: list[asyncio.Task[None]] = []
-        self._connected_at = time.monotonic()
-        self._last_received = self._connected_at
-        self._last_message = self._connected_at
-        self._last_sent = self._connected_at
-        self._closed = False
-        self._close_task: asyncio.Task[None] | None = None
+        self._close_state: SessionPhase | Closing = SessionPhase.OPEN
+        self._last_received = self._last_message = self._last_sent = time.monotonic()
 
-    async def handshake(self) -> StompProtocolConnectionIssue | None:
-        headers = cast(
-            "ConnectHeaders",
-            self.server.connect_headers
-            | {
-                "accept-version": "1.2",
-                "host": self.server.host,
-                "login": self.server.login,
-                "passcode": self.server.unescaped_passcode,
-                "heart-beat": self.config.heartbeat.to_header(),
-            },
-        )
-        collected: list[MessageFrame | ReceiptFrame | ErrorFrame | HeartbeatFrame] = []
-        try:  # ruff: ignore[too-many-statements-in-try-clause]
-            async with asyncio.timeout(self.config.connection_confirmation_timeout):
-                await self.write(ConnectFrame(headers=headers))
-                while True:
-                    frame = await anext(self._frames)
-                    if isinstance(frame, ConnectedFrame):
-                        break
-                    collected.append(frame)
-                    if isinstance(frame, ErrorFrame):
-                        return ConnectionConfirmationTimeout(
-                            timeout=self.config.connection_confirmation_timeout, frames=collected
-                        )
-        except TimeoutError:
-            return ConnectionConfirmationTimeout(timeout=self.config.connection_confirmation_timeout, frames=collected)
-        except StopAsyncIteration as error:
-            raise ConnectionLostError(reason="eof during handshake") from error
-        version = frame.headers.get("version", "")
-        if version != "1.2":
-            return UnsupportedProtocolVersion(given_version=version, supported_version="1.2")
-        server_heartbeat = Heartbeat.from_header(frame.headers.get("heart-beat", "0,0"))
-        client_heartbeat = self.config.heartbeat
-        self.heartbeat = Heartbeat(
-            max(client_heartbeat.will_send_interval_ms, server_heartbeat.want_to_receive_interval_ms)
-            if client_heartbeat.will_send_interval_ms and server_heartbeat.want_to_receive_interval_ms
-            else 0,
-            max(client_heartbeat.want_to_receive_interval_ms, server_heartbeat.will_send_interval_ms)
-            if client_heartbeat.want_to_receive_interval_ms and server_heartbeat.will_send_interval_ms
-            else 0,
-        )
-        self._last_received = self._last_message = time.monotonic()
-        return None
+    @classmethod
+    async def open(
+        cls, transport: Transport, server: Server, settings: ConnectionSettings, generation: int
+    ) -> "Session":
+        frames = transport.read_frames()
+
+        async def cleanup() -> None:
+            try:
+                await frames.aclose()
+            finally:
+                await transport.close()
+
+        try:
+            heartbeat = await handshake(transport, server, settings, frames)
+        except BaseException:
+            await await_cleanup(asyncio.create_task(cleanup()))
+            raise
+        return cls(transport, frames, settings, generation, heartbeat)
 
     def start(self, receive: Callable[[AnyServerFrame, "Session"], None]) -> None:
         self._tasks.append(asyncio.create_task(self._read(receive), name="stomp-reader"))
         if self.heartbeat.want_to_receive_interval_ms:
-            self._tasks.append(asyncio.create_task(self._monitor(), name="stomp-heartbeat"))
+            self._tasks.append(asyncio.create_task(self._monitor(), name="stomp-watchdog"))
         if self.heartbeat.will_send_interval_ms:
-            self._tasks.append(asyncio.create_task(self._send_heartbeats(), name="stomp-heartbeat-sender"))
-        if self.config.no_message_restart_interval is not None:
+            self._tasks.append(asyncio.create_task(self._send_heartbeats(), name="stomp-heartbeat"))
+        if math.isfinite(self._settings.idle_timeout):
             self._tasks.append(asyncio.create_task(self._monitor_idle(), name="stomp-idle"))
 
     def fail(self, error: Exception) -> None:
-        if not self.failed.is_set():
-            self.failure = error
-            self.failed.set()
-            if self._active_write is not None and not self._active_write.done():
-                self._active_write.cancel()
-            for future in self._receipts.values():
-                if not future.done():
-                    future.set_exception(ConnectionLostError(reason=error))
+        if not self.ended.done():
+            self.ended.set_result(error)
+            self.receipts.fail(error)
+            for task in self._writing:
+                task.cancel()
+
+    @property
+    def writing(self) -> bool:
+        return self._writes.locked()
+
+    def check(self) -> None:
+        if self.ended.done():
+            raise ConnectionLostError(reason=self.ended.result())
+
+    def is_alive(self) -> bool:
+        if self.ended.done():
+            return False
+        last_received = max(self._last_received, self.transport.last_received_at)
+        receive = self.heartbeat.want_to_receive_interval_ms / 1000
+        return not receive or time.monotonic() - last_received < receive * self._settings.heartbeat_tolerance
 
     async def _read(self, receive: Callable[[AnyServerFrame, "Session"], None]) -> None:
         try:  # ruff: ignore[too-many-statements-in-try-clause]
             async for frame in self._frames:
                 self._last_received = time.monotonic()
-                self._resolve_receipt(frame)
+                if isinstance(frame, (ReceiptFrame, ErrorFrame)):
+                    self.receipts.receive(frame)
                 if isinstance(frame, MessageFrame):
                     self._last_message = self._last_received
                 receive(frame, self)
-                if self.failed.is_set():
+                if self.ended.done():
                     return
             self.fail(ConnectionLostError(reason="eof"))
         except Exception as error:  # ruff: ignore[blind-except]
             self.fail(error)
 
-    def _resolve_receipt(self, frame: AnyServerFrame) -> None:
-        if isinstance(frame, ReceiptFrame):
-            future = self._receipts.pop(frame.headers["receipt-id"], None)
-            if future is not None and not future.done():
-                future.set_result(frame)
-        elif isinstance(frame, ErrorFrame):
-            receipt_id = frame.headers.get("receipt-id")
-            for pending_id, pending in list(self._receipts.items()):
-                if receipt_id is None or receipt_id == pending_id:
-                    self._receipts.pop(pending_id)
-                    if not pending.done():
-                        pending.set_exception(ReceiptRejectedError(receipt_id=pending_id, frame=frame))
+    async def _transport_write(self, operation: Coroutine[Any, Any, None]) -> None:
+        caller = asyncio.current_task()
+        assert caller is not None  # ruff: ignore[assert]
+        cancelling = caller.cancelling()
+        task = asyncio.create_task(operation, name="stomp-write")
+        self._writing.add(task)
+        try:
+            await task
+        except asyncio.CancelledError as error:
+            if self.ended.done() and caller.cancelling() == cancelling:
+                raise ConnectionLostError(reason=self.ended.result()) from error
+            self.fail(ConnectionLostError(reason="transport write was cancelled"))
+            raise
+        except (ConnectionLostError, OSError) as error:
+            self.fail(error)
+            raise ConnectionLostError(reason=error) from error
+        finally:
+            self._writing.discard(task)
 
-    def is_alive(self) -> bool:
-        if self._closed or self.failed.is_set():
-            return False
-        receive_ms = self.heartbeat.want_to_receive_interval_ms
-        if not receive_ms:
-            return True
-        idle = time.monotonic() - self._last_received
-        # Custom transports expose wall-clock last_read_time. Count partial frames too.
-        if self.connection.last_read_time is not None:
-            idle = min(idle, max(0, time.time() - self.connection.last_read_time))
-        return idle < receive_ms / 1000 * self.config.check_server_alive_interval_factor
+    async def transmit(self, frame: AnyClientFrame) -> None:
+        async with self._writes:
+            self.check()
+            await self._transport_write(self.transport.write_frame(frame))
+            self._last_sent = time.monotonic()
+
+    def command(
+        self,
+        frame: AnyClientFrame,
+        confirmation: Confirmation = DEFAULT_CONFIRMATION,
+        rejected: Callable[[ReceiptRejectedError], None] = ignore_rejection,
+    ) -> Command:
+        return Command(self, frame, confirmation, rejected)
+
+    async def write(
+        self, frame: AnyClientFrame, confirmation: Confirmation = DEFAULT_CONFIRMATION
+    ) -> ReceiptFrame | None:
+        command = self.command(frame, confirmation)
+        try:
+            await command.submit()
+            return await command.complete()
+        finally:
+            command.close()
 
     async def _monitor(self) -> None:
-        interval = self.heartbeat.want_to_receive_interval_ms / 1000
-        try:
-            while not self.failed.is_set():
-                await asyncio.sleep(interval)
-                if not self.is_alive():
-                    self.fail(ConnectionLostError(reason="negotiated receive heartbeat expired"))
-                    return
-        except Exception as error:  # ruff: ignore[blind-except]
-            self.fail(error)
+        while not self.ended.done():
+            await asyncio.sleep(self.heartbeat.want_to_receive_interval_ms / 1000)
+            if not self.is_alive():
+                self.fail(ConnectionLostError(reason="negotiated receive heartbeat expired"))
 
     async def _send_heartbeats(self) -> None:
         interval = self.heartbeat.will_send_interval_ms / 1000
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            while not self.failed.is_set():
+            while not self.ended.done():
                 await asyncio.sleep(interval)
                 async with self._writes:
-                    if self.failed.is_set() or self._closed:
+                    if self.ended.done():
                         return
-                    if time.monotonic() - self._last_sent < interval:
-                        continue
-                    if isinstance(self.connection, _HeartbeatSender):
-                        await self._write_transport(self.connection.send_heartbeat())
-                    else:
-                        self.connection.write_heartbeat()
-                    self._last_sent = time.monotonic()
+                    if time.monotonic() - self._last_sent >= interval:
+                        await self._transport_write(self.transport.send_heartbeat())
+                        self._last_sent = time.monotonic()
         except Exception as error:  # ruff: ignore[blind-except]
             self.fail(error)
 
     async def _monitor_idle(self) -> None:
-        interval = self.config.no_message_restart_interval
-        assert interval is not None  # ruff: ignore[assert]
-        seconds = interval.total_seconds()
-        while not self.failed.is_set():
-            await asyncio.sleep(max(0, seconds - (time.monotonic() - self._last_message)))
-            if time.monotonic() - self._last_message >= seconds:
+        timeout = self._settings.idle_timeout
+        while not self.ended.done():
+            await asyncio.sleep(max(0, timeout - (time.monotonic() - self._last_message)))
+            if time.monotonic() - self._last_message >= timeout:
                 self.fail(ConnectionLostError(reason="no messages received within timeout"))
-                return
-
-    async def _write_transport(self, operation: Coroutine[Any, Any, None]) -> None:
-        """Separate caller cancellation from watchdog-driven transport cancellation."""
-        caller = asyncio.current_task()
-        assert caller is not None  # ruff: ignore[assert]
-        cancelling = caller.cancelling()
-        task = self._active_write = asyncio.create_task(operation, name="stomp-write")
-        try:
-            await task
-        except asyncio.CancelledError as error:
-            if self.failed.is_set() and caller.cancelling() == cancelling:
-                raise ConnectionLostError(reason=self.failure or "session failed during write") from error
-            self.fail(ConnectionLostError(reason="transport write was cancelled"))
-            raise
-        finally:
-            self._active_write = None
-
-    async def write(
-        self, frame: AnyClientFrame, *, receipt_timeout: float | None = None, receipt_id: str = ""
-    ) -> ReceiptFrame | None:
-        future: asyncio.Future[ReceiptFrame] | None = None
-        written = False
-        if receipt_timeout is not None:
-            receipt_id = receipt_id or str(uuid4())
-            frame = replace(frame, headers=frame.headers | {"receipt": receipt_id})  # type: ignore[arg-type]
-            future = asyncio.get_running_loop().create_future()
-            self._receipts[receipt_id] = future
-        try:  # ruff: ignore[too-many-statements-in-try-clause]
-            async with asyncio.timeout(receipt_timeout):
-                async with self._writes:
-                    if self._closed or self.failed.is_set():
-                        raise ConnectionLostError(reason="session is closed")  # ruff: ignore[raise-within-try]
-                    await self._write_transport(self.connection.write_frame(frame))
-                    written = True
-                    self._last_sent = time.monotonic()
-                if future is not None:
-                    return await future
-        except TimeoutError as error:
-            if written and future is not None and future.done() and not future.cancelled():
-                return future.result()
-            assert receipt_timeout is not None  # ruff: ignore[assert]
-            raise ReceiptTimeoutError(receipt_id=receipt_id, timeout=receipt_timeout) from error
-        except ConnectionLostError as error:
-            self.fail(error)
-            raise
-        finally:
-            if future is not None:
-                self._receipts.pop(receipt_id, None)
-                if future.done() and not future.cancelled():
-                    future.exception()
-                else:
-                    future.cancel()
-        return None
 
     async def close(self, *, graceful: bool = False) -> None:
-        if self._close_task is None:
-            self._close_task = asyncio.create_task(self._close(graceful=graceful), name="stomp-close")
-        await await_cleanup(self._close_task)
+        if not isinstance(self._close_state, Closing):
+            self._close_state = Closing(asyncio.create_task(self._close(graceful=graceful), name="stomp-close"))
+        await await_cleanup(self._close_state.task)
 
     async def _close(self, *, graceful: bool) -> None:
         try:
-            if graceful and not self.failed.is_set():
-                with suppress(ConnectionLostError, ReceiptTimeoutError, TimeoutError):
-                    async with asyncio.timeout(self.config.disconnect_confirmation_timeout):
-                        await self.write(
-                            DisconnectFrame(headers={}), receipt_timeout=self.config.disconnect_confirmation_timeout
-                        )
+            if graceful and not self.ended.done():
+                with suppress(ConnectionLostError, ReceiptRejectedError, ReceiptTimeoutError):
+                    await self.write(DisconnectFrame(headers={}), Confirmed(self._settings.disconnect_timeout))
         finally:
-            self._closed = True
             self.fail(ConnectionLostError(reason="session closed"))
             for task in self._tasks:
                 task.cancel()
-            tasks = [*self._tasks]
-            if self._active_write is not None:
-                tasks.append(self._active_write)
             try:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                with suppress(ConnectionLostError, OSError):
-                    await self._frames.aclose()
+                await asyncio.gather(*self._tasks, *self._writing, return_exceptions=True)
+                await self._frames.aclose()
             finally:
-                with suppress(ConnectionLostError, OSError):
-                    await self.connection.close()
+                await self.transport.close()

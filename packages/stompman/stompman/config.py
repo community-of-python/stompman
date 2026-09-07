@@ -2,24 +2,9 @@ from dataclasses import dataclass, field
 from typing import Self, TypedDict
 from urllib.parse import unquote
 
+from stompman.core.config import Heartbeat
 
-@dataclass(frozen=True, slots=True)
-class Heartbeat:
-    will_send_interval_ms: int
-    want_to_receive_interval_ms: int
-
-    def __post_init__(self) -> None:
-        if self.will_send_interval_ms < 0 or self.want_to_receive_interval_ms < 0:
-            msg = "heartbeat intervals must be nonnegative"
-            raise ValueError(msg)
-
-    def to_header(self) -> str:
-        return f"{self.will_send_interval_ms},{self.want_to_receive_interval_ms}"
-
-    @classmethod
-    def from_header(cls, header: str) -> Self:
-        first, second = header.split(",", maxsplit=1)
-        return cls(int(first), int(second))
+__all__ = ["ConnectionParameters", "Heartbeat", "MultiHostHostLike"]
 
 
 class MultiHostHostLike(TypedDict):

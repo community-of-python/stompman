@@ -3,7 +3,8 @@ from collections.abc import AsyncGenerator
 
 import pytest
 import stompman
-from stompman.core import Delivery, TransactionState
+from stompman._compat import LegacyTransport
+from stompman.core import Confirmed, Delivery, TransactionState, Unconfirmed
 from stompman.core._tasks import await_cleanup
 from stompman.core.session import Session
 
@@ -15,8 +16,7 @@ pytestmark = pytest.mark.anyio
 async def start_session(broker: ScriptedBroker) -> tuple[Session, ScriptedConnection]:
     config = broker.config()
     connection = broker.connection_class(broker, "localhost")
-    session = Session(connection, config.servers[0], config)
-    assert await session.handshake() is None
+    session = await Session.open(LegacyTransport(connection), config.servers[0], config.connection, 1)
     session.start(lambda frame, owner: None)
     return session, connection
 
@@ -165,18 +165,20 @@ async def test_cancellation_waiting_for_write_lock_preserves_the_session(
         await original_write(owner, frame)
 
     monkeypatch.setattr(broker.connection_class, "write_frame", write)
-    first = asyncio.create_task(session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"first")))
+    first = asyncio.create_task(
+        session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"first"), Unconfirmed())
+    )
     try:
         await entered_write.wait()
         second = asyncio.create_task(
-            session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"second"), receipt_timeout=60)
+            session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"second"), confirmation=Confirmed(60))
         )
-        await wait_until(lambda: bool(session._receipts))
+        await wait_until(lambda: bool(session.receipts.pending_count))
         second.cancel()
         with pytest.raises(asyncio.CancelledError):
             await second
         assert session.is_alive()
-        assert session._receipts == {}
+        assert session.receipts.pending_count == 0
     finally:
         release_write.set()
         await first
@@ -188,19 +190,21 @@ async def test_receipt_wait_cancellation_does_not_repeat_send_or_poison_session(
     broker.receipts = False
     session, connection = await start_session(broker)
     task = asyncio.create_task(
-        session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"accepted"), receipt_timeout=60)
+        session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"accepted"), confirmation=Confirmed(60))
     )
     try:
-        await wait_until(lambda: bool(session._receipts) and not session._writes.locked())
+        await wait_until(lambda: bool(session.receipts.pending_count) and not session.writing)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert session.is_alive()
-        assert session._receipts == {}
+        assert session.receipts.pending_count == 0
         sent = next(frame for frame in connection.writes if isinstance(frame, stompman.SendFrame))
         connection.incoming.put_nowait(stompman.ReceiptFrame(headers={"receipt-id": sent.headers["receipt"]}))
         broker.receipts = True
-        receipt = await session.write(stompman.SendFrame(headers={"destination": "q"}, body=b"next"), receipt_timeout=1)
+        receipt = await session.write(
+            stompman.SendFrame(headers={"destination": "q"}, body=b"next"), confirmation=Confirmed(1)
+        )
         assert isinstance(receipt, stompman.ReceiptFrame)
     finally:
         await session.close()
@@ -273,7 +277,7 @@ async def test_heartbeat_failure_interrupts_backpressured_write_and_recovers(
             await original_write(connection, frame)
 
         monkeypatch.setattr(broker.connection_class, "write_frame", write)
-        await asyncio.wait_for(runtime.send(b"retried", "q"), timeout=1)
+        await asyncio.wait_for(runtime.send(b"retried", "q", confirmation=Unconfirmed(attempts=3)), timeout=1)
         assert first.closed
         assert runtime.status.generation == 2
         assert [frame.body for frame in broker.current.writes if isinstance(frame, stompman.SendFrame)] == [b"retried"]
@@ -296,7 +300,7 @@ async def test_backpressured_heartbeat_does_not_block_watchdog_or_application_wr
 
         monkeypatch.setattr(broker.connection_class, "send_heartbeat", heartbeat, raising=False)
         await entered_write.wait()
-        await asyncio.wait_for(runtime.send(b"retried", "q"), timeout=1)
+        await asyncio.wait_for(runtime.send(b"retried", "q", confirmation=Unconfirmed(attempts=3)), timeout=1)
         assert first.closed
         assert runtime.status.generation == 2
         assert [frame.body for frame in broker.current.writes if isinstance(frame, stompman.SendFrame)] == [b"retried"]

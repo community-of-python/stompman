@@ -4,13 +4,14 @@ import copy
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
 
 import pytest
 import stompman
 from polyfactory.factories.dataclass_factory import DataclassFactory
+from stompman._compat import LegacyOptions
 from stompman.connection import AbstractConnection
 from stompman.core import Runtime, RuntimeConfig
 
@@ -178,7 +179,7 @@ class ScriptedBroker:
     def current(self) -> ScriptedConnection:
         return self.connections[-1]
 
-    def config(self, **kwargs: Any) -> RuntimeConfig:  # ruff: ignore[any-type]
+    def options(self, **kwargs: Any) -> dict[str, Any]:  # ruff: ignore[any-type]
         options: dict[str, Any] = {
             "servers": [stompman.ConnectionParameters("localhost", 12345, "login", "passcode")],
             "connection_class": self.connection_class,
@@ -188,14 +189,16 @@ class ScriptedBroker:
             "heartbeat": stompman.Heartbeat(0, 0),
             "no_message_restart_interval": None,
         }
-        return RuntimeConfig(**(options | kwargs))
+        return options | kwargs
+
+    def config(self, **kwargs: Any) -> RuntimeConfig:  # ruff: ignore[any-type]
+        return LegacyOptions(**self.options(**kwargs)).to_config()
 
     def runtime(self, **kwargs: Any) -> Runtime:  # ruff: ignore[any-type]
-        return Runtime(self.config(**kwargs))
+        return LegacyOptions(**self.options(**kwargs)).to_runtime()
 
     def client(self, **kwargs: Any) -> stompman.Client:  # ruff: ignore[any-type]
-        config = self.config(**kwargs)
-        return EnrichedClient(**{item.name: getattr(config, item.name) for item in fields(config)})
+        return EnrichedClient(**self.options(**kwargs))
 
 
 @pytest.fixture

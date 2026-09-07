@@ -97,8 +97,8 @@ async def test_receipt_rejection_does_not_replay_subscription(
                 headers={"selector": "colour = ("},
                 receipt_timeout=3,
             )
-        assert not client.core._subscriptions
-        assert client.core._session is None or not client.core._session._receipts
+        assert not client.core.status.subscription_ids
+        assert not client.core.status.pending_receipts
         await force_reconnect(client)
         healthy = await client.subscribe_with_manual_ack(destination, handle_message, ack="auto", receipt_timeout=3)
         try:

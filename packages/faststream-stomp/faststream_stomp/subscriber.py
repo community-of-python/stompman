@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import stompman
 from faststream import PublishCommand, StreamMessage
@@ -11,7 +11,7 @@ from faststream._internal.endpoint.subscriber.call_item import CallsCollection
 from faststream._internal.producer import ProducerProto
 from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.schema import Message, Operation, SubscriberSpec
-from stompman.core.delivery import Delivery, Subscription
+from stompman.core.delivery import Delivery
 from stompman.subscription import AckableMessageFrame
 
 from faststream_stomp.models import (
@@ -19,6 +19,9 @@ from faststream_stomp.models import (
     StompSubscriberSpecificationConfig,
     StompSubscriberUsecaseConfig,
 )
+
+if TYPE_CHECKING:
+    from stompman.core.subscriptions import Subscription
 
 
 class StompSubscriberSpecification(SubscriberSpecification[BrokerConfig, StompSubscriberSpecificationConfig]):

@@ -15,6 +15,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from polyfactory.factories.pydantic_factory import ModelFactory
 from prometheus_client import CollectorRegistry
+from stompman._compat import server_from_legacy
 from stompman.core.config import RuntimeConfig
 from stompman.core.runtime import Runtime
 
@@ -38,7 +39,7 @@ def make_mock_runtime(
     connection_parameters: stompman.ConnectionParameters,
 ) -> tuple[Runtime, mock.NonCallableMagicMock]:
     runtime_mock = mock.create_autospec(Runtime, instance=True)
-    runtime_mock.config = RuntimeConfig([connection_parameters])
+    runtime_mock.config = RuntimeConfig((server_from_legacy(connection_parameters),))
     return typing.cast("Runtime", runtime_mock), runtime_mock
 
 

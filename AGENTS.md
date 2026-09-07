@@ -13,6 +13,15 @@ in `stompman.core`; FastStream must not execute through the legacy `Client`.
 Keep `Client` as a separate compatibility adapter and preserve consumer contracts
 when evolving the core. See `docs/session-core.md` for recovery and migration details.
 
+The core must be self-contained: it imports only its own modules, the standard
+library, and explicit transport dependencies. Legacy modules may re-export core
+types or adapt legacy contracts; the core must never import legacy modules.
+Use explicit, validated states and required data fields instead of combinations
+of optional fields and flags. Native operations confirm broker receipts by
+default. Compatibility behavior is selected explicitly by adapters. Favor small
+interfaces that own their complexity; moving branches between files is not a
+sufficient architecture improvement.
+
 ## Key Features
 
 - Fully asynchronous implementation using Python's asyncio

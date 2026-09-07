@@ -20,7 +20,8 @@ from faststream.message import gen_cor_id
 from faststream_stomp.models import StompStreamMessage
 from faststream_stomp.router import StompRoutePublisher
 from polyfactory.factories.pydantic_factory import ModelFactory
-from stompman.core import RuntimeConfig
+from stompman._compat import server_from_legacy
+from stompman.core import RecoveryPolicy, RuntimeConfig
 
 if TYPE_CHECKING:
     from faststream_stomp.broker import StompBroker
@@ -30,7 +31,9 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 def broker(connection_parameters: stompman.ConnectionParameters) -> faststream_stomp.StompBroker:
-    return faststream_stomp.StompBroker(RuntimeConfig([connection_parameters], connect_retry_attempts=10))
+    return faststream_stomp.StompBroker(
+        RuntimeConfig((server_from_legacy(connection_parameters),), recovery=RecoveryPolicy(attempts=10))
+    )
 
 
 @asynccontextmanager

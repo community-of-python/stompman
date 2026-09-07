@@ -1,6 +1,6 @@
 import pytest
 import stompman
-from stompman.core import TransactionState
+from stompman.core import Confirmed, TransactionState, Unconfirmed
 
 from test_stompman.conftest import ScriptedBroker
 
@@ -62,7 +62,7 @@ async def test_open_transaction_is_restored_without_early_commit(broker: Scripte
 async def test_failed_triggering_send_is_not_replayed_twice(broker: ScriptedBroker) -> None:
     async with broker.runtime() as runtime:
         first_connection = broker.current
-        async with runtime.begin() as transaction:
+        async with runtime.begin(confirmation=Unconfirmed(attempts=3)) as transaction:
             await transaction.send(b"first", "q")
             broker.fail_before = lambda frame, connection: (
                 connection is first_connection and isinstance(frame, stompman.SendFrame) and frame.body == b"second"
@@ -99,7 +99,7 @@ async def test_commit_receipt_timeout_is_unknown(broker: ScriptedBroker) -> None
     broker.receipts = False
     async with broker.runtime() as runtime:
         with pytest.raises(stompman.TransactionOutcomeUnknownError) as info:
-            async with runtime.begin(receipt_timeout=0.001) as transaction:
+            async with runtime.begin(confirmation=Unconfirmed(), commit_confirmation=Confirmed(0.001)) as transaction:
                 await transaction.send(b"accepted", "q")
         assert isinstance(info.value.reason, stompman.ReceiptTimeoutError)
         assert transaction.state is TransactionState.UNCERTAIN
@@ -109,7 +109,7 @@ async def test_commit_receipt_timeout_is_unknown(broker: ScriptedBroker) -> None
 
 async def test_receipt_confirmed_transaction_and_completed_reuse_rejected(broker: ScriptedBroker) -> None:
     async with broker.runtime() as runtime:
-        async with runtime.begin(receipt_timeout=0.1) as transaction:
+        async with runtime.begin(commit_confirmation=Confirmed(0.1)) as transaction:
             await transaction.send(b"one", "q")
         with pytest.raises(RuntimeError, match="completed"):
             await transaction.send(b"two", "q")

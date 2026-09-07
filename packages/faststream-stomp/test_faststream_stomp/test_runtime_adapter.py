@@ -8,6 +8,7 @@ import pytest
 import stompman
 from faststream import Context
 from faststream_stomp import StompBroker
+from stompman._compat import LegacyOptions, LegacyTransportFactory
 from stompman.connection import AbstractConnection
 from stompman.core.config import RuntimeConfig
 from stompman.core.runtime import Runtime
@@ -127,14 +128,14 @@ def connection_class() -> type[LoopbackConnection]:
 
 
 def make_config(connection_class: type[LoopbackConnection]) -> RuntimeConfig:
-    return RuntimeConfig(
+    return LegacyOptions(
         [stompman.ConnectionParameters("broker.example", 61616, "guest", "guest")],
         connection_class=connection_class,
         heartbeat=stompman.Heartbeat(0, 0),
         no_message_restart_interval=None,
         connect_retry_attempts=1,
         connect_retry_interval=0,
-    )
+    ).to_config()
 
 
 async def test_legacy_client_only_supplies_configuration(
@@ -142,9 +143,9 @@ async def test_legacy_client_only_supplies_configuration(
 ) -> None:
     config = make_config(connection_class)
     client = stompman.Client(
-        config.servers,
+        [stompman.ConnectionParameters("broker.example", 61616, "guest", "guest")],
         connection_class=connection_class,
-        heartbeat=config.heartbeat,
+        heartbeat=config.connection.heartbeat,
         no_message_restart_interval=None,
     )
 
@@ -164,7 +165,7 @@ async def test_legacy_client_only_supplies_configuration(
         monkeypatch.setattr(stompman.Client, method_name, forbidden)
 
     broker = StompBroker(client)
-    assert broker.runtime.config is not client
+    assert broker.runtime is not client.core
     received: list[str] = []
     delivered = asyncio.Event()
     expected = ["one", "two", "three"]
@@ -192,7 +193,7 @@ async def test_legacy_client_only_supplies_configuration(
 
 
 async def test_runtime_automatic_reply_preserves_metadata(connection_class: type[LoopbackConnection]) -> None:
-    broker = StompBroker(make_config(connection_class))
+    broker = StompBroker(make_config(connection_class), transport_factory=LegacyTransportFactory(connection_class, {}))
     delivered = asyncio.Event()
     replies: list[stompman.AckableMessageFrame] = []
 
@@ -220,8 +221,10 @@ async def test_runtime_automatic_reply_preserves_metadata(connection_class: type
 @pytest.mark.parametrize("source", ["config", "runtime"])
 async def test_native_runtime_lifecycle_can_restart(connection_class: type[LoopbackConnection], source: str) -> None:
     config = make_config(connection_class)
-    runtime = Runtime(config)
-    broker = StompBroker(runtime if source == "runtime" else config)
+    runtime = Runtime(config, transport_factory=LegacyTransportFactory(connection_class, {}))
+    broker = StompBroker(
+        runtime if source == "runtime" else config, transport_factory=LegacyTransportFactory(connection_class, {})
+    )
     if source == "runtime":
         assert broker.runtime is runtime
 
@@ -241,7 +244,7 @@ async def test_native_runtime_lifecycle_can_restart(connection_class: type[Loopb
 
 
 async def test_failed_connect_can_be_retried(connection_class: type[LoopbackConnection]) -> None:
-    runtime = Runtime(make_config(connection_class))
+    runtime = Runtime(make_config(connection_class), transport_factory=LegacyTransportFactory(connection_class, {}))
     broker = StompBroker(runtime)
     with (
         mock.patch.object(runtime, "start", side_effect=RuntimeError("connect failed")),
@@ -253,7 +256,7 @@ async def test_failed_connect_can_be_retried(connection_class: type[LoopbackConn
 
 
 async def test_subscriber_start_failure_closes_runtime(connection_class: type[LoopbackConnection]) -> None:
-    runtime = Runtime(make_config(connection_class))
+    runtime = Runtime(make_config(connection_class), transport_factory=LegacyTransportFactory(connection_class, {}))
     broker = StompBroker(runtime)
 
     @broker.subscriber("events")
@@ -271,16 +274,17 @@ async def test_subscriber_start_failure_closes_runtime(connection_class: type[Lo
 
 def test_servers_constructor(connection_class: type[LoopbackConnection]) -> None:
     config = make_config(connection_class)
-    broker = StompBroker(servers=config.servers)
+    servers = [stompman.ConnectionParameters("broker.example", 61616, "guest", "guest")]
+    broker = StompBroker(servers=servers)
     assert broker.runtime.config.servers == config.servers
     with pytest.raises(TypeError, match="not both"):
-        StompBroker(config, servers=config.servers)
+        StompBroker(config, servers=servers)
 
 
 async def test_graceful_stop_settles_running_handler_before_unsubscribe(
     connection_class: type[LoopbackConnection],
 ) -> None:
-    broker = StompBroker(make_config(connection_class))
+    broker = StompBroker(make_config(connection_class), transport_factory=LegacyTransportFactory(connection_class, {}))
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -304,7 +308,11 @@ async def test_graceful_stop_settles_running_handler_before_unsubscribe(
 async def test_stop_cancels_handlers_after_faststream_grace_timeout(
     connection_class: type[LoopbackConnection],
 ) -> None:
-    broker = StompBroker(make_config(connection_class), graceful_timeout=0.001)
+    broker = StompBroker(
+        make_config(connection_class),
+        transport_factory=LegacyTransportFactory(connection_class, {}),
+        graceful_timeout=0.001,
+    )
     entered = asyncio.Event()
     cancelled = asyncio.Event()
 

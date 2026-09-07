@@ -1,9 +1,11 @@
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, ClassVar, Self, overload
 
-from stompman.core import Delivery, Runtime, RuntimeConfig
+from stompman._compat import LegacyOptions
+from stompman.core import Delivery, Runtime
+from stompman.core.subscriptions import log_subscription_error
 from stompman.errors import SubscriptionError
 from stompman.frames import AckMode, MessageFrame, ReceiptFrame
 from stompman.subscription import AckableMessageFrame, AutoAckSubscription, ManualAckSubscription, _make_subscription_id
@@ -11,20 +13,14 @@ from stompman.transaction import Transaction, _make_transaction_id
 
 
 @dataclass(kw_only=True, slots=True)
-class Client(RuntimeConfig):
+class Client(LegacyOptions):
     """Compatibility facade. Runtime owns all protocol and connection state."""
 
     PROTOCOL_VERSION: ClassVar = "1.2"
     _runtime: Runtime = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._runtime = Runtime(self.to_config())
-
-    def to_config(self) -> RuntimeConfig:
-        """Copy configuration without sharing lifecycle state with another adapter."""
-        values = {item.name: getattr(self, item.name) for item in fields(RuntimeConfig)}
-        values["servers"] = [replace(server, connect_headers=server.connect_headers.copy()) for server in self.servers]
-        return RuntimeConfig(**values)
+        self._runtime = self.to_runtime()
 
     @property
     def core(self) -> Runtime:
@@ -86,11 +82,17 @@ class Client(RuntimeConfig):
             content_type=content_type,
             add_content_length=add_content_length,
             headers=headers,
-            receipt_timeout=receipt_timeout,
+            confirmation=self.confirmation(receipt_timeout),
         )
 
     def begin(self, *, receipt_timeout: float | None = None) -> Transaction:
-        return Transaction(self._runtime.begin(receipt_timeout=receipt_timeout, transaction_id=_make_transaction_id()))
+        return Transaction(
+            self._runtime.begin(
+                confirmation=self.confirmation(None),
+                commit_confirmation=self.confirmation(receipt_timeout),
+                transaction_id=_make_transaction_id(),
+            )
+        )
 
     async def subscribe(
         self,
@@ -122,10 +124,18 @@ class Client(RuntimeConfig):
             ack=ack,
             headers=headers,
             subscription_id=_make_subscription_id(),
-            receipt_timeout=receipt_timeout,
-            on_subscription_error=on_subscription_error,
+            confirmation=self.confirmation(receipt_timeout),
+            operation_confirmation=self.confirmation(None),
+            on_subscription_error=on_subscription_error or log_subscription_error,
         )
-        return AutoAckSubscription(subscription, handler, on_suppressed_exception, suppressed_exception_classes)
+        return AutoAckSubscription(
+            subscription,
+            headers.copy() if headers is not None else None,
+            on_subscription_error,
+            handler,
+            on_suppressed_exception,
+            suppressed_exception_classes,
+        )
 
     async def subscribe_with_manual_ack(
         self,
@@ -146,10 +156,13 @@ class Client(RuntimeConfig):
             ack=ack,
             headers=headers,
             subscription_id=_make_subscription_id(),
-            receipt_timeout=receipt_timeout,
-            on_subscription_error=on_subscription_error,
+            confirmation=self.confirmation(receipt_timeout),
+            operation_confirmation=self.confirmation(None),
+            on_subscription_error=on_subscription_error or log_subscription_error,
         )
-        return ManualAckSubscription(subscription, handler)
+        return ManualAckSubscription(
+            subscription, headers.copy() if headers is not None else None, on_subscription_error, handler
+        )
 
     def is_alive(self) -> bool:
         return self._runtime.is_alive()

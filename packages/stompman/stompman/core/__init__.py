@@ -1,8 +1,38 @@
-"""Execution shared by the FastStream facade and legacy Client adapter."""
+"""Self-contained STOMP implementation, shared by independent facades."""
 
-from stompman.core.config import RuntimeConfig
-from stompman.core.delivery import Delivery, Subscription
-from stompman.core.runtime import Runtime, RuntimeStatus
-from stompman.core.transaction import Transaction, TransactionState
+from .config import (
+    Confirmation,
+    Confirmed,
+    ConnectionSettings,
+    DeliveryLimits,
+    Heartbeat,
+    RecoveryPolicy,
+    RuntimeConfig,
+    Server,
+    Unconfirmed,
+)
+from .delivery import Delivery
+from .runtime import Runtime, RuntimeStatus
+from .subscriptions import Subscription
+from .transaction import Transaction, TransactionState
+from .transport import Transport, TransportFactory
 
-__all__ = ["Delivery", "Runtime", "RuntimeConfig", "RuntimeStatus", "Subscription", "Transaction", "TransactionState"]
+__all__ = [
+    "Confirmation",
+    "Confirmed",
+    "ConnectionSettings",
+    "Delivery",
+    "DeliveryLimits",
+    "Heartbeat",
+    "RecoveryPolicy",
+    "Runtime",
+    "RuntimeConfig",
+    "RuntimeStatus",
+    "Server",
+    "Subscription",
+    "Transaction",
+    "TransactionState",
+    "Transport",
+    "TransportFactory",
+    "Unconfirmed",
+]

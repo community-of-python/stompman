@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 import stompman
-from stompman.core import Delivery
+from stompman.core import Confirmed, Delivery
 
 from test_stompman.conftest import ScriptedBroker, wait_until
 
@@ -26,7 +26,11 @@ async def test_subscribe_headers_restore_and_unsubscribe(broker: ScriptedBroker,
         headers["selector"] = "wrong"
         before = broker.current.subscriptions[subscription.id]
         await runtime.reconnect()
-        assert broker.current.subscriptions[subscription.id] == before
+        after = broker.current.subscriptions[subscription.id]
+        assert after.headers["receipt"] != before.headers["receipt"]
+        assert {k: v for k, v in after.headers.items() if k != "receipt"} == {
+            k: v for k, v in before.headers.items() if k != "receipt"
+        }
         assert before.headers["ack"] == ack
         await subscription.unsubscribe()
         await subscription.unsubscribe()
@@ -270,7 +274,7 @@ async def test_handler_limit_keeps_receipts_and_errors_responsive(broker: Script
             broker.current.deliver(sub.id, str(index).encode(), ack_id=str(index))
         await wait_until(lambda: runtime.status.pending_messages == 5)
         assert runtime.status.running_handlers == 1
-        receipt = await runtime.send(b"probe", "q", receipt_timeout=0.1)
+        receipt = await runtime.send(b"probe", "q", confirmation=Confirmed(0.1))
         assert isinstance(receipt, stompman.ReceiptFrame)
         broker.current.incoming.put_nowait(stompman.ErrorFrame(headers={"message": "late error"}))
         await wait_until(lambda: bool(errors))

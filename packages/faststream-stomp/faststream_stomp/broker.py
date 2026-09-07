@@ -20,8 +20,10 @@ from faststream._internal.types import BrokerMiddleware, CustomCallable
 from faststream.security import BaseSecurity
 from faststream.specification.schema import BrokerSpec
 from faststream.specification.schema.extra import Tag, TagDict
+from stompman._compat import server_from_legacy
 from stompman.core.config import RuntimeConfig
 from stompman.core.runtime import Runtime
+from stompman.core.transport import TransportFactory, connect_tcp
 
 from faststream_stomp.models import BrokerConfigWithStompClient, StompPublishCommand
 from faststream_stomp.publisher import StompProducer, StompPublisher
@@ -81,6 +83,7 @@ class StompBroker(
         client: stompman.Client | Runtime | RuntimeConfig | None = None,
         *,
         servers: list[stompman.ConnectionParameters] | None = None,
+        transport_factory: TransportFactory = connect_tcp,
         decoder: CustomCallable | None = None,
         parser: CustomCallable | None = None,
         dependencies: Iterable[Dependant] = (),
@@ -101,16 +104,16 @@ class StompBroker(
             if client is not None:
                 msg = "provide either client/runtime configuration or servers, not both"
                 raise TypeError(msg)
-            client = RuntimeConfig(servers)
+            client = RuntimeConfig(tuple(server_from_legacy(server) for server in servers))
         if client is None:
             msg = "provide a runtime, runtime configuration, Client, or servers"
             raise TypeError(msg)
         if isinstance(client, Runtime):
             runtime = client
         elif isinstance(client, stompman.Client):
-            runtime = Runtime(client.to_config())
+            runtime = client.to_runtime()
         else:
-            runtime = Runtime(client)
+            runtime = Runtime(client, transport_factory=transport_factory)
         fd_config = FastDependsConfig(use_fastdepends=apply_types)
         broker_config = BrokerConfigWithStompClient(
             broker_middlewares=middlewares,  # type: ignore[arg-type]

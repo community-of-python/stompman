@@ -6,6 +6,7 @@ from itertools import pairwise
 
 import pytest
 import stompman
+from stompman.core import Unconfirmed
 
 from test_stompman.conftest import ScriptedBroker, ScriptedConnection, wait_until
 
@@ -61,7 +62,7 @@ async def test_write_failure_retries_on_new_session(broker: ScriptedBroker) -> N
     async with broker.runtime() as runtime:
         first = broker.current
         broker.fail_before = lambda frame, connection: connection is first and isinstance(frame, stompman.SendFrame)
-        await runtime.send(b"one", "q")
+        await runtime.send(b"one", "q", confirmation=Unconfirmed(attempts=3))
         assert runtime.status.generation == 2
         assert first.closed
         assert len([f for f in broker.current.writes if isinstance(f, stompman.SendFrame)]) == 1
@@ -71,7 +72,7 @@ async def test_write_attempts_exhaustion(broker: ScriptedBroker) -> None:
     async with broker.runtime() as runtime:
         broker.fail_before = lambda frame, connection: isinstance(frame, stompman.SendFrame)
         with pytest.raises(stompman.FailedAllWriteAttemptsError) as info:
-            await runtime.send(b"one", "q")
+            await runtime.send(b"one", "q", confirmation=Unconfirmed(attempts=3))
         assert info.value.retry_attempts == 3
         assert broker.connect_calls == 3
         broker.fail_before = None

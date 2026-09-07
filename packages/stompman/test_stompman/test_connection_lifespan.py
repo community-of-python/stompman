@@ -105,4 +105,6 @@ async def test_context_body_error_is_preserved(broker: ScriptedBroker) -> None:
 async def test_legacy_client_is_dataclass_extendable(broker: ScriptedBroker) -> None:
     client = broker.client()
     assert isinstance(client.core, Runtime)
-    assert client.to_config().connection_class is broker.connection_class
+    async with client:
+        assert broker.connect_calls == 1
+        assert client.is_alive()

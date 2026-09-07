@@ -48,9 +48,7 @@ async def next_subscribe(outgoing: Outgoing) -> tuple[ScriptedConnection, stompm
 
 
 async def write_finished(client: stompman.Client) -> None:
-    session = client.core._session
-    assert session is not None
-    await wait_until(lambda: not session._writes.locked())
+    await wait_until(lambda: not client.core.status.writing)
 
 
 def receipt(connection: ScriptedConnection, frame: stompman.SubscribeFrame) -> None:
@@ -66,7 +64,7 @@ def remaining_frames(outgoing: Outgoing) -> list[stompman.AnyClientFrame]:
 
 def registered_ids(client: stompman.Client) -> list[str]:
     # Membership is observed synchronously to verify removal before the callback.
-    return list(client.core._subscriptions)
+    return list(client.core.status.subscription_ids)
 
 
 @pytest.mark.parametrize("manual_ack", [True, False])
@@ -120,8 +118,7 @@ async def test_rejected_subscription_is_removed_before_callback_and_not_replayed
 
     def on_failure(error: stompman.SubscriptionError) -> None:
         assert error.subscription_id not in registered_ids(client)
-        assert client.core._session is not None
-        assert not client.core._session._receipts
+        assert not client.core.status.pending_receipts
         failures.append(error)
         if callback_raises:
             msg = "broken callback"
@@ -492,7 +489,9 @@ async def test_unsubscribe_pending_restore_drops_late_receipt_without_error_call
     await subscription.unsubscribe()
     receipt(restored_connection, restored)
     await client.send(b"after unsubscribe", "test")
-    await client.core.reconnect()
+    generation = client.core.status.generation
+    restored_connection.incoming.put_nowait(stompman.ConnectionLostError(reason="test supervisor survived"))
+    await wait_until(lambda: client.core.status.generation > generation and client.is_alive())
     assert failures == []
     assert not registered_ids(client)
     assert all(not isinstance(frame, stompman.SubscribeFrame) for frame in remaining_frames(outgoing))

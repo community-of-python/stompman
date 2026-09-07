@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import stompman
 import stompman.core
-from stompman.core import Delivery
+from stompman.core import Confirmed, Delivery
 
 from test_stompman.conftest import ScriptedBroker, ScriptedConnection, wait_until
 
@@ -73,7 +73,7 @@ async def test_receipts_match_exact_id(broker: ScriptedBroker, monkeypatch: pyte
 
     monkeypatch.setattr(broker.connection_class, "write_frame", write)
     async with broker.runtime() as runtime:
-        receipt = await runtime.send(b"one", "q", receipt_timeout=0.1)
+        receipt = await runtime.send(b"one", "q", confirmation=Confirmed(0.1))
         assert receipt is not None
         assert receipt.headers["receipt-id"] != "unrelated"
         sent_frame = broker.current.writes[-1]
@@ -86,7 +86,7 @@ async def test_receipt_timeout_does_not_replay(broker: ScriptedBroker) -> None:
     broker.receipts = False
     async with broker.runtime() as runtime:
         with pytest.raises(stompman.ReceiptTimeoutError):
-            await runtime.send(b"one", "q", receipt_timeout=0.05)
+            await runtime.send(b"one", "q", confirmation=Confirmed(0.05))
         assert sum(isinstance(frame, stompman.SendFrame) for frame in broker.current.writes) == 1
         assert runtime.is_alive()
 
@@ -106,7 +106,7 @@ async def test_receipt_timeout_during_write_invalidates_session_without_replay(
 
         monkeypatch.setattr(broker.connection_class, "write_frame", write)
         with pytest.raises(stompman.ReceiptTimeoutError):
-            await runtime.send(b"uncertain", "q", receipt_timeout=0.01)
+            await runtime.send(b"uncertain", "q", confirmation=Confirmed(0.01))
         await runtime.send(b"after timeout", "q")
         assert first.closed
         assert [frame.body for frame in first.writes if isinstance(frame, stompman.SendFrame)] == [b"uncertain"]
@@ -120,7 +120,7 @@ async def test_connection_loss_waiting_for_receipt_does_not_replay(broker: Scrip
         first = broker.current
         broker.fail_after = lambda frame, connection: connection is first and isinstance(frame, stompman.SendFrame)
         with pytest.raises(stompman.ConnectionLostError):
-            await runtime.send(b"one", "q", receipt_timeout=1)
+            await runtime.send(b"one", "q", confirmation=Confirmed(1))
         await runtime.send(b"after", "q")
         assert first.closed
         assert [frame.body for frame in broker.current.writes if isinstance(frame, stompman.SendFrame)] == [b"after"]
@@ -150,7 +150,7 @@ async def test_callback_error_is_fatal_and_preserved(broker: ScriptedBroker) -> 
     ],
 )
 async def test_invalid_capacity_and_retry_configuration(broker: ScriptedBroker, option: str) -> None:
-    with pytest.raises(ValueError, match="must be positive"):
+    with pytest.raises(ValueError, match="positive"):
         await broker.runtime(**{option: 0}).start()
 
 

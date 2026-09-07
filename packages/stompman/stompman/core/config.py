@@ -1,71 +1,151 @@
-from collections.abc import Callable
+"""Immutable native configuration. Compatibility choices belong to adapters."""
+
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
 from ssl import SSLContext
-from typing import Any, Literal
+from types import MappingProxyType
+from typing import Self
 
-from stompman.config import ConnectionParameters, Heartbeat
-from stompman.connection import AbstractConnection, Connection
-from stompman.frames import ErrorFrame
-from stompman.logger import LOGGER
+MAX_PORT = 65535
 
 
-def log_error_frame(frame: ErrorFrame) -> None:
-    LOGGER.error("received error frame: %s", frame)
+def positive_integer(name: str, value: int) -> None:
+    if type(value) is not int or value <= 0:
+        msg = f"{name} must be a positive integer"
+        raise ValueError(msg)
 
 
-@dataclass(kw_only=True, slots=True)
+def positive(name: str, value: float) -> None:
+    if not math.isfinite(value) or value <= 0:
+        msg = f"{name} must be a finite positive number"
+        raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class Heartbeat:
+    will_send_interval_ms: int
+    want_to_receive_interval_ms: int
+
+    def __post_init__(self) -> None:
+        for value in (self.will_send_interval_ms, self.want_to_receive_interval_ms):
+            if not isinstance(value, int) or value < 0:
+                msg = "heartbeat intervals must be nonnegative integers"
+                raise ValueError(msg)
+
+    def to_header(self) -> str:
+        return f"{self.will_send_interval_ms},{self.want_to_receive_interval_ms}"
+
+    @classmethod
+    def from_header(cls, header: str) -> Self:
+        send, receive = header.split(",", maxsplit=1)
+        return cls(int(send), int(receive))
+
+    def negotiate(self, peer: "Heartbeat") -> "Heartbeat":
+        return Heartbeat(
+            max(self.will_send_interval_ms, peer.want_to_receive_interval_ms)
+            if self.will_send_interval_ms and peer.want_to_receive_interval_ms
+            else 0,
+            max(self.want_to_receive_interval_ms, peer.will_send_interval_ms)
+            if self.want_to_receive_interval_ms and peer.will_send_interval_ms
+            else 0,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Server:
+    host: str
+    port: int
+    login: str
+    passcode: str = field(repr=False)
+    connect_headers: Mapping[str, str] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.host or type(self.port) is not int or not 0 < self.port <= MAX_PORT:
+            msg = "server requires a host and a port between 1 and 65535"
+            raise ValueError(msg)
+        object.__setattr__(self, "connect_headers", MappingProxyType(dict(self.connect_headers)))
+
+
+@dataclass(frozen=True, slots=True)
+class Confirmed:
+    """Wait for this operation's receipt; never replay an ambiguous write."""
+
+    timeout: float = 5.0
+
+    def __post_init__(self) -> None:
+        positive("receipt timeout", self.timeout)
+
+
+@dataclass(frozen=True, slots=True)
+class Unconfirmed:
+    """Explicitly accept uncertain delivery and possible duplicates on retry."""
+
+    attempts: int = 1
+
+    def __post_init__(self) -> None:
+        positive_integer("write attempts", self.attempts)
+
+
+Confirmation = Confirmed | Unconfirmed
+DEFAULT_CONFIRMATION = Confirmed()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConnectionSettings:
+    timeout: float = 2.0
+    handshake_timeout: float = 2.0
+    disconnect_timeout: float = 2.0
+    read_chunk_size: int = 1024 * 1024
+    tls: bool | SSLContext = False
+    heartbeat: Heartbeat = Heartbeat(1000, 1000)
+    heartbeat_tolerance: float = 3.0
+    idle_timeout: float = math.inf
+
+    def __post_init__(self) -> None:
+        for name in ("timeout", "handshake_timeout", "disconnect_timeout", "heartbeat_tolerance"):
+            positive(name, getattr(self, name))
+        positive_integer("read_chunk_size", self.read_chunk_size)
+        if self.idle_timeout != math.inf:
+            positive("idle_timeout", self.idle_timeout)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecoveryPolicy:
+    attempts: int = 3
+    delay: float = 1.0
+    keep_trying: bool = False
+
+    def __post_init__(self) -> None:
+        positive_integer("connect attempts", self.attempts)
+        if not math.isfinite(self.delay) or self.delay < 0:
+            msg = "retry delay must be finite and nonnegative"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DeliveryLimits:
+    concurrency: int = 100
+    pending_messages: int = 1024
+    pending_bytes: int = 64 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        for name in ("concurrency", "pending_messages", "pending_bytes"):
+            positive_integer(name, getattr(self, name))
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeConfig:
-    servers: list[ConnectionParameters] = field(kw_only=False)
-    on_error_frame: Callable[[ErrorFrame], Any] | None = log_error_frame
-    heartbeat: Heartbeat = field(default=Heartbeat(1000, 1000))
-    ssl: Literal[True] | SSLContext | None = None
-    connect_retry_attempts: int = 3
-    connect_retry_interval: float = 1
-    connect_timeout: float = 2
-    read_max_chunk_size: int = 1024 * 1024
-    write_retry_attempts: int = 3
-    connection_confirmation_timeout: float = 2
-    disconnect_confirmation_timeout: float = 2
-    check_server_alive_interval_factor: float = 3
-    no_message_restart_interval: timedelta | None = timedelta(hours=1)
-    keep_alive_on_connection_failure: bool = False
-    max_concurrent_handlers: int | None = 100
-    max_pending_messages: int = 1024
-    max_pending_bytes: int = 64 * 1024 * 1024
-    connection_class: type[AbstractConnection] = Connection
+    servers: tuple[Server, ...]
+    connection: ConnectionSettings = ConnectionSettings()
+    recovery: RecoveryPolicy = RecoveryPolicy()
+    delivery: DeliveryLimits = DeliveryLimits()
 
-    def validate(self) -> None:
+    def __post_init__(self) -> None:
         if not self.servers:
             msg = "at least one server is required"
             raise ValueError(msg)
-        positive = {
-            "connect_retry_attempts": self.connect_retry_attempts,
-            "write_retry_attempts": self.write_retry_attempts,
-            "read_max_chunk_size": self.read_max_chunk_size,
-            "check_server_alive_interval_factor": self.check_server_alive_interval_factor,
-            "max_pending_messages": self.max_pending_messages,
-            "max_pending_bytes": self.max_pending_bytes,
-        }
-        if self.max_concurrent_handlers is not None:
-            positive["max_concurrent_handlers"] = self.max_concurrent_handlers
-        for name, value in positive.items():
-            if value <= 0:
-                msg = f"{name} must be positive"
-                raise ValueError(msg)
-        if (
-            min(
-                self.connect_timeout,
-                self.connect_retry_interval,
-                self.connection_confirmation_timeout,
-                self.disconnect_confirmation_timeout,
-                self.heartbeat.will_send_interval_ms,
-                self.heartbeat.want_to_receive_interval_ms,
-            )
-            < 0
-        ):
-            msg = "timeouts and heartbeat intervals must be nonnegative"
-            raise ValueError(msg)
-        if self.no_message_restart_interval is not None and self.no_message_restart_interval.total_seconds() <= 0:
-            msg = "no_message_restart_interval must be positive or None"
-            raise ValueError(msg)
+        if not all(isinstance(server, Server) for server in self.servers):
+            msg = "native configuration requires core.Server values"
+            raise TypeError(msg)
+        object.__setattr__(self, "servers", tuple(self.servers))

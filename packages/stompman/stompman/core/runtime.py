@@ -1,47 +1,27 @@
-# Task entrypoints retain broad cleanup scopes so every failure reaches the lifecycle owner.
+"""Native facade: compose owners and enforce the running/draining lifecycle."""
+
 import asyncio
-import math
-import time
-from collections import deque
+import logging
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass
-from functools import partial
 from types import TracebackType
 from typing import Any, Literal, Self, overload
 from uuid import uuid4
 
-from stompman.config import ConnectionParameters, Heartbeat
-from stompman.core._tasks import await_cleanup
-from stompman.core.config import RuntimeConfig
-from stompman.core.delivery import Delivery, PendingConfirmation, PendingDelivery, Subscription
-from stompman.core.session import Session
-from stompman.core.transaction import Transaction, TransactionState
-from stompman.errors import (
-    AllServersUnavailable,
-    AnyConnectionIssue,
-    ConnectionLostError,
-    ConnectionLostOnLifespanEnter,
-    ConsumerOverloadedError,
-    FailedAllConnectAttemptsError,
-    FailedAllWriteAttemptsError,
-    ReceiptRejectedError,
-    ReceiptTimeoutError,
-    SubscriptionError,
-)
-from stompman.frames import (
-    AckFrame,
-    AckMode,
-    AnyClientFrame,
-    AnyServerFrame,
-    ErrorFrame,
-    MessageFrame,
-    NackFrame,
-    ReceiptFrame,
-    SendFrame,
-    UnsubscribeFrame,
-)
-from stompman.logger import LOGGER
+from ._tasks import await_cleanup
+from .config import DEFAULT_CONFIRMATION, Confirmation, Confirmed, Heartbeat, RuntimeConfig, Unconfirmed
+from .delivery import Deliveries, Delivery
+from .errors import SubscriptionError
+from .frames import AckMode, AnyServerFrame, ErrorFrame, MessageFrame, ReceiptFrame, SendFrame
+from .recovery import Connected, ConnectionSupervisor, Failed
+from .session import Session
+from .subscriptions import Subscription, Subscriptions, SubscriptionSpec, log_subscription_error
+from .transaction import Transaction
+from .transport import TransportFactory, connect_tcp
+
+
+def log_error_frame(frame: ErrorFrame) -> None:
+    logging.getLogger("stompman").error("received error frame: %s", frame)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,65 +33,81 @@ class RuntimeStatus:
     pending_bytes: int
     running_handlers: int
     failure: Exception | None
+    subscription_ids: tuple[str, ...]
+    pending_receipts: int
+    writing: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Stopped:
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class Running:
+    connections: ConnectionSupervisor
+    subscriptions: Subscriptions
+    deliveries: Deliveries
+    group: asyncio.TaskGroup
+    supervisor: asyncio.Task[None]
+    dispatcher: asyncio.Task[None]
+
+
+@dataclass(frozen=True, slots=True)
+class Draining:
+    running: Running
 
 
 class Runtime:
-    """The shared execution seam for adapters; owns recovery and delivery state."""
-
-    def __init__(self, config: RuntimeConfig) -> None:
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        *,
+        transport_factory: TransportFactory = connect_tcp,
+        on_error_frame: Callable[[ErrorFrame], Any] = log_error_frame,
+    ) -> None:
         self.config = config
-        self._session: Session | None = None
-        self._generation = 0
-        self._connected_at = 0.0
-        self._reconnect_not_before = 0.0
-        self._lock = asyncio.Lock()
+        self._factory = transport_factory
+        self._on_error = on_error_frame
+        self._state: Stopped | Running | Draining = Stopped(0)
         self._lifecycle = asyncio.Lock()
-        self._opened = False
-        self._closing = False
-        self._failure: Exception | None = None
-        self._subscriptions: dict[str, Subscription] = {}
-        self._empty = asyncio.Event()
-        self._empty.set()
-        self._transactions: dict[str, Transaction] = {}
-        self._queue: deque[PendingDelivery] = deque()
-        self._available = asyncio.Event()
-        self._pending: set[PendingDelivery] = set()
-        self._pending_bytes = 0
-        self._handlers: set[asyncio.Task[None]] = set()
-        self._group: asyncio.TaskGroup | None = None
-        self._supervisor: asyncio.Task[None] | None = None
-        self._dispatcher: asyncio.Task[None] | None = None
-        self._slots: asyncio.Semaphore | None = None
 
     @property
     def status(self) -> RuntimeStatus:
-        state: Literal["closed", "connecting", "connected", "recovering", "failed"]
-        if self._failure is not None:
-            state = "failed"
-        elif not self._opened:
-            state = "closed"
-        elif self._session is not None and not self._session.failed.is_set():
-            state = "connected"
-        else:
-            state = "recovering" if self._generation else "connecting"
+        state = self._state
+        if isinstance(state, Stopped):
+            return RuntimeStatus("closed", state.generation, Heartbeat(0, 0), 0, 0, 0, None, (), 0, writing=False)
+        running = state.running if isinstance(state, Draining) else state
+        connections, deliveries = running.connections, running.deliveries
+        connection = connections.state
+        phase: Literal["connected", "recovering", "failed"] = "recovering"
+        if isinstance(connection, Failed):
+            phase = "failed"
+        elif isinstance(connection, Connected) and not connection.session.ended.done():
+            phase = "connected"
         return RuntimeStatus(
-            state=state,
-            generation=self._generation,
-            heartbeat=self._session.heartbeat if self._session else Heartbeat(0, 0),
-            pending_messages=len(self._pending),
-            pending_bytes=self._pending_bytes,
-            running_handlers=len(self._handlers),
-            failure=self._failure,
+            phase,
+            connections.generation,
+            connections.heartbeat,
+            deliveries.pending_messages,
+            deliveries.pending_bytes,
+            deliveries.running_handlers,
+            connection.error if isinstance(connection, Failed) else None,
+            running.subscriptions.ids,
+            connection.session.receipts.pending_count if isinstance(connection, Connected) else 0,
+            connection.session.writing if isinstance(connection, Connected) else False,
         )
 
+    def _running(self) -> Running:
+        if isinstance(self._state, Running):
+            return self._state
+        if isinstance(self._state, Draining) and self._state.running.deliveries.is_handler():
+            return self._state.running
+        msg = "runtime is not running"
+        raise RuntimeError(msg)
+
     def is_alive(self) -> bool:
-        return bool(
-            self._opened
-            and not self._closing
-            and self._failure is None
-            and self._session is not None
-            and self._session.is_alive()
-        )
+        return isinstance(self._state, Running) and self._state.connections.is_alive()
 
     async def __aenter__(self) -> Self:
         await self.start()
@@ -124,250 +120,72 @@ class Runtime:
 
     async def start(self) -> None:
         async with self._lifecycle:
-            if self._opened:
+            if not isinstance(self._state, Stopped):
                 return
-            self.config.validate()
-            self._failure = None
-            self._closing = False
-            self._reconnect_not_before = 0.0
-            self._opened = True
-            try:  # ruff: ignore[too-many-statements-in-try-clause]
-                async with self._lock:
-                    await self._ensure_session()
-                self._group = asyncio.TaskGroup()
-                await self._group.__aenter__()
-                self._slots = (
-                    asyncio.Semaphore(self.config.max_concurrent_handlers)
-                    if self.config.max_concurrent_handlers is not None
-                    else None
-                )
-                self._supervisor = self._group.create_task(self._supervise(), name="stomp-recovery")
-                self._dispatcher = self._group.create_task(self._dispatch(), name="stomp-delivery")
+            group = asyncio.TaskGroup()
+            deliveries = Deliveries(self.config.delivery, group)
+
+            def receive(frame: AnyServerFrame, session: Session) -> None:
+                if isinstance(frame, ErrorFrame):
+                    self._on_error(frame)
+                elif isinstance(frame, MessageFrame):
+                    subscriptions.receive(frame, session)
+
+            connections = ConnectionSupervisor(self.config, self._factory, receive, self._state.generation)
+            subscriptions = Subscriptions(connections, deliveries)
+            try:
+                await connections.start()
             except BaseException:
-                self._opened = False
-                if self._session is not None:
-                    await self._session.close()
-                    self._session = None
+                await await_cleanup(asyncio.create_task(connections.close(graceful=False)))
                 raise
+            await group.__aenter__()
+            self._state = Running(
+                connections,
+                subscriptions,
+                deliveries,
+                group,
+                group.create_task(connections.supervise(), name="stomp-recovery"),
+                group.create_task(deliveries.dispatch(), name="stomp-delivery"),
+            )
 
     async def close(
         self,
-        exc_type: type[BaseException] | None = None,  # ruff: ignore[unused-method-argument]
+        exc_type: type[BaseException] | None = None,
         exc_value: BaseException | None = None,
-        traceback: TracebackType | None = None,  # ruff: ignore[unused-method-argument]
+        traceback: TracebackType | None = None,
         *,
         cancel_handlers: bool = False,
     ) -> None:
+        del exc_type, traceback
         async with self._lifecycle:
-            if not self._opened:
+            if isinstance(self._state, Stopped):
                 return
-            self._closing = True
-            if self._dispatcher is not None:
-                self._dispatcher.cancel()
-            for subscription in self._subscriptions.values():
-                self.pause(subscription)
+            running = self._state.running if isinstance(self._state, Draining) else self._state
+            self._state = Draining(running)
+            running.dispatcher.cancel()
+            running.subscriptions.pause()
+            failed = isinstance(running.connections.state, Failed)
             try:
-                if cancel_handlers or exc_value is not None or self._failure is not None:
-                    for task in self._handlers:
-                        task.cancel()
-                await asyncio.gather(*self._handlers, return_exceptions=True)
-                for subscription in list(self._subscriptions.values()):
-                    await self.unsubscribe(subscription)
+                await running.deliveries.drain(cancel=cancel_handlers or exc_value is not None or failed)
+                await running.subscriptions.close()
             finally:
-                await self._finish_close(graceful=exc_value is None and self._failure is None)
-
-    async def _finish_close(self, *, graceful: bool) -> None:
-        self._opened = False
-        for background_task in (self._supervisor, self._dispatcher):
-            if background_task is not None:
-                background_task.cancel()
-        try:
-            if self._group is not None:
-                await self._group.__aexit__(None, None, None)
-        finally:
-            try:
-                if self._session is not None:
-                    await self._session.close(graceful=graceful)
-            finally:
-                self._session = None
-                for subscription in list(self._subscriptions.values()):
-                    self._remove_subscription(subscription)
-                for transaction in self._transactions.values():
-                    transaction.state = TransactionState.ABORTED
-                self._transactions.clear()
-                self._group = None
-                self._closing = False
+                running.supervisor.cancel()
+                try:
+                    await running.group.__aexit__(None, None, None)
+                finally:
+                    try:
+                        await await_cleanup(
+                            asyncio.create_task(running.connections.close(graceful=exc_value is None and not failed))
+                        )
+                    finally:
+                        self._state = Stopped(running.connections.generation)
 
     async def wait_until_unsubscribed(self) -> None:
-        await self._empty.wait()
-
-    def _require_open(self) -> None:
-        if not self._opened or (self._closing and asyncio.current_task() not in self._handlers):
-            msg = "runtime is not running"
-            raise RuntimeError(msg)
-        if self._failure is not None:
-            raise self._failure
-
-    async def _candidate(self, server: ConnectionParameters) -> Session | AnyConnectionIssue:
-        try:
-            connection = await self.config.connection_class.connect(
-                host=server.host,
-                port=server.port,
-                timeout=self.config.connect_timeout,
-                read_max_chunk_size=self.config.read_max_chunk_size,
-                ssl=self.config.ssl,
-                ws_uri_path=server.ws_uri_path,
-            )
-        except OSError:
-            return AllServersUnavailable(servers=[server], timeout=self.config.connect_timeout)
-        if connection is None:
-            return AllServersUnavailable(servers=[server], timeout=self.config.connect_timeout)
-        session = Session(connection, server, self.config)
-        successful = False
-        try:
-            try:
-                issue = await session.handshake()
-            except (ConnectionLostError, OSError, ValueError):
-                return ConnectionLostOnLifespanEnter()
-            if issue is not None:
-                return issue
-            successful = True
-            return session
-        finally:
-            if not successful:
-                await session.close()
-
-    async def _race(self) -> tuple[Session | None, list[AnyConnectionIssue]]:
-        tasks = [asyncio.create_task(self._candidate(server)) for server in self.config.servers]
-        winner = None
-        issues = []
-
-        async def cleanup(keep: Session | None) -> None:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            sessions = [result for result in results if isinstance(result, Session) and result is not keep]
-            close_results = await asyncio.gather(*(session.close() for session in sessions), return_exceptions=True)
-            for result in close_results:
-                if isinstance(result, BaseException):
-                    raise result
-
-        try:  # ruff: ignore[too-many-statements-in-try-clause]
-            for completed in asyncio.as_completed(tasks):
-                result = await completed
-                if isinstance(result, Session):
-                    winner = result
-                    break
-                issues.append(result)
-            await await_cleanup(asyncio.create_task(cleanup(winner)))
-        except BaseException:
-            # Ownership transfers only after all loser cleanup succeeds.
-            await await_cleanup(asyncio.create_task(cleanup(None)))
-            raise
-        return winner, issues
-
-    async def _ensure_session(self) -> Session:
-        """Restore state under the operation lock before exposing a generation."""
-        if self._session is not None and not self._session.failed.is_set():
-            return self._session
-        if (
-            self._session is not None
-            and self._session.failure is not None
-            and not isinstance(self._session.failure, (ConnectionLostError, OSError))
-        ):
-            raise self._session.failure
-        await self._discard_session()
-        issues: list[AnyConnectionIssue] = []
-        for attempt in range(self.config.connect_retry_attempts):
-            delay = self._reconnect_not_before - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            session, attempt_issues = await self._race()
-            issues.extend(attempt_issues)
-            if session is not None:
-                self._generation += 1
-                session.generation = self._generation
-                self._session = session
-                self._connected_at = time.monotonic()
-                session.start(self._receive)
-                try:
-                    await self._restore_session(session)
-                except ConnectionLostError:
-                    issues.append(ConnectionLostOnLifespanEnter())
-                    await self._discard_session()
-                else:
-                    return session
-            if attempt + 1 < self.config.connect_retry_attempts:
-                await asyncio.sleep(self.config.connect_retry_interval * (attempt + 1))
-        raise FailedAllConnectAttemptsError(retry_attempts=self.config.connect_retry_attempts, issues=issues)
-
-    async def _restore_session(self, session: Session) -> None:
-        for subscription in list(self._subscriptions.values()):
-            if subscription.receipt_timeout is None:
-                await session.write(subscription.frame())
-            else:
-                with suppress(SubscriptionError):
-                    await self._confirm_subscription(subscription, session, restoring=True)
-        if session.failed.is_set():
-            raise ConnectionLostError(reason=session.failure or "failed during restoration")
-        for transaction in self._transactions.values():
-            await transaction.restore(session)
-
-    async def _discard_session(self) -> None:
-        session = self._session
-        self._session = None
-        if session is not None:
-            self._reconnect_not_before = self._connected_at + self.config.connect_retry_interval
-            for pending in list(self._pending):
-                if pending.delivery._generation == session.generation:
-                    pending.wire_done = True
-                    if pending.handler_done:
-                        self._release(pending)
-            self._drop_queued(lambda pending: pending.delivery._generation == session.generation)
-            for subscription in self._subscriptions.values():
-                subscription._unsettled.clear()
-            await session.close()
+        if not isinstance(self._state, Stopped):
+            await self._running().subscriptions.wait_empty()
 
     async def reconnect(self) -> None:
-        """Replace the session and restore desired subscriptions and open transactions."""
-        async with self._lock:
-            self._require_open()
-            await self._discard_session()
-            await self._ensure_session()
-
-    async def _supervise(self) -> None:
-        try:  # ruff: ignore[too-many-statements-in-try-clause]
-            while self._opened:
-                session = self._session
-                if session is not None:
-                    await session.failed.wait()
-                    if session.failure is not None and not isinstance(session.failure, (ConnectionLostError, OSError)):
-                        raise session.failure  # ruff: ignore[raise-within-try]
-                try:
-                    async with self._lock:
-                        if self._closing:
-                            return
-                        await self._ensure_session()
-                except FailedAllConnectAttemptsError:
-                    if not self.config.keep_alive_on_connection_failure:
-                        raise
-                    LOGGER.warning("background recovery exhausted; keeping runtime alive")
-                    await asyncio.sleep(self.config.connect_retry_interval)
-        except Exception as error:
-            self._failure = error
-            raise
-
-    async def _write(self, frame: AnyClientFrame, *, receipt_timeout: float | None = None) -> ReceiptFrame | None:
-        for _ in range(self.config.write_retry_attempts):
-            session = await self._ensure_session()
-            try:
-                return await session.write(frame, receipt_timeout=receipt_timeout)
-            except ConnectionLostError:
-                await self._discard_session()
-                if receipt_timeout is not None:
-                    raise
-        raise FailedAllWriteAttemptsError(retry_attempts=self.config.write_retry_attempts)
+        await self._running().connections.reconnect()
 
     @overload
     async def send(
@@ -378,7 +196,19 @@ class Runtime:
         content_type: str | None = None,
         add_content_length: bool = True,
         headers: dict[str, str] | None = None,
-        receipt_timeout: None = None,
+        confirmation: Confirmed = DEFAULT_CONFIRMATION,
+    ) -> ReceiptFrame: ...
+
+    @overload
+    async def send(
+        self,
+        body: bytes,
+        destination: str,
+        *,
+        content_type: str | None = None,
+        add_content_length: bool = True,
+        headers: dict[str, str] | None = None,
+        confirmation: Unconfirmed,
     ) -> None: ...
 
     @overload
@@ -390,8 +220,8 @@ class Runtime:
         content_type: str | None = None,
         add_content_length: bool = True,
         headers: dict[str, str] | None = None,
-        receipt_timeout: float,
-    ) -> ReceiptFrame: ...
+        confirmation: Confirmation,
+    ) -> ReceiptFrame | None: ...
 
     async def send(
         self,
@@ -401,7 +231,7 @@ class Runtime:
         content_type: str | None = None,
         add_content_length: bool = True,
         headers: dict[str, str] | None = None,
-        receipt_timeout: float | None = None,
+        confirmation: Confirmation = DEFAULT_CONFIRMATION,
     ) -> ReceiptFrame | None:
         frame = SendFrame.build(
             body=body,
@@ -411,12 +241,18 @@ class Runtime:
             add_content_length=add_content_length,
             headers=headers,
         )
-        async with self._lock:
-            self._require_open()
-            return await self._write(frame, receipt_timeout=receipt_timeout)
+        return await self._running().connections.write(frame, confirmation)
 
-    def begin(self, *, receipt_timeout: float | None = None, transaction_id: str | None = None) -> Transaction:
-        return Transaction(self, receipt_timeout=receipt_timeout, transaction_id=transaction_id)
+    def begin(
+        self,
+        *,
+        confirmation: Confirmation = DEFAULT_CONFIRMATION,
+        transaction_id: str = "",
+        commit_confirmation: Confirmation = DEFAULT_CONFIRMATION,
+    ) -> Transaction:
+        return Transaction(
+            self._running().connections, transaction_id or str(uuid4()), confirmation, commit_confirmation
+        )
 
     async def subscribe(
         self,
@@ -425,286 +261,19 @@ class Runtime:
         *,
         ack: AckMode = "client-individual",
         headers: dict[str, str] | None = None,
-        subscription_id: str | None = None,
-        receipt_timeout: float | None = None,
-        on_subscription_error: Callable[[SubscriptionError], Any] | None = None,
+        subscription_id: str = "",
+        confirmation: Confirmation = DEFAULT_CONFIRMATION,
+        operation_confirmation: Confirmation = DEFAULT_CONFIRMATION,
+        on_subscription_error: Callable[[SubscriptionError], Any] = log_subscription_error,
     ) -> Subscription:
-        if receipt_timeout is not None and (not math.isfinite(receipt_timeout) or receipt_timeout <= 0):
-            msg = "receipt_timeout must be a finite positive number"
-            raise ValueError(msg)
-        subscription = Subscription(
-            id=subscription_id or str(uuid4()),
-            destination=destination,
-            ack=ack,
-            headers=headers.copy() if headers is not None else None,
-            handler=handler,
-            _runtime=self,
-            receipt_timeout=receipt_timeout,
-            on_subscription_error=on_subscription_error,
+        spec = SubscriptionSpec(
+            subscription_id or str(uuid4()),
+            destination,
+            ack,
+            headers or {},
+            handler,
+            confirmation,
+            operation_confirmation,
+            on_subscription_error,
         )
-        async with self._lock:
-            self._require_open()
-            if subscription.id in self._subscriptions:
-                msg = "subscription id is already active"
-                raise ValueError(msg)
-            # Register before writing: the broker can deliver immediately after SUBSCRIBE.
-            # Each attempt establishes the session before installing this new intent.
-            for _ in range(self.config.write_retry_attempts):
-                session = await self._ensure_session()
-                self._subscriptions[subscription.id] = subscription
-                self._empty.clear()
-                if receipt_timeout is not None:
-                    await self._confirm_subscription(subscription, session)
-                    return subscription
-                try:
-                    await session.write(subscription.frame())
-                except BaseException as error:
-                    self._remove_subscription(subscription)
-                    if not isinstance(error, ConnectionLostError):
-                        raise
-                    await self._discard_session()
-                else:
-                    return subscription
-            raise FailedAllWriteAttemptsError(retry_attempts=self.config.write_retry_attempts)
-
-    async def _confirm_subscription(
-        self, subscription: Subscription, session: Session, *, restoring: bool = False
-    ) -> None:
-        timeout = subscription.receipt_timeout
-        assert timeout is not None  # ruff: ignore[assert]
-        caller = asyncio.current_task()
-        assert caller is not None  # ruff: ignore[assert]
-        cancelling = caller.cancelling()
-        receipt_id = str(uuid4())
-        pending = subscription._confirmation = PendingConfirmation(
-            receipt_id=receipt_id,
-            generation=session.generation,
-            operation=asyncio.create_task(
-                session.write(subscription.frame(), receipt_timeout=timeout, receipt_id=receipt_id),
-                name="stomp-subscribe-confirmation",
-            ),
-        )
-        try:
-            await pending.operation
-        except BaseException as cause:
-            cancelled = isinstance(cause, asyncio.CancelledError) and caller.cancelling() > cancelling
-            if isinstance(cause, ReceiptRejectedError):
-                failure = SubscriptionError(subscription_id=subscription.id, reason="rejected", frame=cause.frame)
-            elif isinstance(cause, (TimeoutError, ReceiptTimeoutError)):
-                failure = SubscriptionError(subscription_id=subscription.id, reason="timeout")
-            else:
-                failure = SubscriptionError(
-                    subscription_id=subscription.id,
-                    reason="unsubscribed"
-                    if isinstance(cause, asyncio.CancelledError) and not restoring
-                    else "connection_lost",
-                )
-            if pending.failure is None:
-                pending.failure = failure
-                self._remove_subscription(subscription)
-                if (not cancelled and failure.reason != "unsubscribed") or restoring:
-                    self._notify_subscription_error(subscription, failure)
-            else:
-                failure = pending.failure
-            await await_cleanup(asyncio.create_task(self._cleanup_confirmation(subscription, session)))
-            if cancelled:
-                raise
-            raise failure from cause
-        finally:
-            subscription._confirmation = None
-
-    async def _cleanup_confirmation(self, subscription: Subscription, session: Session) -> None:
-        if self._session is session and not session.failed.is_set():
-            with suppress(ConnectionLostError, TimeoutError):
-                async with asyncio.timeout(subscription.receipt_timeout):
-                    await session.write(UnsubscribeFrame(headers={"id": subscription.id}))
-
-    @staticmethod
-    def _notify_subscription_error(subscription: Subscription, error: SubscriptionError) -> None:
-        if subscription.on_subscription_error is None:
-            LOGGER.warning("subscription confirmation failed: %s", error)
-        else:
-            try:
-                subscription.on_subscription_error(error)
-            except Exception:  # ruff: ignore[blind-except]
-                LOGGER.exception("unhandled exception in subscription error callback")
-
-    def _remove_subscription(self, subscription: Subscription) -> None:
-        self._subscriptions.pop(subscription.id, None)
-        if not self._subscriptions:
-            self._empty.set()
-        for pending in list(subscription._deliveries.values()):
-            pending.wire_done = True
-            if pending.handler_done:
-                self._release(pending)
-        subscription._unsettled.clear()
-        self._drop_queued(lambda pending: pending.delivery._subscription is subscription)
-
-    async def unsubscribe(self, subscription: Subscription) -> None:
-        if subscription._confirmation is not None:
-            # Wake confirmation without waiting for its operation lock. Its owner
-            # removes the intent and performs bounded cleanup on the same Session.
-            subscription._confirmation.failure = SubscriptionError(
-                subscription_id=subscription.id, reason="unsubscribed"
-            )
-            subscription._confirmation.operation.cancel()
-            self._remove_subscription(subscription)
-            return
-        async with self._lock:
-            if self._subscriptions.get(subscription.id) is not subscription:
-                return
-            self._remove_subscription(subscription)
-            if self._session is not None and not self._session.failed.is_set():
-                with suppress(ConnectionLostError):
-                    await self._session.write(UnsubscribeFrame(headers={"id": subscription.id}))
-
-    def pause(self, subscription: Subscription) -> None:
-        subscription._paused = True
-        self._drop_queued(lambda pending: pending.delivery._subscription is subscription)
-
-    def _receive_confirmation(self, frame: ErrorFrame | ReceiptFrame, session: Session) -> None:
-        receipt_id = frame.headers.get("receipt-id")
-        for subscription in list(self._subscriptions.values()):
-            pending = subscription._confirmation
-            if pending is None or pending.generation != session.generation:
-                continue
-            if isinstance(frame, ReceiptFrame):
-                if pending.receipt_id == receipt_id:
-                    pending.received = True
-            elif not pending.received and (receipt_id is None or pending.receipt_id == receipt_id):
-                failure = pending.failure = SubscriptionError(
-                    subscription_id=subscription.id, reason="rejected", frame=frame
-                )
-                self._remove_subscription(subscription)
-                self._notify_subscription_error(subscription, failure)
-
-    def _receive(self, frame: AnyServerFrame, session: Session) -> None:
-        if isinstance(frame, ErrorFrame):
-            self._receive_confirmation(frame, session)
-            if self.config.on_error_frame is not None:
-                self.config.on_error_frame(frame)
-        elif isinstance(frame, ReceiptFrame):
-            self._receive_confirmation(frame, session)
-        elif isinstance(frame, MessageFrame) and not self._closing:
-            subscription = self._subscriptions.get(frame.headers["subscription"])
-            if subscription is None or subscription._paused:
-                return
-            size = len(frame.body) + sum(
-                len(key.encode()) + len(str(value).encode()) for key, value in frame.headers.items()
-            )
-            if len(self._pending) >= self.config.max_pending_messages or (
-                self._pending_bytes + size > self.config.max_pending_bytes
-            ):
-                raise ConsumerOverloadedError(
-                    max_pending_messages=self.config.max_pending_messages,
-                    max_pending_bytes=self.config.max_pending_bytes,
-                )
-            sequence = subscription._next_sequence
-            subscription._next_sequence += 1
-            delivery = Delivery(
-                headers=frame.headers.copy(),
-                body=frame.body,
-                _subscription=subscription,
-                _generation=session.generation,
-                _sequence=sequence,
-            )
-            pending = PendingDelivery(delivery=delivery, size=size, wire_done=subscription.ack == "auto")
-            subscription._deliveries[sequence] = pending
-            if subscription.ack == "client":
-                subscription._unsettled.append(pending)
-            self._pending.add(pending)
-            self._pending_bytes += size
-            self._queue.append(pending)
-            self._available.set()
-
-    def _release(self, pending: PendingDelivery) -> None:
-        if pending in self._pending:
-            self._pending.remove(pending)
-            self._pending_bytes -= pending.size
-            pending.delivery._subscription._deliveries.pop(pending.delivery._sequence, None)
-
-    def _drop_queued(self, predicate: Callable[[PendingDelivery], bool]) -> None:
-        remaining: deque[PendingDelivery] = deque()
-        for pending in self._queue:
-            if predicate(pending):
-                self._release(pending)
-            else:
-                remaining.append(pending)
-        self._queue = remaining
-        if not self._queue:
-            self._available.clear()
-
-    async def _dispatch(self) -> None:
-        while True:
-            await self._available.wait()
-            if self._slots is not None:
-                await self._slots.acquire()
-            if not self._queue:
-                if self._slots is not None:
-                    self._slots.release()
-                continue
-            pending = self._queue.popleft()
-            if not self._queue:
-                self._available.clear()
-            assert self._group is not None  # ruff: ignore[assert]
-            task = self._group.create_task(self._run_handler(pending), name="stomp-handler")
-            self._handlers.add(task)
-            task.add_done_callback(partial(self._handler_finished, pending=pending))
-
-    def _handler_finished(self, task: asyncio.Task[None], *, pending: PendingDelivery) -> None:
-        pending.handler_done = True
-        if pending.wire_done:
-            self._release(pending)
-        self._handlers.discard(task)
-        if self._slots is not None:
-            self._slots.release()
-
-    async def _run_handler(self, pending: PendingDelivery) -> None:
-        try:
-            await pending.delivery._subscription.handler(pending.delivery)
-        except Exception:  # ruff: ignore[blind-except]
-            LOGGER.exception("unhandled exception in message handler")
-        finally:
-            pending.handler_done = True
-            if pending.wire_done:
-                self._release(pending)
-
-    async def settle(self, delivery: Delivery, *, accepted: bool) -> None:
-        async with self._lock:
-            subscription = delivery._subscription
-            pending = subscription._deliveries.get(delivery._sequence)
-            if pending is None or pending.wire_done:
-                return
-            session = self._session
-            if (
-                self._subscriptions.get(subscription.id) is not subscription
-                or session is None
-                or session.failed.is_set()
-                or session.generation != delivery._generation
-            ):
-                LOGGER.warning("skipping settlement from an inactive subscription or session")
-                pending.wire_done = True
-                if pending.handler_done:
-                    self._release(pending)
-                return
-            if pending.outcome is not None:
-                return
-            pending.outcome = accepted
-            if subscription.ack == "client":
-                while subscription._unsettled and subscription._unsettled[0].outcome is not None:
-                    await self._settle_one(subscription._unsettled.popleft(), session)
-            else:
-                await self._settle_one(pending, session)
-
-    async def _settle_one(self, pending: PendingDelivery, session: Session) -> None:
-        delivery = pending.delivery
-        ack_id = delivery.headers.get("ack")
-        if ack_id and not session.failed.is_set():
-            frame_type = AckFrame if pending.outcome else NackFrame
-            with suppress(ConnectionLostError):
-                await session.write(frame_type(headers={"id": ack_id, "subscription": delivery._subscription.id}))
-        elif not ack_id:
-            LOGGER.warning("failed to settle message frame: it has no ack header")
-        pending.wire_done = True
-        if pending.handler_done:
-            self._release(pending)
+        return await self._running().subscriptions.subscribe(spec)
