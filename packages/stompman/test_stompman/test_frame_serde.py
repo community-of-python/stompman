@@ -15,7 +15,7 @@ from stompman import (
     dump_frame,
 )
 from stompman.frames import StompFrame
-from stompman.serde import NEWLINE
+from stompman.serde import NEWLINE, dump_header, iter_bytes, parse_header, unescape_byte
 
 
 def test_send_frame_copies_headers_and_owns_routing_headers() -> None:
@@ -109,6 +109,23 @@ def test_connect_headers_are_literal(frame_type: type[ConnectFrame] | type[Conne
 )
 def test_dump_frame(frame: AnyClientFrame, dumped_frame: bytes) -> None:
     assert dump_frame(frame) == dumped_frame
+
+
+def test_legacy_helpers_accept_public_keywords() -> None:
+    assert iter_bytes(bytes_=b"ab") == (b"a", b"b")
+    assert dump_header(key="a:b", value="c\n") == b"a\\cb:c\\n\n"
+
+
+@pytest.mark.parametrize(
+    ("byte", "previous", "expected"),
+    [(b"n", b"\\", b"\n"), (b"x", b"\\", None), (b"\\", None, None), (b"a", None, b"a")],
+)
+def test_unescape_byte_compatibility(byte: bytes, previous: bytes | None, expected: bytes | None) -> None:
+    assert unescape_byte(byte=byte, previous_byte=previous) == expected
+
+
+def test_parse_header_rejects_unescaped_colon_in_value() -> None:
+    assert parse_header(bytearray(b"key:value:tail")) is None
 
 
 @pytest.mark.parametrize(

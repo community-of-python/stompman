@@ -50,13 +50,13 @@ sys.meta_path.insert(0, BlockLegacy())
 sys.path.insert(0, sys.argv[1])
 from independent_core import Runtime, RuntimeConfig, Server
 from independent_core.frames import ConnectFrame, ConnectedFrame, SendFrame, ReceiptFrame
-from independent_core.serde import FrameParser, dump_frame
+from independent_core.codec import FrameDecoder, dump_frame
 
 async def broker(reader, writer):
-    parser = FrameParser()
+    decoder = FrameDecoder()
     try:
         while data := await reader.read(4096):
-            for frame in parser.parse_frames_from_chunk(data):
+            for frame in decoder.feed(data):
                 if isinstance(frame, ConnectFrame):
                     writer.write(dump_frame(ConnectedFrame(headers={'version': '1.2', 'heart-beat': '0,0'})))
                 elif receipt := frame.headers.get('receipt'):
@@ -80,7 +80,8 @@ asyncio.run(main())
 
 
 def test_protocol_reexports_preserve_class_identity() -> None:
-    from stompman.core import frames, serde  # ruff: ignore[import-outside-top-level]
+    from stompman import serde  # ruff: ignore[import-outside-top-level]
+    from stompman.core import frames  # ruff: ignore[import-outside-top-level]
 
     assert stompman.SendFrame is frames.SendFrame
     assert stompman.MessageFrame is frames.MessageFrame

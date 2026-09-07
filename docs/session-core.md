@@ -3,10 +3,11 @@
 `stompman.core` is a self-contained STOMP library. It imports its own modules and
 the standard library. Importing it does not load the legacy facade. Frames, codec,
 configuration, errors, TCP transport, session execution, and recovery all live in
-core. The legacy `stompman.frames` and `stompman.serde` paths re-export the
-canonical protocol definitions, preserving class identity. Legacy error names
-remain available; diagnostic adapters retain the original connection-parameter
-payloads where the native configuration uses different types.
+core. The legacy `stompman.frames` path re-exports the canonical frame definitions,
+preserving class identity. `stompman.serde` keeps the historical tolerant parser
+at the compatibility boundary and uses core frame and wire primitives. Legacy
+error names remain available; diagnostic adapters retain the original
+connection-parameter payloads where the native configuration uses different types.
 
 FastStream is the primary facade and executes core directly when configured with
 servers, `RuntimeConfig`, or `Runtime`. `Client` is a separate compatibility
@@ -48,7 +49,7 @@ flowchart TD
 | `Commands` / `Command` | Submit, complete, cancel | Owned execution and receipt lifetime; callers never need a separate command cleanup step |
 | `Receipts` | Reserve, receive, reject, discard, fail | Exact correlation; only a matching ERROR rejects an operation; retire correlations before observers |
 | `FrameDecoder` | Feed bytes, finish at EOF | Strict incremental framing, byte limits, escapes, exact body length and terminator |
-| `FrameParser` | Parse a chunk | Historical tolerant parser, explicitly used by legacy transports |
+| `stompman.serde.FrameParser` | Parse a chunk | Historical tolerant parser, outside the strict core and used by legacy transports |
 | `Subscriptions` / `Subscription` | Subscribe, receive, restore, unsubscribe | Immutable intent, explicit waiting/installing/active/removing/removed states, callback ordering, safe ID reuse |
 | `Deliveries` / `Channel` | Admit, pause, drain | Handler scheduling and channel lifetime |
 | `Capacity` / `Reservation` | Reserve, finish handler, finish settlement | Admission stays charged until both owners finish exactly once |

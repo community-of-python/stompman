@@ -6,11 +6,10 @@ from collections.abc import AsyncGenerator, Iterator
 from contextlib import suppress
 from typing import Protocol
 
-from .codec import FrameDecoder, encode_frame
+from .codec import NEWLINE, FrameDecoder, encode_frame
 from .config import DEFAULT_FRAME_LIMITS, ConnectionSettings, FrameLimits, Server
 from .errors import ConnectionLostError, ProtocolError
 from .frames import AnyClientFrame, AnyServerFrame
-from .serde import NEWLINE
 
 
 class Transport(Protocol):
