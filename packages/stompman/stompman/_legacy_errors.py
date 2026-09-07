@@ -9,28 +9,40 @@ from .core import errors as native
 from .errors import AllServersUnavailable, AnyConnectionIssue, FailedAllConnectAttemptsError
 
 
-def _connection_failure(
+def _flush_unavailable(
+    reports: list[native.AllServersUnavailable],
+    issues: list[AnyConnectionIssue],
+    servers: list[ConnectionParameters],
+    timeout: int | None,
+) -> None:
+    if reports:
+        original_timeout = cast("int", reports[0].timeout) if timeout is None else timeout
+        issues.append(AllServersUnavailable(servers=servers, timeout=original_timeout))
+        reports.clear()
+
+
+def _translate_issues(
     error: native.FailedAllConnectAttemptsError, servers: list[ConnectionParameters], timeout: int | None
-) -> native.FailedAllConnectAttemptsError:
+) -> list[AnyConnectionIssue]:
     issues: list[AnyConnectionIssue] = []
     unavailable: list[native.AllServersUnavailable] = []
-
-    def flush() -> None:
-        if unavailable:
-            original_timeout = cast("int", unavailable[0].timeout) if timeout is None else timeout
-            issues.append(AllServersUnavailable(servers=servers, timeout=original_timeout))
-            unavailable.clear()
-
     for issue in error.issues:
         if isinstance(issue, native.AllServersUnavailable) and not isinstance(issue, AllServersUnavailable):
             unavailable.append(issue)
             if len(unavailable) == len(servers):
-                flush()
+                _flush_unavailable(unavailable, issues, servers, timeout)
         else:
-            flush()
+            _flush_unavailable(unavailable, issues, servers, timeout)
             # LegacyProtocol only produces the original handshake outcomes.
             issues.append(cast("AnyConnectionIssue", issue))
-    flush()
+    _flush_unavailable(unavailable, issues, servers, timeout)
+    return issues
+
+
+def _connection_failure(
+    error: native.FailedAllConnectAttemptsError, servers: list[ConnectionParameters], timeout: int | None
+) -> native.FailedAllConnectAttemptsError:
+    issues = _translate_issues(error, servers, timeout)
     if (
         isinstance(error, FailedAllConnectAttemptsError)
         and len(issues) == len(error.issues)
