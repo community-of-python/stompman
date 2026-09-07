@@ -126,7 +126,7 @@ class ObservedTransport:
                 raise self._failure.result()
             return reading.result()
         finally:
-            await await_cleanup(asyncio.create_task(finish_read()))
+            await await_cleanup(finish_read())
 
     async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:
         frames = self._transport.read_frames()

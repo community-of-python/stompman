@@ -8,11 +8,11 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import Literal, Protocol, TypeVar
 
 from ._tasks import Cancellation, await_cleanup
 from .command import Command
-from .config import DEFAULT_CONFIRMATION, Confirmation, Heartbeat, RuntimeConfig, Unconfirmed
+from .config import DEFAULT_CONFIRMATION, Confirmation, Heartbeat, RuntimeConfig
 from .connector import Connector, Unavailable
 from .errors import (
     AnyConnectionIssue,
@@ -61,6 +61,16 @@ class Failed:
 class Closed: ...
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConnectionSnapshot:
+    state: Literal["connected", "recovering", "failed"]
+    generation: int
+    heartbeat: Heartbeat
+    failure: Exception | None
+    pending_receipts: int
+    writing: bool
+
+
 class ConnectionSupervisor:
     def __init__(
         self,
@@ -79,16 +89,24 @@ class ConnectionSupervisor:
         self._acquisitions: set[asyncio.Task[Session]] = set()
         self._resources: dict[tuple[str, str], Restorable] = {}
 
-    @property
-    def state(self) -> Disconnected | Restoring | Connected | Failed | Closed:
-        return self._state
-
-    @property
-    def heartbeat(self) -> Heartbeat:
-        return self._state.session.heartbeat if isinstance(self._state, (Restoring, Connected)) else Heartbeat(0, 0)
-
     def is_alive(self) -> bool:
         return isinstance(self._state, Connected) and self._state.session.is_alive()
+
+    def snapshot(self) -> ConnectionSnapshot:
+        state = self._state
+        phase: Literal["connected", "recovering", "failed"] = "recovering"
+        if isinstance(state, Failed):
+            phase = "failed"
+        elif isinstance(state, Connected) and not state.session.ended.done():
+            phase = "connected"
+        return ConnectionSnapshot(
+            state=phase,
+            generation=self.generation,
+            heartbeat=state.session.heartbeat if isinstance(state, (Restoring, Connected)) else Heartbeat(0, 0),
+            failure=state.error if isinstance(state, Failed) else None,
+            pending_receipts=state.session.receipts.pending_count if isinstance(state, (Restoring, Connected)) else 0,
+            writing=state.session.writing if isinstance(state, (Restoring, Connected)) else False,
+        )
 
     def attach(self, resource: Restorable) -> None:
         if resource.key in self._resources:
@@ -177,17 +195,19 @@ class ConnectionSupervisor:
             return False
         except BaseException:
             # A cancelled or failed restore cannot leave a partially ready generation.
-            await await_cleanup(asyncio.create_task(self._discard()))
+            await await_cleanup(self._discard())
             raise
         return True
 
-    async def submit_current(self, frame: AnyClientFrame, confirmation: Confirmation) -> Command | None:
-        """Submit cleanup after restoration, without opening a replacement session."""
+    async def write_current(self, frame: AnyClientFrame, confirmation: Confirmation) -> bool:
+        """Finish a command on the current session without opening a replacement."""
         async with self._gate:
             state = self._state
             if self._stopping.is_set() or not isinstance(state, Connected) or state.session.ended.done():
-                return None
-            return await state.session.submit(frame, confirmation)
+                return False
+            command = await state.session.submit(frame, confirmation)
+        await command.complete()
+        return True
 
     async def run(self, operation: Callable[[Session], Awaitable[T]], *, attempts: int = 1) -> T:
         """Run submission and its atomic state update in the current generation."""
@@ -211,8 +231,7 @@ class ConnectionSupervisor:
         async def submit(session: Session) -> Command:
             return await session.submit(frame, confirmation)
 
-        attempts = confirmation.attempts if isinstance(confirmation, Unconfirmed) else 1
-        command = await self.run(submit, attempts=attempts)
+        command = await self.run(submit, attempts=confirmation.attempts)
         return await command.complete()
 
     async def start(self) -> None:

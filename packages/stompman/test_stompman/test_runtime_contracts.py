@@ -15,9 +15,11 @@ pytestmark = pytest.mark.anyio
 async def test_graceful_drain_allows_publish_and_ack_before_unsubscribe(broker: ScriptedBroker) -> None:
     entered = asyncio.Event()
     release = asyncio.Event()
-    runtime = broker.runtime()
+    handled: list[bytes] = []
+    runtime = broker.runtime(max_concurrent_handlers=1)
 
     async def handle(delivery: Delivery) -> None:
+        handled.append(delivery.body)
         entered.set()
         await release.wait()
         await runtime.send(b"response", "reply")
@@ -27,6 +29,8 @@ async def test_graceful_drain_allows_publish_and_ack_before_unsubscribe(broker: 
     sub = await runtime.subscribe("q", handle)
     broker.current.deliver(sub.id, b"one", ack_id="a")
     await entered.wait()
+    broker.current.deliver(sub.id, b"queued", ack_id="b")
+    await wait_until(lambda: runtime.status.pending_messages == 2)
     close_task = asyncio.create_task(runtime.close())
     await wait_until(lambda: not runtime.is_alive())
     release.set()
@@ -34,6 +38,43 @@ async def test_graceful_drain_allows_publish_and_ack_before_unsubscribe(broker: 
     commands = [type(frame) for frame in broker.current.writes]
     assert commands.index(stompman.AckFrame) < commands.index(stompman.UnsubscribeFrame)
     assert commands[-1] is stompman.DisconnectFrame
+    assert handled == [b"one"]
+    assert runtime.status.pending_messages == 0
+
+
+async def test_recovery_during_drain_does_not_start_new_handlers(broker: ScriptedBroker) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    handled: list[bytes] = []
+    runtime = broker.runtime(max_concurrent_handlers=2)
+
+    async def handle(delivery: Delivery) -> None:
+        handled.append(delivery.body)
+        entered.set()
+        await release.wait()
+        await runtime.send(b"response", "reply")
+
+    await runtime.start()
+    sub = await runtime.subscribe("q", handle)
+    first = broker.current
+    first.deliver(sub.id, b"one", ack_id="a")
+    await entered.wait()
+    close_task = asyncio.create_task(runtime.close())
+    try:
+        await wait_until(lambda: not runtime.is_alive())
+        first.incoming.put_nowait(stompman.ConnectionLostError(reason="disconnected while draining"))
+        await wait_until(lambda: runtime.status.generation == 2)
+        restored = broker.current
+        restored.deliver(sub.id, b"after recovery", ack_id="b")
+        await wait_until(restored.incoming.empty)
+    finally:
+        release.set()
+        await close_task
+    assert handled == [b"one"]
+    assert first.closed
+    assert restored.closed
+    assert [frame.body for frame in restored.writes if isinstance(frame, stompman.SendFrame)] == [b"response"]
+    assert isinstance(restored.writes[-1], stompman.DisconnectFrame)
     assert runtime.status.pending_messages == 0
 
 

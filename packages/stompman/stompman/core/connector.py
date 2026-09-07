@@ -80,9 +80,9 @@ class Connector:
                 issues.extend(result.issues)
         finally:
             try:
-                await await_cleanup(asyncio.create_task(cleanup()))
+                await await_cleanup(cleanup())
             except BaseException:
                 if winner is not None:
-                    await await_cleanup(asyncio.create_task(winner.close()))
+                    await await_cleanup(winner.close())
                 raise
         return winner if winner is not None else Unavailable(tuple(issues))

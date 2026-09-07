@@ -1,6 +1,5 @@
 """Acquire a negotiated connection before a session can exist."""
 
-import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Self
@@ -44,7 +43,7 @@ class NegotiatedConnection:
         try:
             heartbeat = await protocol.negotiate(transport, server, settings, frames)
         except BaseException:
-            await await_cleanup(asyncio.create_task(cleanup()))
+            await await_cleanup(cleanup())
             raise
         return cls(transport, frames, heartbeat, protocol)
 

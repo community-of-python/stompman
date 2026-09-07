@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Literal, Self, overload
@@ -15,7 +16,7 @@ from .delivery import Deliveries, Delivery
 from .errors import SubscriptionError
 from .frames import AckMode, AnyClientFrame, AnyServerFrame, ErrorFrame, MessageFrame, ReceiptFrame, SendFrame
 from .protocol import STOMP_12, Stomp12
-from .recovery import Connected, ConnectionSupervisor, Failed, Restoring
+from .recovery import ConnectionSupervisor
 from .session import Session
 from .subscriptions import Subscription, Subscriptions, SubscriptionSpec, log_subscription_error
 from .transaction import Transaction
@@ -50,9 +51,65 @@ class Running:
     connections: ConnectionSupervisor
     subscriptions: Subscriptions
     deliveries: Deliveries
-    group: asyncio.TaskGroup
-    supervisor: asyncio.Task[None]
-    dispatcher: asyncio.Task[None]
+    workers: AbstractAsyncContextManager[None]
+
+    @classmethod
+    async def open(
+        cls,
+        config: RuntimeConfig,
+        connector: Connector,
+        generation: int,
+        on_error: Callable[[ErrorFrame], Any],
+    ) -> Self:
+        group = asyncio.TaskGroup()
+        deliveries = Deliveries(config.delivery, group)
+
+        def receive(frame: AnyServerFrame, session: Session) -> None:
+            if isinstance(frame, ErrorFrame):
+                on_error(frame)
+            elif isinstance(frame, MessageFrame):
+                subscriptions.receive(frame, session)
+
+        connections = ConnectionSupervisor(config, connector, receive, generation)
+        subscriptions = Subscriptions(connections, deliveries)
+        workers = cls._workers(group, connections, deliveries)
+        try:
+            await connections.start()
+            await workers.__aenter__()
+        except BaseException:
+            await await_cleanup(connections.close(graceful=False))
+            raise
+        return cls(connections, subscriptions, deliveries, workers)
+
+    @staticmethod
+    @asynccontextmanager
+    async def _workers(
+        group: asyncio.TaskGroup, connections: ConnectionSupervisor, deliveries: Deliveries
+    ) -> AsyncIterator[None]:
+        async with group:
+            workers = (
+                group.create_task(connections.supervise(), name="stomp-recovery"),
+                group.create_task(deliveries.dispatch(), name="stomp-delivery"),
+            )
+            try:
+                yield
+            finally:
+                for worker in workers:
+                    worker.cancel()
+
+    async def close(self, *, graceful: bool, cancel_handlers: bool) -> None:
+        failed = self.connections.snapshot().failure is not None
+        # Pausing every channel also removes its queued work; only running
+        # handlers remain, and they may still publish and settle while draining.
+        self.subscriptions.pause()
+        try:
+            await self.deliveries.drain(cancel=cancel_handlers or not graceful or failed)
+            await self.subscriptions.close()
+        finally:
+            try:
+                await self.workers.__aexit__(None, None, None)
+            finally:
+                await await_cleanup(self.connections.close(graceful=graceful and not failed))
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,26 +147,31 @@ class Runtime:
     def status(self) -> RuntimeStatus:
         state = self._state
         if isinstance(state, Stopped):
-            return RuntimeStatus("closed", state.generation, Heartbeat(0, 0), 0, 0, 0, None, (), 0, writing=False)
+            return RuntimeStatus(
+                state="closed",
+                generation=state.generation,
+                heartbeat=Heartbeat(0, 0),
+                pending_messages=0,
+                pending_bytes=0,
+                running_handlers=0,
+                failure=None,
+                subscription_ids=(),
+                pending_receipts=0,
+                writing=False,
+            )
         running = state.running if isinstance(state, Draining) else state
-        connections, deliveries = running.connections, running.deliveries
-        connection = connections.state
-        phase: Literal["connected", "recovering", "failed"] = "recovering"
-        if isinstance(connection, Failed):
-            phase = "failed"
-        elif isinstance(connection, Connected) and not connection.session.ended.done():
-            phase = "connected"
+        connection = running.connections.snapshot()
         return RuntimeStatus(
-            phase,
-            connections.generation,
-            connections.heartbeat,
-            deliveries.pending_messages,
-            deliveries.pending_bytes,
-            deliveries.running_handlers,
-            connection.error if isinstance(connection, Failed) else None,
-            running.subscriptions.ids,
-            connection.session.receipts.pending_count if isinstance(connection, (Restoring, Connected)) else 0,
-            connection.session.writing if isinstance(connection, (Restoring, Connected)) else False,
+            state=connection.state,
+            generation=connection.generation,
+            heartbeat=connection.heartbeat,
+            pending_messages=running.deliveries.pending_messages,
+            pending_bytes=running.deliveries.pending_bytes,
+            running_handlers=running.deliveries.running_handlers,
+            failure=connection.failure,
+            subscription_ids=running.subscriptions.ids,
+            pending_receipts=connection.pending_receipts,
+            writing=connection.writing,
         )
 
     def _running(self) -> Running:
@@ -136,31 +198,7 @@ class Runtime:
         async with self._lifecycle:
             if not isinstance(self._state, Stopped):
                 return
-            group = asyncio.TaskGroup()
-            deliveries = Deliveries(self.config.delivery, group)
-
-            def receive(frame: AnyServerFrame, session: Session) -> None:
-                if isinstance(frame, ErrorFrame):
-                    self._on_error(frame)
-                elif isinstance(frame, MessageFrame):
-                    subscriptions.receive(frame, session)
-
-            connections = ConnectionSupervisor(self.config, self._connector, receive, self._state.generation)
-            subscriptions = Subscriptions(connections, deliveries)
-            try:
-                await connections.start()
-            except BaseException:
-                await await_cleanup(asyncio.create_task(connections.close(graceful=False)))
-                raise
-            await group.__aenter__()
-            self._state = Running(
-                connections,
-                subscriptions,
-                deliveries,
-                group,
-                group.create_task(connections.supervise(), name="stomp-recovery"),
-                group.create_task(deliveries.dispatch(), name="stomp-delivery"),
-            )
+            self._state = await Running.open(self.config, self._connector, self._state.generation, self._on_error)
 
     async def close(
         self,
@@ -176,23 +214,10 @@ class Runtime:
                 return
             running = self._state.running if isinstance(self._state, Draining) else self._state
             self._state = Draining(running)
-            running.dispatcher.cancel()
-            running.subscriptions.pause()
-            failed = isinstance(running.connections.state, Failed)
             try:
-                await running.deliveries.drain(cancel=cancel_handlers or exc_value is not None or failed)
-                await running.subscriptions.close()
+                await running.close(graceful=exc_value is None, cancel_handlers=cancel_handlers)
             finally:
-                running.supervisor.cancel()
-                try:
-                    await running.group.__aexit__(None, None, None)
-                finally:
-                    try:
-                        await await_cleanup(
-                            asyncio.create_task(running.connections.close(graceful=exc_value is None and not failed))
-                        )
-                    finally:
-                        self._state = Stopped(running.connections.generation)
+                self._state = Stopped(running.connections.generation)
 
     async def wait_until_unsubscribed(self) -> None:
         if not isinstance(self._state, Stopped):
@@ -211,11 +236,7 @@ class Runtime:
         return await self._running().connections.write(frame, confirmation)
 
     async def submit_if_connected(self, frame: AnyClientFrame, confirmation: Confirmation) -> bool:
-        command = await self._running().connections.submit_current(frame, confirmation)
-        if command is None:
-            return False
-        await command.complete()
-        return True
+        return await self._running().connections.write_current(frame, confirmation)
 
     async def subscribe_from(self, source: Callable[[], SubscriptionSpec]) -> Subscription:
         """Install immutable snapshots supplied at creation and each restoration."""
@@ -306,13 +327,13 @@ class Runtime:
         on_subscription_error: Callable[[SubscriptionError], Any] = log_subscription_error,
     ) -> Subscription:
         spec = SubscriptionSpec(
-            subscription_id or str(uuid4()),
-            destination,
-            ack,
-            headers or {},
-            handler,
-            confirmation,
-            operation_confirmation,
-            on_subscription_error,
+            id=subscription_id or str(uuid4()),
+            destination=destination,
+            ack=ack,
+            headers=headers or {},
+            handler=handler,
+            confirmation=confirmation,
+            operations=operation_confirmation,
+            on_error=on_subscription_error,
         )
         return await self._running().subscriptions.subscribe(spec)

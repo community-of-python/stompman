@@ -76,6 +76,11 @@ class Confirmed:
     def __post_init__(self) -> None:
         positive("receipt timeout", self.timeout)
 
+    @property
+    def attempts(self) -> int:
+        """A confirmed command is never automatically replayed."""
+        return 1
+
 
 @dataclass(frozen=True, slots=True)
 class Unconfirmed:

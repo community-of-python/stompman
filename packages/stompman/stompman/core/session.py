@@ -67,12 +67,10 @@ class Session:
         self._last_received = self._last_message = self._last_sent = time.monotonic()
 
         self._tasks.append(asyncio.create_task(self._read(receive), name="stomp-reader"))
-        if self.heartbeat.want_to_receive_interval_ms:
+        if self.heartbeat.want_to_receive_interval_ms or math.isfinite(self._settings.idle_timeout):
             self._tasks.append(asyncio.create_task(self._monitor(), name="stomp-watchdog"))
         if self.heartbeat.will_send_interval_ms:
             self._tasks.append(asyncio.create_task(self._send_heartbeats(), name="stomp-heartbeat"))
-        if math.isfinite(self._settings.idle_timeout):
-            self._tasks.append(asyncio.create_task(self._monitor_idle(), name="stomp-idle"))
 
     @property
     def transport(self) -> Transport:
@@ -143,18 +141,11 @@ class Session:
             self.fail(error)
 
     def _broker_error(self, frame: ErrorFrame, receive: Callable[[AnyServerFrame, "Session"], None]) -> None:
-        rejections = self.receipts.reject(frame)
         failure = ConnectionLostError(reason=BrokerError(frame=frame))
         self._outbound = SessionPhase.TERMINAL
-        self.receipts.fail(failure)
-        try:
-            for rejection in rejections:
-                rejection.notify()
-            receive(frame, self)
-        except Exception as error:  # ruff: ignore[blind-except]
-            self.fail(error)
-        else:
-            self.fail(failure)
+        self.receipts.reject(frame, failure)
+        receive(frame, self)
+        self.fail(failure)
 
     async def _transport_write(self, operation: Coroutine[Any, Any, None]) -> None:
         cancellation = Cancellation.capture()
@@ -205,10 +196,14 @@ class Session:
         return await self.command(frame, confirmation).complete()
 
     async def _monitor(self) -> None:
+        heartbeat_interval = self.heartbeat.want_to_receive_interval_ms / 1000 or math.inf
         while not self.ended.done():
-            await asyncio.sleep(self.heartbeat.want_to_receive_interval_ms / 1000)
+            idle_remaining = self._last_message + self._settings.idle_timeout - time.monotonic()
+            await asyncio.sleep(max(0, min(heartbeat_interval, idle_remaining)))
             if not self.is_alive():
                 self.fail(ConnectionLostError(reason="negotiated receive heartbeat expired"))
+            elif time.monotonic() - self._last_message >= self._settings.idle_timeout:
+                self.fail(ConnectionLostError(reason="no messages received within timeout"))
 
     async def _send_heartbeats(self) -> None:
         interval = self.heartbeat.will_send_interval_ms / 1000
@@ -223,13 +218,6 @@ class Session:
                         self._last_sent = time.monotonic()
         except Exception as error:  # ruff: ignore[blind-except]
             self.fail(error)
-
-    async def _monitor_idle(self) -> None:
-        timeout = self._settings.idle_timeout
-        while not self.ended.done():
-            await asyncio.sleep(max(0, timeout - (time.monotonic() - self._last_message)))
-            if time.monotonic() - self._last_message >= timeout:
-                self.fail(ConnectionLostError(reason="no messages received within timeout"))
 
     async def close(self, *, graceful: bool = False) -> None:
         if not isinstance(self._close_state, Closing):

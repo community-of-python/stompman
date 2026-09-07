@@ -119,10 +119,6 @@ class Transaction:
         msg = f"transaction is {self.state.value}"
         raise RuntimeError(msg)
 
-    @property
-    def _attempts(self) -> int:
-        return self._confirmation.attempts if isinstance(self._confirmation, Unconfirmed) else 1
-
     async def __aenter__(self) -> Self:
         async with self._lock:
             if self.state is not TransactionState.NEW:
@@ -139,7 +135,7 @@ class Transaction:
                 self._state = Open([])
                 return command
 
-            command = await self._connections.run(begin, attempts=self._attempts)
+            command = await self._connections.run(begin, attempts=self._confirmation.attempts)
             try:
                 await command.complete()
             except BaseException:
@@ -191,7 +187,7 @@ class Transaction:
                     raise
                 return command
 
-            command = await self._connections.run(submit, attempts=self._attempts)
+            command = await self._connections.run(submit, attempts=self._confirmation.attempts)
             await command.complete()
 
     async def restore(self, session: Session) -> None:
@@ -245,12 +241,8 @@ class Transaction:
             # Withdraw replay intent before waiting for a generation. Once abort
             # is requested, its cleanup remains owned even if the caller cancels.
             self.retire()
-            await await_cleanup(asyncio.create_task(self._abort_current()))
+            await await_cleanup(self._abort_current())
 
     async def _abort_current(self) -> None:
         with suppress(ConnectionLostError):
-            command = await self._connections.submit_current(
-                AbortFrame(headers={"transaction": self.id}), self._confirmation
-            )
-            if command is not None:
-                await command.complete()
+            await self._connections.write_current(AbortFrame(headers={"transaction": self.id}), self._confirmation)

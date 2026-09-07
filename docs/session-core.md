@@ -21,38 +21,29 @@ flowchart TD
     Injected --> Client
     Client[Client compatibility adapter] --> Runtime
     Client --> Compatibility[Legacy configuration and transport bridge]
-    Runtime --> Recovery[ConnectionSupervisor]
-    Runtime --> Subscriptions
-    Runtime --> Deliveries
+    Runtime --> Running[Running lifetime]
+    Running --> Recovery[ConnectionSupervisor]
+    Running --> Subscriptions
+    Running --> Deliveries
     Runtime --> Transaction
     Subscriptions --> Recovery
     Transaction --> Recovery
     Subscriptions --> Deliveries
     Recovery --> Session
-    Recovery --> Connector
-    Connector --> Handshake[NegotiatedConnection]
-    Handshake --> Protocol[STOMP 1.2 rules]
-    Session --> Protocol
-    Deliveries --> Session
     Session --> Transport[Transport interface]
-    Transport --> TCP[Native TCP]
-    Transport --> Compatibility
     Session --> Commands
     Commands --> Receipts
-    Deliveries --> Capacity
-    Deliveries --> Settlement
-    Settlement --> Acknowledgement[Session-bound acknowledgement]
-    TCP --> Codec[Core frames and codec]
 ```
 
 ## Ownership and review map
 
 | Module | Interface | Invariants it owns |
 | --- | --- | --- |
-| `Runtime` | Start, close, send, subscribe, begin, status | Complete running resources; draining handlers can still publish and settle |
+| `Runtime` | Start, close, send, subscribe, begin, status | Facade lifecycle; draining handlers can still publish and settle |
+| `Running` | Open, close | Complete running resources, worker lifetime, ordered shutdown |
 | `Connector` / `NegotiatedConnection` | Connect, close | Handshake success before construction; every losing connection is closed |
 | `Stomp12` / `validation` | Negotiate, validate commands and deliveries | STOMP 1.2 direction, required headers, heartbeat negotiation, contextual ACK requirements |
-| `ConnectionSupervisor` | Run a submission, reconnect, attach/detach restoration intent | Retry spacing, generation changes, consistent journal restoration |
+| `ConnectionSupervisor` | Run a submission, write on the current session, reconnect, snapshot | Retry spacing, generation changes, consistent journal restoration, connection diagnostics |
 | `Session` | Create a command, write, close | One negotiated transport and reader; terminal ERROR; DISCONNECT is the final write; deterministic cleanup |
 | `Commands` / `Command` | Submit, complete, cancel | Owned execution and receipt lifetime; callers never need a separate command cleanup step |
 | `Receipts` | Reserve, receive, reject, discard, fail | Exact correlation; only a matching ERROR rejects an operation; retire correlations before observers |
@@ -65,14 +56,24 @@ flowchart TD
 | `MessageAcknowledgement` | Send a decision | Required ACK identifier and original session; native missing IDs fail before admission |
 | `Transaction` | Enter, send, commit, abort | Immutable journal entries, typed open/committing/finished states, ambiguous commit handling |
 
-Start reading with `core/runtime.py`: it composes the owners and describes the
-application lifecycle. Follow a publication through `recovery.py` and `command.py`;
-the command owns the asynchronous work and exposes just submission and completion.
+Start with `Runtime.start()` and `Runtime.close()` in `core/runtime.py`: they
+transition facade state and delegate the whole running lifetime to `Running`.
+`Running.open()` acquires a connection and starts the workers; `Running.close()`
+stops admission, drains handlers, unsubscribes, exits the worker group, and closes
+the connection. Worker handles stay inside that lifetime.
+
+Follow a publication through `ConnectionSupervisor.write()` in `recovery.py` and
+`Command` in `command.py`. The command owns asynchronous work and exposes just
+submission and completion. `write_current()` also owns both milestones, but never
+opens a replacement connection. Runtime reads a connection snapshot instead of
+interpreting recovery states or reaching into a session for diagnostics.
 Then read `subscriptions.py` for installation and recovery, `delivery.py` for handler
 execution, and `transaction.py` for the journal. `session.py`, `handshake.py`, and
 `connector.py` contain the transport lifecycle. `protocol.py` owns STOMP rules,
-`codec.py` owns byte framing, and `validation.py` owns frame semantics. Capacity and settlement details
-stay in their own modules and do not spread into facade methods.
+`codec.py` owns byte framing, and `validation.py` owns frame semantics. Capacity
+and settlement details stay in their own modules and do not spread into facade
+methods. `_tasks.await_cleanup()` owns cancellation-safe cleanup, including task
+creation; callers supply the cleanup operation and await its result.
 
 Transactions and subscriptions implement the same small restoration interface.
 They never inspect Runtime fields. Delivery settlement holds a capability tied to
@@ -96,7 +97,8 @@ ACK/NACK. Unsubscribe waits for already requested settlements before its wire
 command and reserves its subscription ID until removal finishes. Concurrent
 unsubscribe calls join the same cleanup task. A failed removal confirmation
 retires the original session before that ID can be reused. Graceful shutdown
-first pauses admission and drains running handlers.
+permanently closes subscription admission before draining running handlers.
+Subscriptions created or restored during drain cannot start new handlers.
 
 If a cumulative ACK/NACK sequence is interrupted, its original session is retired.
 This allows the broker to redeliver later messages whose decisions were already
@@ -193,6 +195,9 @@ operations receive `ConnectionLostError` with a `BrokerError` cause because thei
 outcomes are unknown. Already received confirmations remain successful. This also
 applies to legacy sessions. Artemis can omit the recommended `receipt-id` on ERROR;
 the library does not infer correlation from the message text or pending count.
+`Receipts.reject()` assigns all pending outcomes and retires their correlations
+before invoking the matching observer. Session owns terminal state and transport
+closure; receipt handling never needs to coordinate shutdown.
 
 Native handshake diagnostics distinguish rejection (`HandshakeRejected`), malformed
 protocol (`MalformedHandshake`), disconnect (`HandshakeDisconnected`), unsupported
@@ -220,6 +225,8 @@ cause idle reconnects. Heartbeats still detect a dead peer. `ConnectionSettings`
 can enable an idle deadline and configure TLS, heartbeat tolerance, read size,
 and connection deadlines. `RecoveryPolicy` controls retry count, spacing, and
 whether background recovery keeps trying after exhausting one cycle.
+One watchdog checks heartbeat and idle deadlines. Heartbeat transmission runs
+separately so a stalled write cannot block detection of a dead peer.
 
 `RuntimeStatus` exposes generation, health, pending message/byte counts, running
 handlers, subscription IDs, outstanding receipts, and active transport writes.

@@ -20,15 +20,6 @@ class Receipt:
     rejected: Callable[[ReceiptRejectedError], None]
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class Rejection:
-    receipt: Receipt
-    error: ReceiptRejectedError
-
-    def notify(self) -> None:
-        self.receipt.rejected(self.error)
-
-
 class Receipts:
     def __init__(self) -> None:
         self._pending: dict[str, Receipt] = {}
@@ -54,16 +45,16 @@ class Receipts:
         if receipt is not None and not receipt.result.done():
             receipt.result.set_result(frame)
 
-    def reject(self, frame: ErrorFrame) -> tuple[Rejection, ...]:
+    def reject(self, frame: ErrorFrame, failure: ConnectionLostError) -> None:
+        """Resolve every ERROR outcome before calling the matching observer."""
         receipt_id = frame.headers.get("receipt-id")
-        if receipt_id is None:
-            return ()
-        receipt = self._pending.pop(receipt_id, None)
+        receipt = self._pending.pop(receipt_id, None) if receipt_id is not None else None
+        self.fail(failure)
         if receipt is None or receipt.result.done():
-            return ()
+            return
         error = ReceiptRejectedError(receipt_id=receipt.id, frame=frame)
         receipt.result.set_exception(error)
-        return (Rejection(receipt=receipt, error=error),)
+        receipt.rejected(error)
 
     def fail(self, error: Exception) -> None:
         pending, self._pending = self._pending, {}

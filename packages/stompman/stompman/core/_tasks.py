@@ -1,6 +1,7 @@
 import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import Self, TypeVar
+from typing import Any, Self, TypeVar
 
 Result = TypeVar("Result")
 
@@ -25,8 +26,9 @@ class Cancellation:
         return self.task.cancelling() > self.requests
 
 
-async def await_cleanup(task: asyncio.Task[Result]) -> Result:
+async def await_cleanup(operation: asyncio.Task[Result] | Coroutine[Any, Any, Result]) -> Result:
     """Finish an owned cleanup task before propagating caller cancellation."""
+    task = operation if isinstance(operation, asyncio.Task) else asyncio.create_task(operation)
     cancellation: asyncio.CancelledError | None = None
     while not task.done():
         try:

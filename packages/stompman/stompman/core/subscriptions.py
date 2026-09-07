@@ -209,7 +209,7 @@ class Subscription:
                 not cancellation.requested and failure.reason != "unsubscribed"
             ):
                 self._notify(failure)
-        await await_cleanup(asyncio.create_task(self._cleanup(session)))
+        await await_cleanup(self._cleanup(session))
         return failure
 
     async def open(self) -> None:
@@ -229,8 +229,7 @@ class Subscription:
                     self.retire()
                 raise
 
-        attempts = confirmation.attempts if isinstance(confirmation, Unconfirmed) else 1
-        attempt = await self._owner.connections.run(submit, attempts=attempts)
+        attempt = await self._owner.connections.run(submit, attempts=confirmation.attempts)
         try:
             await self._complete(attempt)
         except BaseException as cause:
@@ -299,6 +298,7 @@ class Subscriptions:
         self.connections = connections
         self.deliveries = deliveries
         self._items: dict[str, Subscription] = {}
+        self._accepting = True
         self._empty = asyncio.Event()
         self._empty.set()
 
@@ -319,10 +319,6 @@ class Subscriptions:
             self._empty.set()
 
     def rekey(self, subscription: Subscription, previous_id: str) -> None:
-        existing = self._items.get(subscription.id)
-        if existing is not None and existing is not subscription:
-            msg = "subscription id is already active"
-            raise ValueError(msg)
         self.connections.rekey(subscription, ("subscription", previous_id))
         if self._items.get(previous_id) is subscription:
             self._items.pop(previous_id)
@@ -337,11 +333,15 @@ class Subscriptions:
         return subscription
 
     def receive(self, frame: MessageFrame, session: Session) -> None:
+        if not self._accepting:
+            return
         subscription = self._items.get(frame.headers["subscription"])
         if subscription is not None:
             subscription.receive(frame, session)
 
     def pause(self) -> None:
+        # Admission stays closed even if recovery replaces a channel while draining.
+        self._accepting = False
         for subscription in self._items.values():
             subscription.pause()
 
