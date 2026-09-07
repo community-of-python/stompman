@@ -16,7 +16,7 @@ from stompman.serde import dump_frame
 
 from faststream_stomp.broker import StompBroker
 from faststream_stomp.models import StompPublishCommand
-from faststream_stomp.publisher import StompProducer, StompPublisher
+from faststream_stomp.publisher import StompProducer, StompPublisher, _make_headers_for_publish
 from faststream_stomp.subscriber import StompSubscriber
 
 if TYPE_CHECKING:
@@ -45,7 +45,7 @@ class TestStompBroker(TestBroker[StompBroker]):
         return subscriber, is_real
 
     @contextmanager
-    def _patch_producer(self, broker: StompBroker) -> Iterator[None]:  # noqa: PLR6301
+    def _patch_producer(self, broker: StompBroker) -> Iterator[None]:  # ruff: ignore[no-self-use]
         with change_producer(broker.config.broker_config, FakeStompProducer(broker)):
             yield
 
@@ -54,7 +54,7 @@ class TestStompBroker(TestBroker[StompBroker]):
         with mock.patch.object(broker.config, "client", new_callable=AsyncMock), super()._patch_broker(broker):
             yield
 
-    async def _fake_connect(self, broker: StompBroker, *args: Any, **kwargs: Any) -> None: ...  # noqa: ANN401
+    async def _fake_connect(self, broker: StompBroker, *args: Any, **kwargs: Any) -> None: ...  # ruff: ignore[any-type]
 
 
 class FakeAckableMessageFrame(stompman.AckableMessageFrame):
@@ -71,25 +71,20 @@ class FakeStompProducer(StompProducer):
 
     async def publish(self, cmd: StompPublishCommand) -> None:
         body, content_type = encode_message(cmd.body, serializer=self.broker.config.fd_config._serializer)
-        all_headers: MessageHeaders = (cmd.headers.copy() if cmd.headers else {}) | {  # type: ignore[assignment]
+        send_frame = SendFrame.build(
+            body=body,
+            destination=cmd.destination,
+            transaction=None,
+            content_type=content_type,
+            add_content_length=self._resolve_add_content_length(cmd),
+            headers=_make_headers_for_publish(cmd),
+        )
+        dump_frame(send_frame)
+        all_headers: MessageHeaders = send_frame.headers | {  # type: ignore[assignment]
             "destination": cmd.destination,
             "message-id": str(uuid.uuid4()),
             "subscription": str(uuid.uuid4()),
         }
-        if cmd.correlation_id:
-            all_headers["correlation-id"] = cmd.correlation_id  # type: ignore[typeddict-unknown-key]
-        if content_type:
-            all_headers["content-type"] = content_type
-        dump_frame(
-            SendFrame.build(
-                body=body,
-                destination=cmd.destination,
-                transaction=None,
-                content_type=content_type,
-                add_content_length=self._resolve_add_content_length(cmd),
-                headers=cmd.headers,
-            )
-        )
         frame = FakeAckableMessageFrame(
             headers=all_headers, body=body, _subscription=mock.AsyncMock(), _received_at_reconnection_count=0
         )

@@ -19,7 +19,7 @@ import faststream_stomp
 import stompman
 
 server = stompman.ConnectionParameters(host="127.0.0.1", port=61616, login="admin", passcode="password")
-broker = faststream_stomp.StompBroker(stompman.Client([server]))
+broker = faststream_stomp.StompBroker(servers=[server])
 
 
 @broker.subscriber("first")
@@ -49,11 +49,35 @@ if __name__ == "__main__":
 
 Also there are `StompRouter` and `TestStompBroker` for testing. It works similarly to built-in brokers from FastStream, I recommend to read the original [FastStream documentation](https://faststream.airt.ai/latest/getting-started).
 
+For connection, retry, heartbeat, and delivery-capacity options, pass a core configuration:
+
+```python
+from stompman.core import DeliveryLimits, RecoveryPolicy, RuntimeConfig, Server
+
+broker = faststream_stomp.StompBroker(
+    RuntimeConfig(
+        servers=(Server("localhost", 61616, "guest", "guest"),),
+        recovery=RecoveryPolicy(attempts=5),
+        delivery=DeliveryLimits(concurrency=100, pending_messages=1000),
+    )
+)
+```
+
+You can also pass an existing `stompman.core.runtime.Runtime`. The broker starts and closes that runtime;
+`broker.runtime.status` exposes connection state and delivery capacity. Existing `StompBroker(stompman.Client(...))`
+construction preserves the injected object, its overridden methods and lifecycle hooks,
+and its historical write-only defaults. Subclasses, proxies, and mocks keep their behavior.
+
+Native operations wait for broker receipts by default. Publication and subscription
+confirmation do not block unrelated receipt waits or the session reader. See the
+[core design and migration guide](../../docs/session-core.md) for configuration,
+transport adapters, and explicit unconfirmed policies.
+
 By default, published frames include the STOMP `content-length` header. You can change this for the whole broker or
 override it for a publisher or individual publish call:
 
 ```python
-broker = faststream_stomp.StompBroker(stompman.Client([server]), add_content_length=False)
+broker = faststream_stomp.StompBroker(servers=[server], add_content_length=False)
 publisher = broker.publisher("events", add_content_length=True)
 
 await broker.publish("text message", "events", add_content_length=False)
@@ -63,6 +87,8 @@ await publisher.publish("bytes message")
 Use `reply_add_content_length` on `subscriber()` when automatic replies need a different setting. The same options
 are available for batch publishing and delayed `StompRoute`/`StompRoutePublisher` registrations. Per-call settings
 override publisher or subscriber reply defaults, which in turn override the broker default.
+
+An incoming `reply-to` header enables automatic replies to that destination. Replies retain the incoming correlation ID.
 
 ### Caveats
 

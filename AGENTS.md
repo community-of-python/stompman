@@ -8,6 +8,32 @@ The project consists of two main packages:
 1. `stompman` - The core STOMP client library
 2. `faststream-stomp` - A FastStream broker implementation for STOMP
 
+FastStream is the primary facade. Both facades use the independent implementation
+in `stompman.core`. Native FastStream execution must not use the legacy `Client`.
+An explicitly supplied Client selects a compatibility adapter that preserves
+that object's identity, overrides, lifecycle, and historical defaults.
+Keep `Client` as a separate compatibility adapter and preserve consumer contracts
+when evolving the core. See `docs/session-core.md` for recovery and migration details.
+
+The core must be self-contained: it imports only its own modules, the standard
+library, and explicit transport dependencies. Legacy modules may re-export core
+types or adapt legacy contracts; the core must never import legacy modules.
+Use explicit, validated states and required data fields instead of combinations
+of optional fields and flags. Native operations confirm broker receipts by
+default. Compatibility behavior is selected explicitly by adapters. Favor small
+interfaces that own their complexity; moving branches between files is not a
+sufficient architecture improvement.
+
+Preserve the complete pre-core public contract through compatibility adapters,
+including object construction, mutation, subclass hooks, defaults, and exception
+payloads. Do not require existing consumers to migrate to complete a refactor.
+Prefer structures whose fields and types encode their invariants, and operations
+that own cancellation and cleanup so their callers read as ordinary domain code.
+Keep wire decoding, protocol validation, receipt correlation, and session shutdown
+under distinct owners. Native sessions enforce STOMP 1.2; legacy tolerance is
+selected explicitly by its adapter. ERROR terminates the session, and DISCONNECT
+is the final client frame, including heartbeats.
+
 ## Key Features
 
 - Fully asynchronous implementation using Python's asyncio

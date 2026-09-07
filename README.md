@@ -24,14 +24,10 @@ async with stompman.Client(
         stompman.ConnectionParameters(host="171.0.0.1", port=61616, login="user1", passcode="passcode1"),
         stompman.ConnectionParameters(host="172.0.0.1", port=61616, login="user2", passcode="passcode2"),
     ],
-
-
     # SSL — can be either `None` (default), `True`, or `ssl.SSLContext'
     ssl=None,
-
     # Error frame handler:
     on_error_frame=lambda error_frame: print(error_frame.body),
-
     # Optional parameters with sensible defaults:
     heartbeat=stompman.Heartbeat(will_send_interval_ms=1000, want_to_receive_interval_ms=1000),
     connect_retry_attempts=3,
@@ -125,7 +121,13 @@ await client.subscribe("DLQ", handle_message_from_dlq, ack="auto", on_suppressed
 You can pass custom headers to `client.subscribe()`:
 
 ```python
-await client.subscribe("DLQ", handle_message_from_dlq, ack="client", headers={"selector": "location = 'Europe'"}, on_suppressed_exception=print)
+await client.subscribe(
+    "DLQ",
+    handle_message_from_dlq,
+    ack="client",
+    headers={"selector": "location = 'Europe'"},
+    on_suppressed_exception=print,
+)
 ```
 
 #### Handling ACK/NACKs yourself
@@ -136,6 +138,7 @@ If you want to send ACK and NACK frames yourself, you can use `client.subscribe_
 async def handle_message_from_dlq(message_frame: stompman.AckableMessageFrame) -> None:
     print(message_frame.body)
     await message_frame.ack()
+
 
 await client.subscribe_with_manual_ack("DLQ", handle_message_from_dlq, ack="client")
 ```
@@ -182,9 +185,9 @@ Neither subscription confirmation nor a publish receipt proves downstream
 business processing.
 
 The handler concurrency limit remains in effect while confirmations are
-pending. The reader temporarily buffers message handlers waiting for capacity
-so it can reach interleaved receipts/errors, then resumes normal backpressure.
-Use broker prefetch/consumer-window settings to bound deliveries on the wire.
+pending. Bounded delivery admission keeps the reader available for interleaved
+receipts and errors. Configure broker prefetch/consumer-window settings together
+with `max_pending_messages` and `max_pending_bytes`.
 
 ### Cleaning Up
 
@@ -199,20 +202,20 @@ stompman takes care of cleaning up resources automatically. When you leave the c
 - Connections that succeed and immediately fail are spaced by `connect_retry_interval` as well, preventing a tight reconnect loop.
 - If no messages are received for `no_message_restart_interval` (defaults to 1 hour), stompman will force a reconnect. Set to `None` to disable.
 - To implement health checks, use `stompman.Client.is_alive()` — it will return `True` if everything is OK and `False` if server is not responding.
-- `stompman` will write log warnings when connection is lost, after successful reconnection or invalid state during ack/nack.
+- `stompman` logs exhausted background recovery and invalid ACK/NACK state. Use `client.core.status` to inspect the current connection generation and failure.
 
 ### ...and caveats
 
 - stompman supports Python 3.11 and newer.
 - It implements [STOMP 1.2](https://stomp.github.io/stomp-specification-1.2.html) — the latest version of the protocol.
-- Heartbeats are required, and sent automatically in background (defaults to 1 second).
+- Heartbeats are negotiated with the broker and sent automatically in the background (defaults to 1 second). A zero interval disables the corresponding heartbeat direction.
 
 Also, I want to pointed out that:
 
 - Protocol parsing is inspired by [aiostomp](https://github.com/pedrokiefer/aiostomp/blob/3449dcb53f43e5956ccc7662bb5b7d76bc6ef36b/aiostomp/protocol.py) (meaning: consumed by me and refactored from).
 - stompman is tested and used with [ActiveMQ Artemis](https://activemq.apache.org/components/artemis/) and [ActiveMQ Classic](https://activemq.apache.org/components/classic/).
     - Caveat: a message sent by a Stomp client is converted into a JMS `TextMessage`/`BytesMessage` based on the `content-length` header (see the docs [here](https://activemq.apache.org/components/classic/documentation/stomp)). In order to send a `TextMessage`, `Client.send` needs to be invoked with `add_content_length` header set to `False`
-- Specification says that headers in CONNECT and CONNECTED frames shouldn't be escaped for backwards compatibility. stompman escapes headers in CONNECT frame (outcoming), but does not unescape headers in CONNECTED (outcoming).
+- CONNECT and CONNECTED headers remain literal, as required by STOMP 1.2. Other frame headers escape carriage returns, line feeds, colons and backslashes.
 
 ### FastStream STOMP broker
 
@@ -221,3 +224,47 @@ Also, I want to pointed out that:
 ### Examples
 
 See examples in [examples/](examples).
+
+## Core runtime and broker receipts
+
+The FastStream facade and the legacy `Client` facade share an independent runtime.
+See [the architecture and migration notes](docs/session-core.md) for ownership,
+recovery, delivery capacity and compatibility details.
+
+The native interface uses immutable configuration and waits for broker receipts
+by default:
+
+```python
+from stompman.core import Runtime, RuntimeConfig, Server
+
+async with Runtime(RuntimeConfig((Server("localhost", 61616, "guest", "guest"),))) as runtime:
+    receipt = await runtime.send(b"payload", "events")
+```
+
+`Unconfirmed(attempts=3)` explicitly selects write retries with possible duplicate
+delivery. Native operations use `confirmation=Confirmed(timeout)` for custom
+deadlines. Both facades run this core; legacy behavior is selected by the adapter.
+
+Existing `Client.send()` calls still return `None` after an unconfirmed write.
+Select the native interface explicitly when broker confirmation is needed:
+
+```python
+receipt = await client.core.send(b"payload", "events")
+
+async with client.core.begin() as transaction:
+    await transaction.send(b"first", "events")
+    await transaction.send(b"second", "events")
+```
+
+Receipts confirm broker acceptance, not consumer processing. A missing receipt
+can leave an operation's outcome uncertain; the library does not automatically
+replay that operation. An ambiguous transaction commit raises
+`TransactionOutcomeUnknownError` instead of risking a duplicate commit. Open
+transactions are restored after reconnection with BEGIN and their send journal.
+
+Native delivery admission defaults to 1,024 messages and 64 MiB, including unsettled
+messages. Legacy Client admission stays unlimited unless `max_pending_messages`
+or `max_pending_bytes` is supplied. Configure admission and broker credit/prefetch
+together. Handler saturation leaves the session reader responsive;
+exhausted admission raises `ConsumerOverloadedError`. Use `client-individual` ACK
+when messages must remain eligible for broker redelivery after failure.

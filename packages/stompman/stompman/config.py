@@ -1,20 +1,12 @@
 from dataclasses import dataclass, field
-from typing import Self, TypedDict
+from typing import Self, TypedDict, TypeVar
 from urllib.parse import unquote
 
+from stompman.core.config import Heartbeat
 
-@dataclass(frozen=True, slots=True)
-class Heartbeat:
-    will_send_interval_ms: int
-    want_to_receive_interval_ms: int
+__all__ = ["ConnectionParameters", "Heartbeat", "MultiHostHostLike"]
 
-    def to_header(self) -> str:
-        return f"{self.will_send_interval_ms},{self.want_to_receive_interval_ms}"
-
-    @classmethod
-    def from_header(cls, header: str) -> Self:
-        first, second = header.split(",", maxsplit=1)
-        return cls(int(first), int(second))
+_Value = TypeVar("_Value")
 
 
 class MultiHostHostLike(TypedDict):
@@ -22,6 +14,26 @@ class MultiHostHostLike(TypedDict):
     password: str | None
     host: str | None
     port: int | None
+
+
+def _required(value: _Value | None, name: str) -> _Value:
+    if value is None:
+        msg = f"{name} must be set"
+        raise ValueError(msg)
+    return value
+
+
+def _credentials(host: MultiHostHostLike) -> tuple[str, str] | None:
+    username, password = host["username"], host["password"]
+    if username is None:
+        if password is not None:
+            msg = "password is set, username must be set"
+            raise ValueError(msg)
+        return None
+    if password is None:
+        msg = "username is set, password must be set"
+        raise ValueError(msg)
+    return username, password
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,24 +76,10 @@ class ConnectionParameters:
         all_credentials: list[tuple[str, str]] = []
 
         for host in hosts:
-            if host["host"] is None:
-                msg = "host must be set"
-                raise ValueError(msg)
-            if host["port"] is None:
-                msg = "port must be set"
-                raise ValueError(msg)
-            all_hosts.append((host["host"], host["port"]))
-
-            username, password = host["username"], host["password"]
-            if username is None:
-                if password is not None:
-                    msg = "password is set, username must be set"
-                    raise ValueError(msg)
-            elif password is None:
-                msg = "username is set, password must be set"
-                raise ValueError(msg)
-            else:
-                all_credentials.append((username, password))
+            all_hosts.append((_required(host["host"], "host"), _required(host["port"], "port")))
+            credentials = _credentials(host)
+            if credentials is not None:
+                all_credentials.append(credentials)
 
         match len(all_credentials):
             case value if value == len(all_hosts):

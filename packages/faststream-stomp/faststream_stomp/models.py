@@ -14,6 +14,7 @@ from faststream._internal.configs import (
 from faststream._internal.types import AsyncCallable
 from faststream._internal.utils.functions import to_async
 from faststream.message import decode_message, gen_cor_id
+from stompman.core.runtime import Runtime
 
 
 class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
@@ -41,6 +42,7 @@ class StompStreamMessage(StreamMessage[stompman.AckableMessageFrame]):
             content_type=message.headers.get("content-type"),
             message_id=message.headers["message-id"],
             correlation_id=cast("str", message.headers.get("correlation-id", gen_cor_id())),
+            reply_to=cast("str", message.headers.get("reply-to", "")),
         )
 
 
@@ -73,7 +75,7 @@ class StompPublishCommand(BatchPublishCommand):
         cls,
         cmd: PublishCommand,
         *,
-        batch: bool = False,  # noqa: ARG003
+        batch: bool = False,  # ruff: ignore[unused-class-method-argument]
         add_content_length: bool | None = None,
     ) -> Self:
         messages = cmd.batch_bodies
@@ -92,7 +94,7 @@ class StompPublishCommand(BatchPublishCommand):
 
 @dataclass(kw_only=True)
 class BrokerConfigWithStompClient(BrokerConfig):
-    client: stompman.Client
+    client: stompman.Client | Runtime
 
 
 @dataclass(kw_only=True)

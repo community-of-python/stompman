@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import types
 import typing
@@ -21,7 +20,12 @@ from faststream._internal.types import BrokerMiddleware, CustomCallable
 from faststream.security import BaseSecurity
 from faststream.specification.schema import BrokerSpec
 from faststream.specification.schema.extra import Tag, TagDict
+from stompman._compat import server_from_legacy
+from stompman.core.config import RuntimeConfig
+from stompman.core.runtime import Runtime
+from stompman.core.transport import TransportFactory, connect_tcp
 
+from faststream_stomp._client import adapt_client
 from faststream_stomp.models import BrokerConfigWithStompClient, StompPublishCommand
 from faststream_stomp.publisher import StompProducer, StompPublisher
 from faststream_stomp.registrator import StompRegistrator
@@ -33,27 +37,11 @@ class StompSecurity(BaseSecurity):
         self.ssl_context = None
         self.use_ssl = False
 
-    def get_requirement(self) -> list[dict[str, Any]]:  # noqa: PLR6301
+    def get_requirement(self) -> list[dict[str, Any]]:  # ruff: ignore[no-self-use]
         return [{"user-password": []}]
 
-    def get_schema(self) -> dict[str, dict[str, str]]:  # noqa: PLR6301
+    def get_schema(self) -> dict[str, dict[str, str]]:  # ruff: ignore[no-self-use]
         return {"user-password": {"type": "userPassword"}}
-
-
-def _handle_listen_task_done(listen_task: asyncio.Task[None]) -> None:
-    # Not sure how to test this. See https://github.com/community-of-python/stompman/pull/117#issuecomment-2983584449.
-    try:
-        task_exception = listen_task.exception()
-    except asyncio.CancelledError:
-        return
-    if task_exception is None:
-        return
-    if isinstance(task_exception, ExceptionGroup) and isinstance(
-        task_exception.exceptions[0],
-        stompman.FailedAllConnectAttemptsError,
-    ):
-        raise SystemExit(1)
-    logging.getLogger("faststream.stomp").error("listen task exited with unhandled exception", exc_info=task_exception)
 
 
 class StompParamsStorage(DefaultLoggerStorage):
@@ -84,7 +72,7 @@ class StompBroker(
     StompRegistrator,
     BrokerUsecase[
         stompman.MessageFrame,
-        stompman.Client,
+        stompman.Client | Runtime,
         BrokerConfig,  # Using BrokerConfig to avoid typing issues when passing broker to FastStream app
     ],
 ):
@@ -93,8 +81,10 @@ class StompBroker(
 
     def __init__(
         self,
-        client: stompman.Client,
+        client: stompman.Client | Runtime | RuntimeConfig | None = None,
         *,
+        servers: list[stompman.ConnectionParameters] | None = None,
+        transport_factory: TransportFactory = connect_tcp,
         decoder: CustomCallable | None = None,
         parser: CustomCallable | None = None,
         dependencies: Iterable[Dependant] = (),
@@ -111,6 +101,17 @@ class StompBroker(
         description: str | None = None,
         tags: Iterable[Tag | TagDict] = (),
     ) -> None:
+        if servers is not None:
+            if client is not None:
+                msg = "provide either client/runtime configuration or servers, not both"
+                raise TypeError(msg)
+            client = RuntimeConfig(tuple(server_from_legacy(server) for server in servers))
+        if client is None:
+            msg = "provide a runtime, runtime configuration, Client, or servers"
+            raise TypeError(msg)
+        connection = (
+            Runtime(client, transport_factory=transport_factory) if isinstance(client, RuntimeConfig) else client
+        )
         fd_config = FastDependsConfig(use_fastdepends=apply_types)
         broker_config = BrokerConfigWithStompClient(
             broker_middlewares=middlewares,  # type: ignore[arg-type]
@@ -126,14 +127,17 @@ class StompBroker(
             graceful_timeout=graceful_timeout,
             extra_context={"broker": self},
             producer=StompProducer(
-                client=client,
+                client=connection,
                 serializer=fd_config._serializer,
                 add_content_length=add_content_length,
             ),
-            client=client,
+            client=connection,
         )
         specification = BrokerSpec(
-            url=[f"{one_server.host}:{one_server.port}" for one_server in broker_config.client.servers],
+            url=[
+                f"{one_server.host}:{one_server.port}"
+                for one_server in (connection.config.servers if isinstance(connection, Runtime) else connection.servers)
+            ],
             protocol="STOMP",
             protocol_version="1.2",
             description=description,
@@ -142,20 +146,28 @@ class StompBroker(
         )
 
         super().__init__(config=broker_config, specification=specification, routers=routers)
-        self._attempted_to_connect = False
         self._stopping = False
 
-    async def _connect(self) -> stompman.Client:
-        if self._attempted_to_connect:
-            return self.config.broker_config.client
-        self._attempted_to_connect = True
-        await self.config.broker_config.client.__aenter__()
-        self.config.broker_config.client._listen_task.add_done_callback(_handle_listen_task_done)
-        return self.config.broker_config.client
+    @property
+    def runtime(self) -> Runtime:
+        client = self.config.broker_config.client
+        return client if isinstance(client, Runtime) else client.core
+
+    async def _connect(self) -> stompman.Client | Runtime:
+        client = self.config.broker_config.client
+        await adapt_client(client).open()
+        self._stopping = False
+        return client
 
     async def start(self) -> None:
+        if self.running:
+            return
         await self.connect()
-        await super().start()
+        try:
+            await super().start()
+        except BaseException as error:
+            await self.stop(type(error), error, error.__traceback__)
+            raise
 
     async def stop(
         self,
@@ -164,11 +176,18 @@ class StompBroker(
         exc_tb: types.TracebackType | None = None,
     ) -> None:
         self._stopping = True
-        for sub in self.subscribers:
-            await sub.stop()
-        if self._connection:
-            await self._connection.__aexit__(exc_type, exc_val, exc_tb)
-        self.running = False
+        try:
+            await super().stop(exc_type, exc_val, exc_tb)
+        except BaseException as error:
+            exc_type, exc_val, exc_tb = type(error), error, error.__traceback__
+            raise
+        finally:
+            try:
+                if self._connection is not None:
+                    await adapt_client(self._connection).close(exc_type, exc_val, exc_tb)
+            finally:
+                self._connection = None
+                self.running = False
 
     async def ping(self, timeout: float | None = None) -> bool:
         # broker can be stuck in stopping state
@@ -218,7 +237,7 @@ class StompBroker(
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
         add_content_length: bool | None = None,
-    ) -> Any:  # noqa: ANN401
+    ) -> Any:  # ruff: ignore[any-type]
         publish_command = StompPublishCommand(
             message,
             _publish_type=PublishType.REQUEST,

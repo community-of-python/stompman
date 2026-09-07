@@ -1,5 +1,6 @@
 import asyncio
 import socket
+import ssl
 from collections.abc import Awaitable
 from typing import Any
 from unittest import mock
@@ -12,6 +13,9 @@ from stompman import (
     ConnectedFrame,
     ConnectionLostError,
     HeartbeatFrame,
+    MessageFrame,
+    ReceiptFrame,
+    dump_frame,
 )
 from stompman.connection import Connection
 from stompman.serde import NEWLINE
@@ -99,10 +103,11 @@ async def test_connection_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     assert MockWriter.write.mock_calls == [mock.call(NEWLINE), mock.call(b"COMMIT\ntransaction:transaction\n\n\x00")]
 
 
-async def test_connection_close_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("exception", [ConnectionError, ssl.SSLError])
+async def test_connection_close_connection_error(monkeypatch: pytest.MonkeyPatch, exception: type[Exception]) -> None:
     class MockWriter:
         close = mock.Mock()
-        wait_closed = mock.AsyncMock(side_effect=ConnectionError)
+        wait_closed = mock.AsyncMock(side_effect=exception)
 
     connection = await make_mocked_connection(monkeypatch, mock.Mock(), MockWriter())
     await connection.close()
@@ -117,10 +122,13 @@ async def test_connection_write_heartbeat_runtime_error(monkeypatch: pytest.Monk
         connection.write_heartbeat()
 
 
-async def test_connection_write_frame_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("exception", [ConnectionError, ssl.SSLError])
+async def test_connection_write_frame_connection_error(
+    monkeypatch: pytest.MonkeyPatch, exception: type[Exception]
+) -> None:
     class MockWriter:
         write = mock.Mock()
-        drain = mock.AsyncMock(side_effect=ConnectionError)
+        drain = mock.AsyncMock(side_effect=exception)
 
     connection = await make_mocked_connection(monkeypatch, mock.Mock(), MockWriter())
     with pytest.raises(ConnectionLostError):
@@ -142,15 +150,46 @@ async def test_connection_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not await make_connection()
 
 
-@pytest.mark.parametrize("exception", [BrokenPipeError, socket.gaierror])
+@pytest.mark.parametrize("exception", [BrokenPipeError, socket.gaierror, ssl.SSLCertVerificationError])
 async def test_connection_connect_connection_error(monkeypatch: pytest.MonkeyPatch, exception: type[Exception]) -> None:
     monkeypatch.setattr("asyncio.open_connection", mock.AsyncMock(side_effect=exception))
     assert not await make_connection()
 
 
-async def test_read_frames_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("exception", [BrokenPipeError, ssl.SSLError])
+async def test_read_frames_connection_error(monkeypatch: pytest.MonkeyPatch, exception: type[Exception]) -> None:
     connection = await make_mocked_connection(
-        monkeypatch, mock.AsyncMock(read=mock.AsyncMock(side_effect=BrokenPipeError)), mock.AsyncMock()
+        monkeypatch, mock.AsyncMock(read=mock.AsyncMock(side_effect=exception)), mock.AsyncMock()
     )
     with pytest.raises(ConnectionLostError):
         [frame async for frame in connection.read_frames()]
+
+
+@pytest.mark.parametrize("split_message", [False, True])
+async def test_read_frames_preserves_unread_input_between_iterators(
+    monkeypatch: pytest.MonkeyPatch, *, split_message: bool
+) -> None:
+    connected = ConnectedFrame(headers={"version": "1.2", "heart-beat": "1000,1000"})
+    message = MessageFrame(headers={"destination": "queue", "subscription": "sub", "message-id": "id"}, body=b"hello")
+    receipt = ReceiptFrame(headers={"receipt-id": "receipt"})
+    message_bytes = dump_frame(message)
+    chunks = (
+        [dump_frame(connected) + message_bytes[:10], message_bytes[10:] + dump_frame(receipt)]
+        if split_message
+        else [dump_frame(connected) + message_bytes + dump_frame(receipt)]
+    )
+    reader = mock.Mock(read=mock.AsyncMock(side_effect=[*chunks, b""]))
+    connection = await make_mocked_connection(monkeypatch, reader, mock.AsyncMock())
+    for expected_frame in (connected, message, receipt):
+        iterator = connection.read_frames()
+        assert await anext(iterator) == expected_frame
+        await iterator.aclose()
+    assert reader.read.await_count == len(chunks)
+
+
+async def test_async_heartbeat_observes_drain_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    writer = mock.Mock(write=mock.Mock(), drain=mock.AsyncMock(side_effect=ConnectionError))
+    connection = await make_mocked_connection(monkeypatch, mock.Mock(), writer)
+    with pytest.raises(ConnectionLostError):
+        await connection.send_heartbeat()
+    writer.write.assert_called_once_with(NEWLINE)

@@ -1,42 +1,30 @@
-from dataclasses import dataclass, field
-from typing import Literal
+"""Legacy exception families and their original diagnostic payloads."""
 
-from stompman.config import ConnectionParameters  # ruff: ignore[typing-only-first-party-import]
-from stompman.frames import ErrorFrame, HeartbeatFrame, MessageFrame, ReceiptFrame
+from dataclasses import dataclass
 
-
-@dataclass(kw_only=True)
-class Error(Exception):
-    def __str__(self) -> str:
-        return self.__repr__()
-
-
-@dataclass(kw_only=True)
-class ConnectionLostError(Error):
-    """Raised in stompman.AbstractConnection—and handled in stompman.ConnectionManager, therefore is private."""
-
-    reason: Exception | str
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class ConnectionConfirmationTimeout:
-    timeout: int
-    frames: list[MessageFrame | ReceiptFrame | ErrorFrame | HeartbeatFrame]
+from .config import ConnectionParameters
+from .core.errors import AllServersUnavailable as NativeAllServersUnavailable
+from .core.errors import (
+    ConnectionConfirmationTimeout,
+    ConnectionLostError,
+    ConnectionLostOnLifespanEnter,
+    ConsumerOverloadedError,
+    Error,
+    FailedAllWriteAttemptsError,
+    ReceiptRejectedError,
+    ReceiptTimeoutError,
+    SubscriptionError,
+    TransactionOutcomeUnknownError,
+    UnsupportedProtocolVersion,
+)
+from .core.errors import FailedAllConnectAttemptsError as NativeFailedAllConnectAttemptsError
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class UnsupportedProtocolVersion:
-    given_version: str
-    supported_version: str
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class ConnectionLostOnLifespanEnter: ...
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class AllServersUnavailable:
-    servers: list["ConnectionParameters"]
+class AllServersUnavailable(NativeAllServersUnavailable):
+    # The compatibility boundary restores the original payload type. The native
+    # diagnostic deliberately contains only native Server objects.
+    servers: list[ConnectionParameters]  # type: ignore[assignment]
     timeout: int
 
 
@@ -45,20 +33,24 @@ AnyConnectionIssue = StompProtocolConnectionIssue | ConnectionLostOnLifespanEnte
 
 
 @dataclass(kw_only=True)
-class FailedAllConnectAttemptsError(Error):
-    retry_attempts: int
-    issues: list[AnyConnectionIssue]
+class FailedAllConnectAttemptsError(NativeFailedAllConnectAttemptsError):
+    issues: list[AnyConnectionIssue]  # type: ignore[assignment]
 
 
-@dataclass(kw_only=True)
-class FailedAllWriteAttemptsError(Error):
-    retry_attempts: int
-
-
-@dataclass(kw_only=True)
-class SubscriptionError(Error):
-    """A receipt-confirmed subscription could not be established or restored."""
-
-    subscription_id: str
-    reason: Literal["rejected", "timeout", "connection_lost", "unsubscribed"]
-    frame: ErrorFrame | None = field(default=None, repr=False)
+__all__ = [
+    "AllServersUnavailable",
+    "AnyConnectionIssue",
+    "ConnectionConfirmationTimeout",
+    "ConnectionLostError",
+    "ConnectionLostOnLifespanEnter",
+    "ConsumerOverloadedError",
+    "Error",
+    "FailedAllConnectAttemptsError",
+    "FailedAllWriteAttemptsError",
+    "ReceiptRejectedError",
+    "ReceiptTimeoutError",
+    "StompProtocolConnectionIssue",
+    "SubscriptionError",
+    "TransactionOutcomeUnknownError",
+    "UnsupportedProtocolVersion",
+]

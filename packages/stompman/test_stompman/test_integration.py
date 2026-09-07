@@ -19,25 +19,8 @@ from stompman.serde import (
 )
 
 
-async def wait_for_reconnect(client: stompman.Client, initial_reconnection_count: int) -> None:
-    def is_reconnected() -> bool:
-        return (
-            client._connection_manager._reconnection_count > initial_reconnection_count
-            and client._connection_manager._active_connection_state is not None
-        )
-
-    while not is_reconnected():  # ruff: ignore[async-busy-wait]
-        await asyncio.sleep(0.05)
-
-
 async def force_reconnect(client: stompman.Client) -> None:
-    connection_state = await client._connection_manager._get_active_connection_state()
-    initial_reconnection_count = client._connection_manager._reconnection_count
-    await client._connection_manager._discard_failed_connection_state(
-        connection_state,
-        stompman.ConnectionLostError(reason="test reconnect"),
-    )
-    await asyncio.wait_for(wait_for_reconnect(client, initial_reconnection_count), timeout=5)
+    await asyncio.wait_for(client.core.reconnect(), timeout=5)
 
 
 @asynccontextmanager
@@ -92,21 +75,21 @@ async def test_consumption_survives_forced_reconnects(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("port", [9000, 9001], ids=["artemis", "classic"])
-async def test_receipt_rejection_does_not_replay_subscription(port: int) -> None:
+async def test_failed_confirmation_does_not_replay_subscription(
+    connection_parameters: stompman.ConnectionParameters,
+) -> None:
     error_frames: list[stompman.ErrorFrame] = []
-    parameters = stompman.ConnectionParameters("127.0.0.1", port, "admin", ":=123")
     destination = f"confirmation-{uuid4()}"
     received: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
 
-    async def handle_message(frame: stompman.AckableMessageFrame) -> None:  # ruff: ignore[unused-async]
+    async def handle_message(frame: stompman.AckableMessageFrame) -> None:
         if not received.done():
             received.set_result(frame.body)
 
     async with stompman.Client(
-        servers=[parameters], on_error_frame=error_frames.append, connection_confirmation_timeout=10
+        servers=[connection_parameters], on_error_frame=error_frames.append, connection_confirmation_timeout=10
     ) as client:
-        with pytest.raises(stompman.SubscriptionError, match="rejected"):
+        with pytest.raises(stompman.SubscriptionError) as failure:
             await client.subscribe_with_manual_ack(
                 destination,
                 handle_message,
@@ -114,8 +97,13 @@ async def test_receipt_rejection_does_not_replay_subscription(port: int) -> None
                 headers={"selector": "colour = ("},
                 receipt_timeout=3,
             )
-        assert not client._active_subscriptions.get_all()
-        assert not client._active_subscriptions.pending_receipts
+        assert len(error_frames) == 1
+        # Artemis omits the recommended receipt-id on this ERROR. Its terminal
+        # failure cannot establish which pending operation the broker rejected.
+        expected = "rejected" if error_frames[0].headers.get("receipt-id") else "connection_lost"
+        assert failure.value.reason == expected
+        assert not client.core.status.subscription_ids
+        assert not client.core.status.pending_receipts
         await force_reconnect(client)
         healthy = await client.subscribe_with_manual_ack(destination, handle_message, ack="auto", receipt_timeout=3)
         try:
@@ -143,7 +131,7 @@ async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
         received_messages: list[bytes] = []
         event = asyncio.Event()
 
-        async def handle_message(frame: stompman.MessageFrame) -> None:  # ruff: ignore[unused-async]
+        async def handle_message(frame: stompman.MessageFrame) -> None:
             received_messages.append(frame.body)
             if len(received_messages) == len(messages):
                 event.set()
@@ -173,12 +161,15 @@ async def test_ok(connection_parameters: stompman.ConnectionParameters) -> None:
 def generate_frames(
     cases: list[tuple[bytes, list[stompman.AnyClientFrame | stompman.AnyServerFrame]]],
 ) -> tuple[list[bytes], list[stompman.AnyClientFrame | stompman.AnyServerFrame]]:
-    all_bytes, all_frames = [], []
+    all_bytes: list[bytes] = []
+    all_frames: list[stompman.AnyClientFrame | stompman.AnyServerFrame] = []
 
     for noise, frames in cases:
         current_all_bytes = []
         if noise:
             current_all_bytes.append(noise + NEWLINE)
+            if noise == b"\r":
+                all_frames.append(stompman.HeartbeatFrame())
 
         for frame in frames:
             current_all_bytes.append(NEWLINE if isinstance(frame, stompman.HeartbeatFrame) else dump_frame(frame))
@@ -203,7 +194,9 @@ headers_strategy = strategies.dictionaries(header_value_strategy, header_value_s
     )
 )
 
-FRAMES_WITH_ESCAPED_HEADERS = tuple(command for command in COMMANDS_TO_FRAMES if command != b"CONNECT")
+FRAMES_WITH_ESCAPED_HEADERS = tuple(
+    command for command in COMMANDS_TO_FRAMES if command not in {b"CONNECT", b"CONNECTED"}
+)
 frame_strategy = strategies.just(stompman.HeartbeatFrame()) | strategies.builds(
     make_frame_from_parts,
     command=strategies.sampled_from(FRAMES_WITH_ESCAPED_HEADERS),

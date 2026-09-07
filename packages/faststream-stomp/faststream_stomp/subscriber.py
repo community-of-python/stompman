@@ -12,6 +12,7 @@ from faststream._internal.producer import ProducerProto
 from faststream.specification.asyncapi.utils import resolve_payloads
 from faststream.specification.schema import Message, Operation, SubscriberSpec
 
+from faststream_stomp._client import SubscriptionAdapter, adapt_client
 from faststream_stomp.models import (
     StompPublishCommand,
     StompSubscriberSpecificationConfig,
@@ -65,12 +66,14 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         calls: CallsCollection[stompman.MessageFrame],
     ) -> None:
         self.config = config
-        self._subscription: stompman.ManualAckSubscription | None = None
+        self._subscription: SubscriptionAdapter | None = None
         super().__init__(config=config, specification=specification, calls=calls)  # type: ignore[arg-type]
 
     async def start(self) -> None:
+        if self._subscription is not None:
+            return
         await super().start()
-        self._subscription = await self.config._outer_config.client.subscribe_with_manual_ack(
+        self._subscription = await adapt_client(self.config._outer_config.client).subscribe(
             destination=self.config.full_destination,
             handler=self.consume,
             ack=self.config.ack_mode,
@@ -79,9 +82,14 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
         self._post_start()
 
     async def stop(self) -> None:
-        if self._subscription:
-            await self._subscription.unsubscribe()
-        await super().stop()
+        if self._subscription is not None:
+            self._subscription.pause()
+        try:
+            await super().stop()
+        finally:
+            if self._subscription is not None:
+                await self._subscription.unsubscribe()
+            self._subscription = None
 
     async def get_one(self, *, timeout: float = 5) -> NoReturn:
         raise NotImplementedError

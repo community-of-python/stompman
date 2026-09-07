@@ -44,21 +44,21 @@ line-length = 120
 preview = true
 select = ["ALL"]
 ignore = [
-    "ASYNC109",
-    "COM812",
-    "CPY001",
+    "async-function-with-timeout",
+    "missing-trailing-comma",
+    "missing-copyright-notice",
     "D1",
-    "D203",
-    "D213",
-    "DOC201",
-    "DOC501",
-    "ISC001",
-    "PLC2701",
-    "PLC2801",
-    "PLR0913",
-    "SLF001"
+    "incorrect-blank-line-before-class",
+    "multi-line-summary-second-line",
+    "docstring-missing-returns",
+    "docstring-missing-exception",
+    "single-line-implicit-string-concatenation",
+    "import-private-name",
+    "unnecessary-dunder-call",
+    "too-many-arguments",
+    "private-member-access"
 ]
-extend-per-file-ignores = { "*/test_*/*" = ["S101", "SLF001", "ARG", "PLR6301"] }
+extend-per-file-ignores = { "*/test_*/*" = ["assert", "private-member-access", "ARG", "no-self-use", "magic-value-comparison", "unused-async", "pytest-raises-with-multiple-statements", "boolean-type-hint-positional-argument"] }
 
 [tool.pytest.ini_options]
 addopts = "--cov -s -vv"

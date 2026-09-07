@@ -8,16 +8,16 @@ server = stompman.ConnectionParameters(host="127.0.0.1", port=9000, login="admin
 async def main() -> None:
     async with stompman.Client([server]) as client:
         await client.send(b"Hi!", "DLQ")
-        print("Said hi")  # noqa: T201
+        print("Said hi")  # ruff: ignore[print]
 
         async with client.begin() as transaction:
             for index in range(5):
                 await transaction.send(b"Hi from transaction! " + str(index).encode(), "DLQ")
-                print(f"Said hi in transaction ({index})")  # noqa: T201
+                print(f"Said hi in transaction ({index})")  # ruff: ignore[print]
                 await asyncio.sleep(0.3)
 
         await client.send(b"Mu-ha-ha!", "DLQ")
-        print("Laughed evilly")  # noqa: T201
+        print("Laughed evilly")  # ruff: ignore[print]
 
 
 if __name__ == "__main__":

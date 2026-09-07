@@ -1,21 +1,28 @@
+"""Compatibility handshake utility for users of raw Connection objects."""
+
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import uuid4
 
-from stompman.config import ConnectionParameters, Heartbeat
-from stompman.connection import AbstractConnection
-from stompman.errors import ConnectionConfirmationTimeout, StompProtocolConnectionIssue, UnsupportedProtocolVersion
-from stompman.frames import (
+from .config import ConnectionParameters, Heartbeat
+from .connection import AbstractConnection
+from .errors import ConnectionConfirmationTimeout, StompProtocolConnectionIssue, UnsupportedProtocolVersion
+from .frames import (
     ConnectedFrame,
     ConnectFrame,
     ConnectHeaders,
     DisconnectFrame,
+    ErrorFrame,
+    HeartbeatFrame,
+    MessageFrame,
     ReceiptFrame,
 )
-from stompman.subscription import ActiveSubscriptions, unsubscribe_from_all_active_subscriptions
+
+if TYPE_CHECKING:
+    from .subscription import ActiveSubscriptions
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -31,18 +38,18 @@ class AbstractConnectionLifespan(Protocol):
 
 
 @dataclass(kw_only=True, slots=True)
-class ConnectionLifespan(AbstractConnectionLifespan):
+class ConnectionLifespan:
     connection: AbstractConnection
     connection_parameters: ConnectionParameters
     protocol_version: str
     client_heartbeat: Heartbeat
     connection_confirmation_timeout: int
     disconnect_confirmation_timeout: int
-    active_subscriptions: ActiveSubscriptions
+    active_subscriptions: "ActiveSubscriptions"
     set_heartbeat_interval: Callable[[Heartbeat], Any]
 
     async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
-        connect_headers = cast(
+        headers = cast(
             "ConnectHeaders",
             self.connection_parameters.connect_headers
             | {
@@ -53,44 +60,42 @@ class ConnectionLifespan(AbstractConnectionLifespan):
                 "passcode": self.connection_parameters.unescaped_passcode,
             },
         )
-        await self.connection.write_frame(ConnectFrame(headers=connect_headers))
-        collected_frames = []
+        await self.connection.write_frame(ConnectFrame(headers=headers))
+        collected: list[MessageFrame | ReceiptFrame | ErrorFrame | HeartbeatFrame] = []
 
-        async def take_connected_frame_and_collect_other_frames() -> ConnectedFrame:
+        async def connected() -> ConnectedFrame:
             async for frame in self.connection.read_frames():
                 if isinstance(frame, ConnectedFrame):
                     return frame
-                collected_frames.append(frame)
-            msg = "unreachable"  # pragma: no cover
-            raise AssertionError(msg)  # pragma: no cover
+                collected.append(frame)
+            msg = "connection ended during handshake"
+            raise ConnectionError(msg)
 
         try:
-            connected_frame = await asyncio.wait_for(
-                take_connected_frame_and_collect_other_frames(), timeout=self.connection_confirmation_timeout
-            )
+            frame = await asyncio.wait_for(connected(), timeout=self.connection_confirmation_timeout)
         except TimeoutError:
-            return ConnectionConfirmationTimeout(timeout=self.connection_confirmation_timeout, frames=collected_frames)
-
-        if connected_frame.headers["version"] != self.protocol_version:
+            return ConnectionConfirmationTimeout(timeout=self.connection_confirmation_timeout, frames=collected)
+        if frame.headers["version"] != self.protocol_version:
             return UnsupportedProtocolVersion(
-                given_version=connected_frame.headers["version"], supported_version=self.protocol_version
+                given_version=frame.headers["version"], supported_version=self.protocol_version
             )
-
-        server_heartbeat = Heartbeat.from_header(connected_frame.headers["heart-beat"])
-        self.set_heartbeat_interval(server_heartbeat)
-        return EstablishedConnectionResult(server_heartbeat=server_heartbeat)
-
-    async def _take_receipt_frame(self) -> None:
-        async for frame in self.connection.read_frames():
-            if isinstance(frame, ReceiptFrame):
-                break
+        heartbeat = Heartbeat.from_header(frame.headers["heart-beat"])
+        self.set_heartbeat_interval(heartbeat)
+        return EstablishedConnectionResult(server_heartbeat=heartbeat)
 
     async def exit(self) -> None:
-        await unsubscribe_from_all_active_subscriptions(active_subscriptions=self.active_subscriptions)
-        await self.connection.write_frame(DisconnectFrame(headers={"receipt": _make_receipt_id()}))
+        for subscription in self.active_subscriptions.get_all():
+            await subscription.unsubscribe()
+        receipt_id = _make_receipt_id()
+        await self.connection.write_frame(DisconnectFrame(headers={"receipt": receipt_id}))
+
+        async def received() -> None:
+            async for frame in self.connection.read_frames():
+                if isinstance(frame, ReceiptFrame) and frame.headers["receipt-id"] == receipt_id:
+                    return
 
         with suppress(TimeoutError):
-            await asyncio.wait_for(self._take_receipt_frame(), timeout=self.disconnect_confirmation_timeout)
+            await asyncio.wait_for(received(), timeout=self.disconnect_confirmation_timeout)
 
 
 def _make_receipt_id() -> str:

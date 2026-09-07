@@ -1,44 +1,29 @@
+"""Mutable subscription contracts backed by immutable core specifications."""
+
 import asyncio
-import math
 from collections.abc import Awaitable, Callable, Coroutine
-from contextlib import suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self, cast
 from uuid import uuid4
 
+from stompman._legacy_errors import translate_connection_errors
 from stompman.connection import AbstractConnection
 from stompman.connection_manager import ConnectionManager
-from stompman.errors import ConnectionLostError, SubscriptionError
-from stompman.frames import (
-    AckFrame,
-    AckMode,
-    ErrorFrame,
-    MessageFrame,
-    NackFrame,
-    ReceiptFrame,
-    SubscribeFrame,
-    UnsubscribeFrame,
-)
+from stompman.core.config import Confirmed, Unconfirmed
+from stompman.core.delivery import Delivery
+from stompman.core.subscriptions import Subscription, SubscriptionSpec, log_subscription_error
+from stompman.errors import ConnectionLostError, FailedAllWriteAttemptsError, SubscriptionError
+from stompman.frames import AckFrame, AckMode, MessageFrame, NackFrame, SubscribeFrame, UnsubscribeFrame
 from stompman.logger import LOGGER
 
-
-@dataclass(kw_only=True, slots=True, frozen=True)
-class _PendingConfirmation:
-    subscription: "BaseSubscription"
-    connection: AbstractConnection
-    receipt_id: str
-    epoch: int
-    deadline: float
-    result: asyncio.Future[SubscriptionError | None]
+_current_delivery: ContextVar[Delivery | None] = ContextVar("stompman_legacy_delivery", default=None)
 
 
 @dataclass(kw_only=True, slots=True, frozen=True)
 class ActiveSubscriptions:
     subscriptions: dict[str, "AutoAckSubscription | ManualAckSubscription"] = field(default_factory=dict, init=False)
     event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
-    pending_receipts: dict[str, _PendingConfirmation] = field(default_factory=dict, init=False)
-    confirmation_tasks: set[asyncio.Task[None]] = field(default_factory=set, init=False)
-    confirmation_started: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
     def __post_init__(self) -> None:
         self.event.set()
@@ -50,11 +35,10 @@ class ActiveSubscriptions:
         return list(self.subscriptions.values())
 
     def get_ids(self) -> list[str]:
-        return list(self.subscriptions.keys())
+        return list(self.subscriptions)
 
     def delete_by_id(self, subscription_id: str) -> None:
-        if subscription_id in self.subscriptions:
-            del self.subscriptions[subscription_id]
+        self.subscriptions.pop(subscription_id, None)
         if not self.subscriptions:
             self.event.set()
 
@@ -68,51 +52,6 @@ class ActiveSubscriptions:
     async def wait_until_empty(self) -> bool:
         return await self.event.wait()
 
-    def handle_receipt(self, frame: ReceiptFrame, *, epoch: int) -> None:
-        if (pending := self.pending_receipts.get(frame.headers["receipt-id"])) and pending.epoch == epoch:
-            del self.pending_receipts[pending.receipt_id]
-            if not self.pending_receipts:
-                self.confirmation_started.clear()
-            pending.subscription._pending_confirmation = None
-            if not pending.result.done():
-                pending.result.set_result(None)
-
-    def handle_error(self, frame: ErrorFrame, *, epoch: int) -> None:
-        receipt_id = frame.headers.get("receipt-id")
-        if receipt_id is not None:
-            pending = self.pending_receipts.get(receipt_id)
-            affected = [pending] if pending is not None else []
-        else:
-            # An uncorrelated ERROR cannot safely confirm any in-flight
-            # subscription. Confirmed subscriptions remain eligible for recovery.
-            affected = list(self.pending_receipts.values())
-        for pending in affected:
-            if pending.epoch != epoch:
-                continue
-            pending.subscription._fail_confirmation(
-                pending, SubscriptionError(subscription_id=pending.subscription.id, reason="rejected", frame=frame)
-            )
-
-    def connection_lost(self, connection: AbstractConnection) -> None:
-        for pending in list(self.pending_receipts.values()):
-            if pending.connection is connection:
-                pending.subscription._fail_confirmation(
-                    pending, SubscriptionError(subscription_id=pending.subscription.id, reason="connection_lost")
-                )
-
-    def watch_confirmation(self, pending: _PendingConfirmation) -> None:
-        task = asyncio.create_task(pending.subscription._watch_confirmation(pending))
-        self.confirmation_tasks.add(task)
-        task.add_done_callback(self.confirmation_tasks.discard)
-
-    async def cancel_confirmation_tasks(self) -> None:
-        tasks = tuple(self.confirmation_tasks)
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self.confirmation_tasks.difference_update(tasks)
-
 
 @dataclass(kw_only=True, slots=True)
 class BaseSubscription:
@@ -124,253 +63,85 @@ class BaseSubscription:
     _active_subscriptions: ActiveSubscriptions
     receipt_timeout: float | None = None
     on_subscription_error: Callable[[SubscriptionError], Any] | None = None
-    _pending_confirmation: _PendingConfirmation | None = field(default=None, init=False, repr=False)
+    _subscription: Subscription | None = field(default=None, init=False, repr=False, compare=False)
+
+    def _spec(self) -> SubscriptionSpec:
+        for key, subscription in tuple(self._active_subscriptions.subscriptions.items()):
+            if subscription is self and key != self.id:
+                self._active_subscriptions.delete_by_id(key)
+        self._active_subscriptions.add(cast("AutoAckSubscription | ManualAckSubscription", self))
+        operations = Unconfirmed(self._connection_manager.write_retry_attempts)
+        return SubscriptionSpec(
+            self.id,
+            self.destination,
+            self.ack,
+            self.headers or {},
+            self._consume,
+            operations if self.receipt_timeout is None else Confirmed(self.receipt_timeout),
+            operations,
+            self._on_error,
+        )
+
+    async def _consume(self, delivery: Delivery) -> None:
+        raise NotImplementedError
+
+    def _on_error(self, error: SubscriptionError) -> None:
+        self._active_subscriptions.delete_by_id(self.id)
+        (self.on_subscription_error or log_subscription_error)(error)
 
     async def _subscribe(self) -> None:
-        if self.receipt_timeout is not None:
-            if not math.isfinite(self.receipt_timeout) or self.receipt_timeout <= 0:
-                msg = "receipt_timeout must be a finite positive number"
-                raise ValueError(msg)
-            connection_state = await self._connection_manager._get_restored_connection_state()
-            self._active_subscriptions.add(self)  # type: ignore[arg-type]
+        attempts = self._connection_manager.write_retry_attempts
+        if attempts <= 0:
+            raise FailedAllWriteAttemptsError(retry_attempts=attempts)
+        with translate_connection_errors(
+            self._connection_manager.servers, timeout=self._connection_manager.connect_timeout
+        ):
             try:
-                pending = await self._send_confirmed_subscription(connection_state.connection)
-                await self._await_confirmation(pending)
-            except ConnectionLostError as error:
-                await self._connection_manager._discard_failed_connection_state(connection_state, error)
-                raise SubscriptionError(subscription_id=self.id, reason="connection_lost") from error
-            return
-        await self._connection_manager.write_frame_reconnecting(
-            SubscribeFrame.build(
-                subscription_id=self.id, destination=self.destination, ack=self.ack, headers=self.headers
-            )
-        )
-        self._active_subscriptions.add(self)  # type: ignore[arg-type]
+                self._subscription = await self._connection_manager.runtime.subscribe_from(self._spec)
+            except BaseException as error:
+                self._active_subscriptions.delete_by_id(self.id)
+                if isinstance(error, ConnectionLostError) and self.receipt_timeout is None:
+                    raise FailedAllWriteAttemptsError(retry_attempts=attempts) from error
+                raise
 
     async def unsubscribe(self) -> None:
-        if pending := self._pending_confirmation:
-            self._fail_confirmation(
-                pending, SubscriptionError(subscription_id=self.id, reason="unsubscribed"), notify=False
-            )
         self._active_subscriptions.delete_by_id(self.id)
-        await self._connection_manager.maybe_write_frame(UnsubscribeFrame(headers={"id": self.id}))
-
-    async def _send_confirmed_subscription(
-        self, connection: AbstractConnection, *, restoring: bool = False
-    ) -> _PendingConfirmation:
-        assert self.receipt_timeout is not None  # ruff: ignore[assert] - internal invariant
-        pending = _PendingConfirmation(
-            subscription=self,
-            connection=connection,
-            receipt_id=_make_confirmation_id(),
-            epoch=self._connection_manager._reconnection_count,
-            deadline=asyncio.get_running_loop().time() + self.receipt_timeout,
-            result=asyncio.get_running_loop().create_future(),
-        )
-        self._pending_confirmation = pending
-        self._active_subscriptions.pending_receipts[pending.receipt_id] = pending
-        self._active_subscriptions.confirmation_started.set()
-        try:
-            async with asyncio.timeout_at(pending.deadline):
-                await connection.write_frame(
-                    SubscribeFrame.build(
-                        subscription_id=self.id,
-                        destination=self.destination,
-                        ack=self.ack,
-                        headers={**(self.headers or {}), "receipt": pending.receipt_id},
-                    )
-                )
-        except TimeoutError as error:
-            failure = SubscriptionError(subscription_id=self.id, reason="timeout")
-            self._fail_confirmation(pending, failure, include_confirmed=True)
-            # A receipt can arrive before the socket write finishes draining.
-            # A failed subscribe must not leave that already-confirmed entry
-            # behind without a subscription handle for the caller to close.
-            await self._cleanup_confirmation(pending)
-            raise failure from error
-        except BaseException as error:
-            self._fail_confirmation(
-                pending,
-                SubscriptionError(
-                    subscription_id=self.id,
-                    reason=(
-                        "unsubscribed"
-                        if isinstance(error, asyncio.CancelledError) and not restoring
-                        else "connection_lost"
-                    ),
-                ),
-                notify=restoring or not isinstance(error, asyncio.CancelledError),
-                include_confirmed=True,
-            )
-            await self._cleanup_confirmation(pending)
-            raise
-        return pending
-
-    async def _await_confirmation(self, pending: _PendingConfirmation) -> None:
-        try:
-            if pending.result.done():
-                error = pending.result.result()
-            else:
-                async with asyncio.timeout_at(pending.deadline):
-                    error = await asyncio.shield(pending.result)
-        except TimeoutError as timeout_error:
-            # Prefer a receipt already processed by the reader over a deadline
-            # cancellation delivered before this waiter was rescheduled.
-            if pending.result.done():
-                error = pending.result.result()
-                if error is not None:
-                    raise error from timeout_error
-                return
-            error = SubscriptionError(subscription_id=self.id, reason="timeout")
-            self._fail_confirmation(pending, error)
-            await self._cleanup_confirmation(pending)
-            raise error from timeout_error
-        except asyncio.CancelledError:
-            was_active = self._active_subscriptions.contains_by_id(self.id)
-            pending = self._pending_confirmation or pending
-            self._fail_confirmation(
-                pending, SubscriptionError(subscription_id=self.id, reason="unsubscribed"), notify=False
-            )
-            # A receipt may have arrived just before cancellation.
-            self._active_subscriptions.delete_by_id(self.id)
-            if was_active:
-                await self._cleanup_confirmation(pending)
-            raise
-        if error is not None:
-            raise error
-
-    def _fail_confirmation(
-        self,
-        pending: _PendingConfirmation,
-        error: SubscriptionError,
-        *,
-        notify: bool = True,
-        include_confirmed: bool = False,
-    ) -> None:
-        if self._active_subscriptions.pending_receipts.pop(pending.receipt_id, None) is None:
-            if not include_confirmed:
-                return
-            # A write may fail after its receipt. Notify once, without removing
-            # a subscription already being restored on a newer connection.
-            if (
-                self._pending_confirmation is not None
-                or not pending.result.done()
-                or pending.result.result() is not None
-                or not self._active_subscriptions.contains_by_id(self.id)
-            ):
-                return
-        if not self._active_subscriptions.pending_receipts:
-            self._active_subscriptions.confirmation_started.clear()
-        self._pending_confirmation = None
-        self._active_subscriptions.delete_by_id(self.id)
-        if not pending.result.done():
-            pending.result.set_result(error)
-        if notify:
-            if self.on_subscription_error is None:
-                LOGGER.warning("subscription confirmation failed: %s", error)
-            else:
-                try:
-                    self.on_subscription_error(error)
-                except Exception:  # ruff: ignore[blind-except] - user callbacks must not terminate the frame reader
-                    LOGGER.exception("unhandled exception in subscription error callback")
-
-    async def _cleanup_confirmation(self, pending: _PendingConfirmation) -> None:
-        try:
-            async with asyncio.timeout(self.receipt_timeout):
-                await pending.connection.write_frame(UnsubscribeFrame(headers={"id": self.id}))
-        except (ConnectionLostError, TimeoutError) as error:
-            state = self._connection_manager._active_connection_state
-            if state is not None and state.connection is pending.connection:
-                await self._connection_manager._discard_failed_connection_state(
-                    state, ConnectionLostError(reason=error)
-                )
-
-    async def _watch_confirmation(self, pending: _PendingConfirmation) -> None:
-        # Failure notification and registry cleanup happen before waking us.
-        with suppress(SubscriptionError):
-            await self._await_confirmation(pending)
+        if self._subscription is None:
+            await self._connection_manager.maybe_write_frame(UnsubscribeFrame(headers={"id": self.id}))
+        else:
+            await self._subscription.unsubscribe()
 
     async def _resubscribe(self, connection: AbstractConnection) -> None:
-        if not self._active_subscriptions.contains_by_id(self.id):
-            return
-        if self._pending_confirmation is not None:
-            return
-        if self.receipt_timeout is None:
+        if self._active_subscriptions.contains_by_id(self.id):
             await connection.write_frame(
                 SubscribeFrame.build(
                     subscription_id=self.id, destination=self.destination, ack=self.ack, headers=self.headers
                 )
             )
-        else:
-            try:
-                pending = await self._send_confirmed_subscription(connection, restoring=True)
-            except SubscriptionError:
-                return
-            self._active_subscriptions.watch_confirmation(pending)
 
-    async def _nack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
+    async def _settle(self, frame: MessageFrame, epoch: int, *, accepted: bool) -> None:
+        delivery = frame._delivery if isinstance(frame, AckableMessageFrame) else _current_delivery.get()
+        if delivery is not None:
+            await (delivery.ack() if accepted else delivery.nack())
+            return
         if not self._active_subscriptions.contains_by_id(self.id):
-            LOGGER.warning(
-                "failed to nack message frame: subscription is not active. "
-                "message_id: %s, subscription_id: %s, active_subscriptions: %s",
-                frame.headers["message-id"],
-                self.id,
-                self._active_subscriptions.get_ids(),
-            )
+            LOGGER.warning("failed to settle message frame: subscription is not active")
             return
-        if not (ack_id := frame.headers.get("ack")):
-            LOGGER.warning(
-                'failed to nack message frame: it has no "ack" header. "'
-                "message_id: %s, subscription_id: %s, frame_header_names: %s",
-                frame.headers["message-id"],
-                self.id,
-                frame.headers.keys(),
-            )
+        if epoch != self._connection_manager._reconnection_count:
+            LOGGER.warning("skipping acknowledgement: connection changed since message was received")
             return
-        if received_at_reconnection_count != self._connection_manager._reconnection_count:
-            LOGGER.error(
-                "skipping nack for message frame: connection changed since message was received. "
-                "message_id: %s, subscription_id: %s, received_at_reconnection_count: %s, "
-                "current_reconnection_count: %s",
-                frame.headers["message-id"],
-                self.id,
-                received_at_reconnection_count,
-                self._connection_manager._reconnection_count,
-            )
+        ack_id = frame.headers.get("ack")
+        if not ack_id:
+            LOGGER.warning("failed to settle message frame: it has no ack header")
             return
-        await self._connection_manager.maybe_write_frame(NackFrame(headers={"id": ack_id, "subscription": self.id}))
+        frame_type = AckFrame if accepted else NackFrame
+        await self._connection_manager.maybe_write_frame(frame_type(headers={"id": ack_id, "subscription": self.id}))
 
     async def _ack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
-        if not self._active_subscriptions.contains_by_id(self.id):
-            LOGGER.warning(
-                "failed to ack message frame: subscription is not active. "
-                "message_id: %s, subscription_id: %s, active_subscriptions: %s",
-                frame.headers["message-id"],
-                self.id,
-                self._active_subscriptions.get_ids(),
-            )
-            return
-        if not (ack_id := frame.headers.get("ack")):
-            LOGGER.warning(
-                'failed to ack message frame: it has no "ack" header. "'
-                "message_id: %s, subscription_id: %s, frame_header_names: %s",
-                frame.headers["message-id"],
-                self.id,
-                frame.headers.keys(),
-            )
-            return
-        if received_at_reconnection_count != self._connection_manager._reconnection_count:
-            LOGGER.warning(
-                "skipping ack for message frame: connection changed since message was received. "
-                "message_id: %s, subscription_id: %s, received_at_reconnection_count: %s, "
-                "current_reconnection_count: %s",
-                frame.headers["message-id"],
-                self.id,
-                received_at_reconnection_count,
-                self._connection_manager._reconnection_count,
-            )
-            return
-        await self._connection_manager.maybe_write_frame(AckFrame(headers={"id": ack_id, "subscription": self.id}))
+        await self._settle(frame, received_at_reconnection_count, accepted=True)
+
+    async def _nack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
+        await self._settle(frame, received_at_reconnection_count, accepted=False)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -382,6 +153,16 @@ class AutoAckSubscription(BaseSubscription):
 
     def __post_init__(self) -> None:
         self._should_handle_ack_nack = self.ack in {"client", "client-individual"}
+
+    async def _consume(self, delivery: Delivery) -> None:
+        token = _current_delivery.set(delivery)
+        try:
+            await self._run_handler(
+                frame=MessageFrame(headers=delivery.headers, body=delivery.body),
+                received_at_reconnection_count=self._connection_manager._reconnection_count,
+            )
+        finally:
+            _current_delivery.reset(token)
 
     async def _run_handler(self, *, frame: MessageFrame, received_at_reconnection_count: int) -> None:
         try:
@@ -399,11 +180,33 @@ class AutoAckSubscription(BaseSubscription):
 class ManualAckSubscription(BaseSubscription):
     handler: Callable[["AckableMessageFrame"], Coroutine[Any, Any, Any]]
 
+    async def _consume(self, delivery: Delivery) -> None:
+        await self.handler(AckableMessageFrame.from_delivery(delivery, subscription=self))
+
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class AckableMessageFrame(MessageFrame):
     _subscription: ManualAckSubscription
     _received_at_reconnection_count: int
+    _delivery: Delivery | None = field(default=None, repr=False, compare=False)
+
+    @classmethod
+    def from_delivery(cls, delivery: Delivery, *, subscription: ManualAckSubscription | None = None) -> Self:
+        # Native facade callers have a settlement capability but no legacy subscription object.
+        owner = (
+            subscription
+            if subscription is not None
+            else cast("ManualAckSubscription", _NativeAcknowledgement(delivery))
+        )
+        return cls(
+            headers=delivery.headers,
+            body=delivery.body,
+            _subscription=owner,
+            _received_at_reconnection_count=0
+            if subscription is None
+            else subscription._connection_manager._reconnection_count,
+            _delivery=delivery,
+        )
 
     async def ack(self) -> None:
         await self._subscription._ack(self, received_at_reconnection_count=self._received_at_reconnection_count)
@@ -412,11 +215,20 @@ class AckableMessageFrame(MessageFrame):
         await self._subscription._nack(self, received_at_reconnection_count=self._received_at_reconnection_count)
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeAcknowledgement:
+    delivery: Delivery
+
+    async def _ack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
+        del frame, received_at_reconnection_count
+        await self.delivery.ack()
+
+    async def _nack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
+        del frame, received_at_reconnection_count
+        await self.delivery.nack()
+
+
 def _make_subscription_id() -> str:
-    return str(uuid4())
-
-
-def _make_confirmation_id() -> str:
     return str(uuid4())
 
 

@@ -15,6 +15,9 @@ classifiers = [
 ]
 dynamic = ["version", "readme"]
 
+[project.optional-dependencies]
+ws = ["websockets>=14"]
+
 [project.urls]
 repository = "https://github.com/community-of-python/stompman"
 

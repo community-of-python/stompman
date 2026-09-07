@@ -22,14 +22,14 @@ __all__ = ["StompMetricsSettingsProvider", "StompPrometheusMiddleware"]
 class StompMetricsSettingsProvider(MetricsSettingsProvider[stompman.MessageFrame, StompPublishCommand]):
     messaging_system = "stomp"
 
-    def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> ConsumeAttrs:  # noqa: PLR6301
+    def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> ConsumeAttrs:  # ruff: ignore[no-self-use]
         return {
             "destination_name": msg.raw_message.headers["destination"],
             "message_size": len(msg.body),
             "messages_count": 1,
         }
 
-    def get_publish_destination_name_from_cmd(self, cmd: StompPublishCommand) -> str:  # noqa: PLR6301
+    def get_publish_destination_name_from_cmd(self, cmd: StompPublishCommand) -> str:  # ruff: ignore[no-self-use]
         return cmd.destination
 
 
@@ -41,7 +41,7 @@ class StompPrometheusMiddleware(PrometheusMiddleware[stompman.MessageFrame, Stom
         app_name: str = EMPTY,
         metrics_prefix: str = "faststream",
         received_messages_size_buckets: Sequence[float] | None = None,
-        **_kwargs: typing.Any,  # noqa: ANN401
+        **_kwargs: typing.Any,  # ruff: ignore[any-type]
     ) -> None:
         super().__init__(
             settings_provider_factory=lambda _: StompMetricsSettingsProvider(),
