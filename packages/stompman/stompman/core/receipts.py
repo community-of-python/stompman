@@ -20,6 +20,15 @@ class Receipt:
     rejected: Callable[[ReceiptRejectedError], None]
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Rejection:
+    receipt: Receipt
+    error: ReceiptRejectedError
+
+    def notify(self) -> None:
+        self.receipt.rejected(self.error)
+
+
 class Receipts:
     def __init__(self) -> None:
         self._pending: dict[str, Receipt] = {}
@@ -40,22 +49,21 @@ class Receipts:
         else:
             receipt.result.cancel()
 
-    def receive(self, frame: ReceiptFrame | ErrorFrame) -> None:
-        if isinstance(frame, ReceiptFrame):
-            receipt = self._pending.pop(frame.headers["receipt-id"], None)
-            if receipt is not None and not receipt.result.done():
-                receipt.result.set_result(frame)
-            return
+    def receive(self, frame: ReceiptFrame) -> None:
+        receipt = self._pending.pop(frame.headers["receipt-id"], None)
+        if receipt is not None and not receipt.result.done():
+            receipt.result.set_result(frame)
+
+    def reject(self, frame: ErrorFrame) -> tuple[Rejection, ...]:
         receipt_id = frame.headers.get("receipt-id")
-        rejected = [item for item in self._pending.values() if receipt_id is None or item.id == receipt_id]
-        # Retire all correlations before callbacks may inspect the subscription registry.
-        for receipt in rejected:
-            self._pending.pop(receipt.id)
-        for receipt in rejected:
-            if not receipt.result.done():
-                error = ReceiptRejectedError(receipt_id=receipt.id, frame=frame)
-                receipt.result.set_exception(error)
-                receipt.rejected(error)
+        if receipt_id is None:
+            return ()
+        receipt = self._pending.pop(receipt_id, None)
+        if receipt is None or receipt.result.done():
+            return ()
+        error = ReceiptRejectedError(receipt_id=receipt.id, frame=frame)
+        receipt.result.set_exception(error)
+        return (Rejection(receipt=receipt, error=error),)
 
     def fail(self, error: Exception) -> None:
         pending, self._pending = self._pending, {}

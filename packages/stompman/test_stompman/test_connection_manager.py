@@ -7,6 +7,7 @@ from itertools import pairwise
 import pytest
 import stompman
 from stompman.core import Unconfirmed
+from stompman.core.errors import FailedAllConnectAttemptsError
 
 from test_stompman.conftest import ScriptedBroker, ScriptedConnection, wait_until
 
@@ -22,7 +23,7 @@ async def test_connect_retry_count(broker: ScriptedBroker, attempt: int) -> None
 
 async def test_unavailable_servers_exhaust_retries(broker: ScriptedBroker) -> None:
     broker.available = False
-    with pytest.raises(stompman.FailedAllConnectAttemptsError):
+    with pytest.raises(FailedAllConnectAttemptsError):
         await broker.runtime().start()
     assert broker.connect_calls == 3
 
@@ -85,7 +86,7 @@ async def test_background_recovery_is_fatal_by_default(broker: ScriptedBroker) -
             broker.available = False
             broker.current.incoming.put_nowait(stompman.ConnectionLostError(reason="lost"))
             await asyncio.Future()
-    assert any(isinstance(error, stompman.FailedAllConnectAttemptsError) for error in info.value.exceptions)
+    assert any(isinstance(error, FailedAllConnectAttemptsError) for error in info.value.exceptions)
     assert broker.current.closed
 
 

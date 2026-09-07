@@ -12,6 +12,7 @@ from ._tasks import await_cleanup
 from .config import ConnectionSettings, Server
 from .errors import AllServersUnavailable, AnyConnectionIssue, ConnectionLostError, ConnectionLostOnLifespanEnter
 from .handshake import HandshakeFailedError, NegotiatedConnection
+from .protocol import STOMP_12, Stomp12
 from .transport import TransportFactory
 
 
@@ -30,11 +31,16 @@ async def close_connections(connections: Iterable[NegotiatedConnection]) -> None
 
 class Connector:
     def __init__(
-        self, servers: Callable[[], tuple[Server, ...]], settings: ConnectionSettings, factory: TransportFactory
+        self,
+        servers: Callable[[], tuple[Server, ...]],
+        settings: ConnectionSettings,
+        factory: TransportFactory,
+        protocol: Stomp12 = STOMP_12,
     ) -> None:
         self._servers = servers
         self._settings = settings
         self._factory = factory
+        self._protocol = protocol
 
     async def _connect(self, server: Server) -> NegotiatedConnection | Unavailable:
         try:
@@ -42,7 +48,7 @@ class Connector:
         except (OSError, ConnectionLostError):
             return Unavailable((AllServersUnavailable(servers=[server], timeout=self._settings.timeout),))
         try:
-            return await NegotiatedConnection.open(transport, server, self._settings)
+            return await NegotiatedConnection.open(transport, server, self._settings, self._protocol)
         except HandshakeFailedError as error:
             return Unavailable((error.issue,))
         except (OSError, ConnectionLostError, ValueError):

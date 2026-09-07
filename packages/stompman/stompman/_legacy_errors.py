@@ -28,9 +28,14 @@ def _connection_failure(
                 flush()
         else:
             flush()
-            issues.append(issue)
+            # LegacyProtocol only produces the original handshake outcomes.
+            issues.append(cast("AnyConnectionIssue", issue))
     flush()
-    if len(issues) == len(error.issues) and all(new is old for new, old in zip(issues, error.issues, strict=True)):
+    if (
+        isinstance(error, FailedAllConnectAttemptsError)
+        and len(issues) == len(error.issues)
+        and all(new is old for new, old in zip(issues, error.issues, strict=True))
+    ):
         return error
     translated = FailedAllConnectAttemptsError(retry_attempts=error.retry_attempts, issues=issues)
     for note in getattr(error, "__notes__", ()):

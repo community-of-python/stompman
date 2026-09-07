@@ -29,6 +29,10 @@ including object construction, mutation, subclass hooks, defaults, and exception
 payloads. Do not require existing consumers to migrate to complete a refactor.
 Prefer structures whose fields and types encode their invariants, and operations
 that own cancellation and cleanup so their callers read as ordinary domain code.
+Keep wire decoding, protocol validation, receipt correlation, and session shutdown
+under distinct owners. Native sessions enforce STOMP 1.2; legacy tolerance is
+selected explicitly by its adapter. ERROR terminates the session, and DISCONNECT
+is the final client frame, including heartbeats.
 
 ## Key Features
 

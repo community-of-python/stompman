@@ -2,15 +2,15 @@
 
 import asyncio
 import time
-from collections import deque
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import suppress
-from typing import Protocol, cast
+from typing import Protocol
 
-from .config import ConnectionSettings, Server
-from .errors import ConnectionLostError
+from .codec import FrameDecoder, encode_frame
+from .config import DEFAULT_FRAME_LIMITS, ConnectionSettings, FrameLimits, Server
+from .errors import ConnectionLostError, ProtocolError
 from .frames import AnyClientFrame, AnyServerFrame
-from .serde import NEWLINE, FrameParser, dump_frame
+from .serde import NEWLINE
 
 
 class Transport(Protocol):
@@ -30,12 +30,18 @@ class TransportFactory(Protocol):
 
 
 class TcpTransport:
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, chunk_size: int) -> None:
+    def __init__(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        chunk_size: int,
+        limits: FrameLimits = DEFAULT_FRAME_LIMITS,
+    ) -> None:
         self._reader = reader
         self._writer = writer
         self._chunk_size = chunk_size
-        self._parser = FrameParser()
-        self._pending: deque[AnyServerFrame] = deque()
+        self._parser = FrameDecoder(limits)
+        self._pending: Iterator[AnyClientFrame | AnyServerFrame] = iter(())
         self.last_received_at = time.monotonic()
 
     async def _send(self, data: bytes) -> None:
@@ -46,24 +52,28 @@ class TcpTransport:
             raise ConnectionLostError(reason=error) from error
 
     async def write_frame(self, frame: AnyClientFrame) -> None:
-        await self._send(dump_frame(frame))
+        await self._send(encode_frame(frame))
 
     async def send_heartbeat(self) -> None:
         await self._send(NEWLINE)
 
     async def read_frames(self) -> AsyncGenerator[AnyServerFrame, None]:
         while True:
-            if not self._pending:
-                try:
-                    chunk = await self._reader.read(self._chunk_size)
-                except OSError as error:
-                    raise ConnectionLostError(reason=error) from error
-                if not chunk:
-                    raise ConnectionLostError(reason="eof")
-                self.last_received_at = time.monotonic()
-                self._pending.extend(cast("Iterator[AnyServerFrame]", self._parser.parse_frames_from_chunk(chunk)))
-            while self._pending:
-                yield self._pending.popleft()
+            # Keep the iterator on the transport so a new reader can resume it.
+            # Deliver each frame before decoding later, potentially invalid bytes.
+            for frame in self._pending:
+                if not isinstance(frame, AnyServerFrame):
+                    raise ProtocolError(reason="server sent a client command")
+                yield frame
+            try:
+                chunk = await self._reader.read(self._chunk_size)
+            except OSError as error:
+                raise ConnectionLostError(reason=error) from error
+            if not chunk:
+                self._parser.finish()
+                raise ConnectionLostError(reason="eof")
+            self.last_received_at = time.monotonic()
+            self._pending = self._parser.feed(chunk)
 
     async def close(self) -> None:
         self._writer.close()
@@ -74,4 +84,4 @@ class TcpTransport:
 async def connect_tcp(server: Server, settings: ConnectionSettings) -> Transport:
     async with asyncio.timeout(settings.timeout):
         reader, writer = await asyncio.open_connection(server.host, server.port, ssl=settings.tls or None)
-    return TcpTransport(reader, writer, settings.read_chunk_size)
+    return TcpTransport(reader, writer, settings.read_chunk_size, settings.frame_limits)

@@ -6,45 +6,20 @@ flushes a decided prefix, so a later ACK cannot acknowledge an earlier handler.
 """
 
 import asyncio
-import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from .acknowledgement import Acknowledgement, Decision
 from .capacity import Completion
 from .config import Confirmation
 from .errors import ConnectionLostError
-from .frames import AckFrame, MessageFrame, NackFrame
+from .frames import MessageFrame
 from .session import Session
-
-LOGGER = logging.getLogger("stompman")
-
-
-class Decision(Enum):
-    ACCEPT = auto()
-    REJECT = auto()
 
 
 class Pending(Enum):
     DECISION = auto()
-
-
-class MissingAcknowledgement(Enum):
-    HEADER = auto()
-
-
-@dataclass(frozen=True, slots=True)
-class Acknowledgement:
-    id: str
-
-    def __post_init__(self) -> None:
-        if not self.id:
-            msg = "acknowledgement id must not be empty"
-            raise ValueError(msg)
-
-    def frame(self, decision: Decision, subscription_id: str) -> AckFrame | NackFrame:
-        frame_type = AckFrame if decision is Decision.ACCEPT else NackFrame
-        return frame_type(headers={"id": self.id, "subscription": subscription_id})
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +36,7 @@ class AutomaticSettlement:
 @dataclass(frozen=True, slots=True, eq=False)
 class ManualSettlement:
     owner: "ManualAcknowledgements"
-    acknowledgement: Acknowledgement | MissingAcknowledgement
+    acknowledgement: Acknowledgement
     completed: Completion
 
     async def settle(self, *, accepted: bool) -> None:
@@ -97,8 +72,7 @@ class ManualAcknowledgements:
         self._writing = asyncio.Lock()
 
     def register(self, frame: MessageFrame, completed: Completion) -> ManualSettlement:
-        ack_id = frame.headers.get("ack")
-        acknowledgement = Acknowledgement(ack_id) if ack_id else MissingAcknowledgement.HEADER
+        acknowledgement = self._session.acknowledgement(frame, self._subscription_id, self._confirmation)
         settlement = ManualSettlement(self, acknowledgement, completed)
         self._pending[settlement] = Pending.DECISION
         return settlement
@@ -147,11 +121,7 @@ class ManualAcknowledgements:
         try:
             if self._session.ended.done():
                 return
-            acknowledgement = settlement.acknowledgement
-            if isinstance(acknowledgement, MissingAcknowledgement):
-                LOGGER.warning("failed to settle message frame: it has no ack header")
-                return
-            await self._session.write(acknowledgement.frame(decision, self._subscription_id), self._confirmation)
+            await settlement.acknowledgement.send(decision)
         except ConnectionLostError:
             pass
         finally:

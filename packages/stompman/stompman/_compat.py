@@ -8,6 +8,7 @@ from datetime import timedelta
 from ssl import SSLContext
 from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
+from ._legacy_protocol import LegacyProtocol
 from .config import ConnectionParameters, Heartbeat
 from .connection import AbstractConnection, Connection
 from .core.config import (
@@ -198,7 +199,13 @@ class LegacyOptions:
                 await transport.close()
                 raise
 
-        return Runtime(config, transport_factory=connect, on_error_frame=self._dispatch_error, server_source=servers)
+        return Runtime(
+            config,
+            transport_factory=connect,
+            on_error_frame=self._dispatch_error,
+            server_source=servers,
+            protocol=LegacyProtocol(),
+        )
 
     def _dispatch_error(self, frame: ErrorFrame) -> None:
         if self.on_error_frame:

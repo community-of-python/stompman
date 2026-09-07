@@ -3,6 +3,7 @@ import asyncio
 import pytest
 import stompman
 from stompman.core import Runtime
+from stompman.core.errors import FailedAllConnectAttemptsError, HandshakeRejected
 
 from test_stompman.conftest import ScriptedBroker, wait_until
 
@@ -36,17 +37,18 @@ async def test_handshake_failure_closes_every_candidate(
     broker: ScriptedBroker, response: stompman.AnyServerFrame | None
 ) -> None:
     broker.handshakes["localhost"] = response
-    with pytest.raises(stompman.FailedAllConnectAttemptsError) as info:
+    with pytest.raises(FailedAllConnectAttemptsError) as info:
         await broker.runtime(connection_confirmation_timeout=0.001).start()
     assert info.value.retry_attempts == 3
     assert len(info.value.issues) == 3
-    assert all(isinstance(issue, stompman.ConnectionConfirmationTimeout) for issue in info.value.issues)
+    expected = stompman.ConnectionConfirmationTimeout if response is None else HandshakeRejected
+    assert all(isinstance(issue, expected) for issue in info.value.issues)
     assert all(connection.closed for connection in broker.connections)
 
 
 async def test_unsupported_version(broker: ScriptedBroker) -> None:
     broker.handshakes["localhost"] = stompman.ConnectedFrame(headers={"version": "1.0"})
-    with pytest.raises(stompman.FailedAllConnectAttemptsError) as info:
+    with pytest.raises(FailedAllConnectAttemptsError) as info:
         await broker.runtime(connect_retry_attempts=1).start()
     assert info.value.issues == [stompman.UnsupportedProtocolVersion(given_version="1.0", supported_version="1.2")]
     assert broker.current.closed
@@ -55,7 +57,7 @@ async def test_unsupported_version(broker: ScriptedBroker) -> None:
 async def test_failed_start_can_be_retried(broker: ScriptedBroker) -> None:
     broker.available = False
     runtime = broker.runtime()
-    with pytest.raises(stompman.FailedAllConnectAttemptsError):
+    with pytest.raises(FailedAllConnectAttemptsError):
         await runtime.start()
     assert runtime.status.state == "closed"
     broker.available = True

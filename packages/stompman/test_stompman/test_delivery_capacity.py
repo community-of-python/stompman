@@ -143,7 +143,7 @@ async def test_missing_ack_preserves_cumulative_order_without_holding_capacity(
     async def handle(delivery: Delivery) -> None:
         received.append(delivery)
 
-    async with broker.runtime() as runtime:
+    async with broker.client().core as runtime:
         subscription = await runtime.subscribe("q", handle, ack="client")
         broker.current.deliver(subscription.id, b"missing")
         broker.current.deliver(subscription.id, b"valid", ack_id="valid")

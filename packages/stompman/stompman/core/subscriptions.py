@@ -119,6 +119,7 @@ class Subscription:
     def receive(self, frame: MessageFrame, session: Session) -> None:
         state = self._state
         if isinstance(state, (Active, Installing)) and state.session is session:
+            session.validate_delivery(frame, self.ack)
             state.channel.admit(frame)
 
     def pause(self) -> None:
@@ -173,6 +174,7 @@ class Subscription:
         if isinstance(self._state, Rejected):
             raise self._state.error
         if self._state is attempt:
+            attempt.session.check()
             self._state = Active(attempt.session, attempt.channel)
 
     async def _cleanup(self, session: Session) -> None:

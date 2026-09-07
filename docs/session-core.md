@@ -31,6 +31,8 @@ flowchart TD
     Recovery --> Session
     Recovery --> Connector
     Connector --> Handshake[NegotiatedConnection]
+    Handshake --> Protocol[STOMP 1.2 rules]
+    Session --> Protocol
     Deliveries --> Session
     Session --> Transport[Transport interface]
     Transport --> TCP[Native TCP]
@@ -39,6 +41,7 @@ flowchart TD
     Commands --> Receipts
     Deliveries --> Capacity
     Deliveries --> Settlement
+    Settlement --> Acknowledgement[Session-bound acknowledgement]
     TCP --> Codec[Core frames and codec]
 ```
 
@@ -48,15 +51,18 @@ flowchart TD
 | --- | --- | --- |
 | `Runtime` | Start, close, send, subscribe, begin, status | Complete running resources; draining handlers can still publish and settle |
 | `Connector` / `NegotiatedConnection` | Connect, close | Handshake success before construction; every losing connection is closed |
+| `Stomp12` / `validation` | Negotiate, validate commands and deliveries | STOMP 1.2 direction, required headers, heartbeat negotiation, contextual ACK requirements |
 | `ConnectionSupervisor` | Run a submission, reconnect, attach/detach restoration intent | Retry spacing, generation changes, consistent journal restoration |
-| `Session` | Create a command, write, close | One negotiated transport and reader, write order, heartbeats, deterministic cleanup |
+| `Session` | Create a command, write, close | One negotiated transport and reader; terminal ERROR; DISCONNECT is the final write; deterministic cleanup |
 | `Commands` / `Command` | Submit, complete, cancel | Owned execution and receipt lifetime; callers never need a separate command cleanup step |
-| `Receipts` | Reserve, receive, discard, fail | Exact receipt correlation; retire correlations before rejection observers |
-| `FrameParser` | Parse a chunk | Command, headers, and body are distinct phases; completed frames own their headers |
+| `Receipts` | Reserve, receive, reject, discard, fail | Exact correlation; only a matching ERROR rejects an operation; retire correlations before observers |
+| `FrameDecoder` | Feed bytes, finish at EOF | Strict incremental framing, byte limits, escapes, exact body length and terminator |
+| `FrameParser` | Parse a chunk | Historical tolerant parser, explicitly used by legacy transports |
 | `Subscriptions` / `Subscription` | Subscribe, receive, restore, unsubscribe | Immutable intent, explicit waiting/installing/active/removing/removed states, callback ordering, safe ID reuse |
 | `Deliveries` / `Channel` | Admit, pause, drain | Handler scheduling and channel lifetime |
 | `Capacity` / `Reservation` | Reserve, finish handler, finish settlement | Admission stays charged until both owners finish exactly once |
 | `ManualAcknowledgements` | Register, settle, finish | Ordered ACK/NACK on the original session; queue membership means unsettled |
+| `MessageAcknowledgement` | Send a decision | Required ACK identifier and original session; native missing IDs fail before admission |
 | `Transaction` | Enter, send, commit, abort | Immutable journal entries, typed open/committing/finished states, ambiguous commit handling |
 
 Start reading with `core/runtime.py`: it composes the owners and describes the
@@ -64,7 +70,8 @@ application lifecycle. Follow a publication through `recovery.py` and `command.p
 the command owns the asynchronous work and exposes just submission and completion.
 Then read `subscriptions.py` for installation and recovery, `delivery.py` for handler
 execution, and `transaction.py` for the journal. `session.py`, `handshake.py`, and
-`connector.py` contain the transport lifecycle. Capacity and settlement details
+`connector.py` contain the transport lifecycle. `protocol.py` owns STOMP rules,
+`codec.py` owns byte framing, and `validation.py` owns frame semantics. Capacity and settlement details
 stay in their own modules and do not spread into facade methods.
 
 Transactions and subscriptions implement the same small restoration interface.
@@ -75,8 +82,11 @@ The generation gate covers session acquisition, restoration, transport submissio
 and the corresponding journal update. Normal receipt waits happen after releasing
 the gate, allowing unrelated commands to finish in any receipt order. Restoring a
 session waits for subscription confirmations before allowing new submissions.
-A command succeeds only after both transport drain and its exact receipt succeed;
-a receipt arriving before a stalled drain cannot hide a write timeout.
+A command normally waits for both transport drain and its exact receipt. A stalled
+drain remains bounded by the operation deadline. If terminal connection failure
+interrupts drain after the exact receipt has arrived, that broker result is retained.
+It completes both command milestones. A subscription additionally checks that its
+session is still usable before becoming active.
 
 A capacity reservation gives the handler and settlement separate idempotent
 completion capabilities. Capacity is released when both finish. Queued deliveries, running handlers, and
@@ -92,11 +102,12 @@ If a cumulative ACK/NACK sequence is interrupted, its original session is retire
 This allows the broker to redeliver later messages whose decisions were already
 queued, without replaying an acknowledgement with an unknown outcome.
 
-The incremental parser retains one line or body buffer. Header and body phases
-require a recognized command, so there are no partially initialized combinations
-of command and parsing flags. Both LF and CRLF heartbeats survive chunk boundaries.
-Malformed content lengths use the existing delimiter-based fallback, including
-negative lengths, so they cannot consume all following frames.
+The native incremental decoder retains one line or body buffer. Header and body
+phases require a recognized command. Both LF and CRLF heartbeats survive chunk
+boundaries. Body bytes are copied in chunks, including binary bodies with embedded
+NUL. Frames are yielded in wire order: malformed later input cannot hide an earlier
+valid receipt in the same TCP read. The legacy parser retains its historical
+delimiter fallback for malformed content lengths.
 
 An open transaction appends immutable entries under the generation gate; finished
 transactions retain a frozen snapshot. A rejected SEND removes its own entry in
@@ -154,6 +165,41 @@ processing. A timeout includes transport submission and receipt waiting after a
 connection becomes available. Confirmed publication never retries an ambiguous
 write automatically.
 
+These confirmed defaults are library policy. STOMP 1.2 makes receipt requests
+optional for ordinary commands, and recommends requesting and waiting for a receipt
+when disconnecting gracefully. Native graceful close does this by default, with a
+two-second deadline. Once DISCONNECT is submitted, the session permits no more
+client frames or heartbeats, even while its receipt is pending.
+
+Native connections implement and advertise STOMP 1.2 only. Decoding rejects
+undefined escapes, invalid UTF-8 headers, malformed or negative content lengths,
+incorrect NUL terminators, bodies on commands other than SEND/MESSAGE/ERROR, and
+incomplete frames at EOF. Header names remain case-sensitive, and the first repeated
+header wins. Values may be empty, unknown extension headers are preserved, and
+recommended headers such as `ERROR.message` remain optional. Required headers and
+command direction are checked before dispatch; manually acknowledged messages need
+an `ack` header before delivery can reserve capacity.
+
+`ConnectionSettings.frame_limits` bounds incomplete input as well as completed
+frames. `FrameLimits` defaults to 1,024 headers, 16 KiB per command/header line,
+64 KiB of header bytes, and 64 MiB per body. Limits count encoded wire bytes;
+header line endings count toward the aggregate header limit. Applications can
+raise these positive bounds explicitly when their broker requires larger frames.
+
+STOMP requires the server to close after ERROR. A session treats it as terminal
+immediately, blocks writes, notifies observers, and closes its transport. A matching
+`receipt-id` produces `ReceiptRejectedError` for that operation. Other pending
+operations receive `ConnectionLostError` with a `BrokerError` cause because their
+outcomes are unknown. Already received confirmations remain successful. This also
+applies to legacy sessions. Artemis can omit the recommended `receipt-id` on ERROR;
+the library does not infer correlation from the message text or pending count.
+
+Native handshake diagnostics distinguish rejection (`HandshakeRejected`), malformed
+protocol (`MalformedHandshake`), disconnect (`HandshakeDisconnected`), unsupported
+version, and timeout. `FailedAllConnectAttemptsError.issues` preserves these causes.
+See the [STOMP 1.2 specification](https://stomp.github.io/stomp-specification-1.2.html)
+for the wire requirements.
+
 `Unconfirmed(attempts=3)` explicitly selects write-only delivery with bounded
 retries and possible duplicates. The default `Unconfirmed()` makes one attempt.
 A subscription's `confirmation` controls installation and restoration;
@@ -190,6 +236,11 @@ Normal Client context exit waits for subscriptions
 to be removed. `_compat.LegacyOptions` translates old flat options into native
 configuration and explicitly chooses unconfirmed operation policies. The core
 contains no legacy fallback detection.
+
+`_legacy_protocol.LegacyProtocol` selects historical handshake diagnostics and frame
+tolerance, including missing-ACK logging. Its transport uses the original parser
+and serializer. The legacy public connection-issue unions retain their original
+variants; native handshake outcomes do not widen existing consumers' types.
 
 Legacy subscription handlers and callbacks are consulted at execution time.
 Destination, headers, IDs, and server lists produce fresh immutable core snapshots
@@ -252,6 +303,10 @@ path. Both paths cover publication, handlers, replies, restart, and shutdown.
 Differential probes and permanent compatibility regressions compare constructors,
 mutation, typing, defaults, and exception payloads with the pre-core implementation.
 Integration suites use both asyncio backends and both brokers.
+Independent wire examples cover strict decoding and fragmented input. TCP peers
+send ERROR, invalid escapes, wrong-direction commands, and oversized incomplete
+headers, then verify socket closure with no subsequent client bytes. Regressions
+also cover receipt-before-failure ordering and DISCONNECT during heartbeat activity.
 
 Set `STOMPMAN_ARTEMIS_PORT` and `STOMPMAN_CLASSIC_PORT` before Docker Compose and
 pytest when using isolated broker ports. Run `scripts/wait_for_stomp_brokers.py`

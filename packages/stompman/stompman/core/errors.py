@@ -18,6 +18,35 @@ class ConnectionLostError(Error):
     reason: Exception | str
 
 
+@dataclass(kw_only=True)
+class ProtocolError(Error):
+    """A peer frame or an outgoing operation violates STOMP 1.2."""
+
+    reason: str
+
+
+@dataclass(kw_only=True)
+class BrokerError(Error):
+    """ERROR ends a session; unrelated operations have an unknown outcome."""
+
+    frame: ErrorFrame = field(repr=False)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class HandshakeRejected:
+    frame: ErrorFrame = field(repr=False)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class MalformedHandshake:
+    error: ProtocolError
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class HandshakeDisconnected:
+    error: ConnectionLostError
+
+
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ConnectionConfirmationTimeout:
     timeout: float
@@ -40,8 +69,19 @@ class AllServersUnavailable:
     timeout: float
 
 
-StompProtocolConnectionIssue = ConnectionConfirmationTimeout | UnsupportedProtocolVersion
+StompProtocolConnectionIssue = (
+    ConnectionConfirmationTimeout
+    | UnsupportedProtocolVersion
+    | HandshakeRejected
+    | MalformedHandshake
+    | HandshakeDisconnected
+)
 AnyConnectionIssue = StompProtocolConnectionIssue | ConnectionLostOnLifespanEnter | AllServersUnavailable
+
+
+@dataclass(kw_only=True)
+class HandshakeFailedError(Exception):
+    issue: StompProtocolConnectionIssue
 
 
 @dataclass(kw_only=True)

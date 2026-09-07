@@ -68,7 +68,8 @@ async def test_receipts_match_exact_id(broker: ScriptedBroker, monkeypatch: pyte
     original_write = broker.connection_class.write_frame
 
     async def write(connection: ScriptedConnection, frame: stompman.AnyClientFrame) -> None:
-        connection.incoming.put_nowait(stompman.ReceiptFrame(headers={"receipt-id": "unrelated"}))
+        if isinstance(frame, stompman.SendFrame):
+            connection.incoming.put_nowait(stompman.ReceiptFrame(headers={"receipt-id": "unrelated"}))
         await original_write(connection, frame)
 
     monkeypatch.setattr(broker.connection_class, "write_frame", write)
@@ -178,6 +179,6 @@ def test_core_dependency_direction() -> None:
 
 async def test_malformed_server_heartbeat_fails_without_a_busy_loop(broker: ScriptedBroker) -> None:
     broker.heartbeat = "-1,1"
-    with pytest.raises(stompman.FailedAllConnectAttemptsError):
+    with pytest.raises(stompman.core.errors.FailedAllConnectAttemptsError):
         await broker.runtime(connect_retry_attempts=1).start()
     assert broker.current.closed

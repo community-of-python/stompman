@@ -55,6 +55,11 @@ class Command:
                 return await receipt.result
         except TimeoutError as error:
             raise ReceiptTimeoutError(receipt_id=receipt.id, timeout=confirmation.timeout) from error
+        except ConnectionLostError:
+            # A broker result settles the command even if shutdown interrupts drain.
+            if receipt.result.done() and not receipt.result.cancelled():
+                return receipt.result.result()
+            raise
         finally:
             self._owner.receipts.discard(receipt)
 
@@ -65,10 +70,13 @@ class Command:
                 self._submitted.cancel()
             return
         error = task.exception()
-        if not self._submitted.done() and error is not None:
-            self._submitted.set_exception(error)
-            # Completion may be the only waiter; both milestones carry the error.
-            self._submitted.exception()
+        if not self._submitted.done():
+            if error is None:
+                self._submitted.set_result(None)
+            else:
+                self._submitted.set_exception(error)
+                # Completion may be the only waiter; both milestones carry the error.
+                self._submitted.exception()
 
     async def submit(self) -> None:
         """Wait for drain, leaving receipt completion independent of the caller."""
@@ -112,7 +120,6 @@ class Commands:
         self._active.discard(command)
 
     async def close(self) -> None:
+        """Drain results after Session has failed receipts and interrupted writes."""
         commands = tuple(self._active)
-        for command in commands:
-            command.cancel()
         await asyncio.gather(*(command.complete() for command in commands), return_exceptions=True)

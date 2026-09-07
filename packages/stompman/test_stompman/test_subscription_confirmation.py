@@ -91,7 +91,6 @@ async def test_subscribe_waits_for_matching_receipt(
         assert frame.headers["receipt"] != "caller-owned"
         assert frame.headers.get("selector") == headers["selector"]
         connection.incoming.put_nowait(stompman.ReceiptFrame(headers={"receipt-id": "unrelated"}))
-        connection.incoming.put_nowait(stompman.ErrorFrame(headers={"message": "unrelated", "receipt-id": "unrelated"}))
         await write_finished(client)
         await asyncio.sleep(0)
         assert not task.done()
@@ -208,7 +207,7 @@ async def test_concurrent_subscription_rejection_does_not_remove_confirmed_subsc
     if correlated:
         error_headers["receipt-id"] = rejected.headers["receipt"]
     connection.incoming.put_nowait(stompman.ErrorFrame(headers=error_headers))
-    with pytest.raises(stompman.SubscriptionError, match="rejected"):
+    with pytest.raises(stompman.SubscriptionError, match="rejected" if correlated else "connection_lost"):
         await failed
     assert registered_ids(client) == [healthy.id]
     connection.incoming.put_nowait(stompman.ConnectionLostError(reason="peer closed"))

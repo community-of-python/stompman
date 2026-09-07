@@ -5,21 +5,19 @@ from dataclasses import dataclass
 from .config import ConnectionParameters
 from .core.errors import AllServersUnavailable as NativeAllServersUnavailable
 from .core.errors import (
-    AnyConnectionIssue,
     ConnectionConfirmationTimeout,
     ConnectionLostError,
     ConnectionLostOnLifespanEnter,
     ConsumerOverloadedError,
     Error,
-    FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
     ReceiptRejectedError,
     ReceiptTimeoutError,
-    StompProtocolConnectionIssue,
     SubscriptionError,
     TransactionOutcomeUnknownError,
     UnsupportedProtocolVersion,
 )
+from .core.errors import FailedAllConnectAttemptsError as NativeFailedAllConnectAttemptsError
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -28,6 +26,15 @@ class AllServersUnavailable(NativeAllServersUnavailable):
     # diagnostic deliberately contains only native Server objects.
     servers: list[ConnectionParameters]  # type: ignore[assignment]
     timeout: int
+
+
+StompProtocolConnectionIssue = ConnectionConfirmationTimeout | UnsupportedProtocolVersion
+AnyConnectionIssue = StompProtocolConnectionIssue | ConnectionLostOnLifespanEnter | AllServersUnavailable
+
+
+@dataclass(kw_only=True)
+class FailedAllConnectAttemptsError(NativeFailedAllConnectAttemptsError):
+    issues: list[AnyConnectionIssue]  # type: ignore[assignment]
 
 
 __all__ = [

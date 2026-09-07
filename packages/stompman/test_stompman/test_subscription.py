@@ -141,7 +141,7 @@ async def test_missing_ack_header_is_logged_and_not_sent(
     async def handler(delivery: Delivery) -> None:
         await delivery.ack()
 
-    async with broker.runtime() as runtime:
+    async with broker.client().core as runtime:
         sub = await runtime.subscribe("q", handler)
         broker.current.deliver(sub.id, b"one")
         await wait_until(lambda: "no ack header" in caplog.text)
@@ -280,7 +280,8 @@ async def test_handler_limit_keeps_receipts_and_errors_responsive(broker: Script
         await wait_until(lambda: bool(errors))
         release.set()
         await wait_until(lambda: runtime.status.pending_messages == 0)
-        assert runtime.status.generation == 1
+        await wait_until(lambda: runtime.status.generation == 2)
+        assert broker.connections[0].closed
 
 
 @pytest.mark.parametrize(("capacity", "bytes_limit"), [(1, 1000), (10, 1)])

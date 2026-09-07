@@ -92,6 +92,21 @@ DEFAULT_CONFIRMATION = Confirmed()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class FrameLimits:
+    header_count: int = 1024
+    line_bytes: int = 16 * 1024
+    header_bytes: int = 64 * 1024
+    body_bytes: int = 64 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        for name in ("header_count", "line_bytes", "header_bytes", "body_bytes"):
+            positive_integer(name, getattr(self, name))
+
+
+DEFAULT_FRAME_LIMITS = FrameLimits()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ConnectionSettings:
     timeout: float = 2.0
     handshake_timeout: float = 2.0
@@ -102,6 +117,7 @@ class ConnectionSettings:
     heartbeat: Heartbeat = Heartbeat(1000, 1000)
     heartbeat_tolerance: float = 3.0
     idle_timeout: float = math.inf
+    frame_limits: FrameLimits = FrameLimits()
 
     def __post_init__(self) -> None:
         for name in ("timeout", "handshake_timeout", "heartbeat_tolerance"):

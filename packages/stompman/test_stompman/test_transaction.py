@@ -101,7 +101,7 @@ async def test_commit_receipt_timeout_is_unknown(broker: ScriptedBroker) -> None
     broker.receipts = False
     async with broker.runtime() as runtime:
         with pytest.raises(stompman.TransactionOutcomeUnknownError) as info:
-            async with runtime.begin(confirmation=Unconfirmed(), commit_confirmation=Confirmed(0.001)) as transaction:
+            async with runtime.begin(confirmation=Unconfirmed(), commit_confirmation=Confirmed(0.05)) as transaction:
                 await transaction.send(b"accepted", "q")
         assert isinstance(info.value.reason, stompman.ReceiptTimeoutError)
         assert transaction.state is TransactionState.UNCERTAIN

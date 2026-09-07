@@ -14,6 +14,7 @@ from .connector import Connector
 from .delivery import Deliveries, Delivery
 from .errors import SubscriptionError
 from .frames import AckMode, AnyClientFrame, AnyServerFrame, ErrorFrame, MessageFrame, ReceiptFrame, SendFrame
+from .protocol import STOMP_12, Stomp12
 from .recovery import Connected, ConnectionSupervisor, Failed, Restoring
 from .session import Session
 from .subscriptions import Subscription, Subscriptions, SubscriptionSpec, log_subscription_error
@@ -67,10 +68,15 @@ class Runtime:
         transport_factory: TransportFactory = connect_tcp,
         on_error_frame: Callable[[ErrorFrame], Any] = log_error_frame,
         server_source: Callable[[], tuple[Server, ...]] | None = None,
+        protocol: Stomp12 = STOMP_12,
     ) -> None:
+        protocol.validate_settings(config.connection)
         self._config = config
         self._connector = Connector(
-            (lambda: config.servers) if server_source is None else server_source, config.connection, transport_factory
+            (lambda: config.servers) if server_source is None else server_source,
+            config.connection,
+            transport_factory,
+            protocol,
         )
         self._on_error = on_error_frame
         self._state: Stopped | Running | Draining = Stopped(0)

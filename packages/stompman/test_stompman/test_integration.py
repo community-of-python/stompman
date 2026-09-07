@@ -75,7 +75,7 @@ async def test_consumption_survives_forced_reconnects(
 
 
 @pytest.mark.anyio
-async def test_receipt_rejection_does_not_replay_subscription(
+async def test_failed_confirmation_does_not_replay_subscription(
     connection_parameters: stompman.ConnectionParameters,
 ) -> None:
     error_frames: list[stompman.ErrorFrame] = []
@@ -89,7 +89,7 @@ async def test_receipt_rejection_does_not_replay_subscription(
     async with stompman.Client(
         servers=[connection_parameters], on_error_frame=error_frames.append, connection_confirmation_timeout=10
     ) as client:
-        with pytest.raises(stompman.SubscriptionError, match="rejected"):
+        with pytest.raises(stompman.SubscriptionError) as failure:
             await client.subscribe_with_manual_ack(
                 destination,
                 handle_message,
@@ -97,6 +97,11 @@ async def test_receipt_rejection_does_not_replay_subscription(
                 headers={"selector": "colour = ("},
                 receipt_timeout=3,
             )
+        assert len(error_frames) == 1
+        # Artemis omits the recommended receipt-id on this ERROR. Its terminal
+        # failure cannot establish which pending operation the broker rejected.
+        expected = "rejected" if error_frames[0].headers.get("receipt-id") else "connection_lost"
+        assert failure.value.reason == expected
         assert not client.core.status.subscription_ids
         assert not client.core.status.pending_receipts
         await force_reconnect(client)

@@ -361,7 +361,7 @@ async def test_confirmation_timeout_also_bounds_transport_write(
         connect_retry_attempts=1, connection_confirmation_timeout=0.01, disconnect_confirmation_timeout=0.01
     )
     if frame_type is stompman.ConnectFrame:
-        with pytest.raises(stompman.FailedAllConnectAttemptsError):
+        with pytest.raises(stompman.core.errors.FailedAllConnectAttemptsError):
             await asyncio.wait_for(runtime.start(), timeout=1)
     else:
         await runtime.start()
