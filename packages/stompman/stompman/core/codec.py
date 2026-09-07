@@ -13,8 +13,8 @@ from .frames import (
     AbortFrame,
     AckFrame,
     AnyClientFrame,
-    AnyRealServerFrame,
-    AnyServerFrame,
+    AnyCommandFrame,
+    AnyFrame,
     BeginFrame,
     CommitFrame,
     ConnectedFrame,
@@ -51,7 +51,7 @@ HEADER_UNESCAPE_CHARS: Final = {
     BACKSLASH: BACKSLASH,
 }
 
-COMMANDS_TO_FRAMES: Final[dict[bytes, type[AnyClientFrame | AnyServerFrame]]] = {
+COMMANDS_TO_FRAMES: Final[dict[bytes, type[AnyCommandFrame]]] = {
     b"SEND": SendFrame,
     b"SUBSCRIBE": SubscribeFrame,
     b"UNSUBSCRIBE": UnsubscribeFrame,
@@ -82,7 +82,7 @@ def dump_header(key: str, value: str) -> bytes:
     return f"{escaped_key}:{escaped_value}\n".encode()
 
 
-def dump_frame(frame: AnyClientFrame | AnyRealServerFrame) -> bytes:
+def dump_frame(frame: AnyCommandFrame) -> bytes:
     headers = sorted(frame.headers.items())
     dumped_headers = (
         (f"{key}:{value}\n".encode() for key, value in headers)
@@ -124,7 +124,7 @@ def parse_header(buffer: bytearray, *, unescape: bool = True) -> tuple[str, str]
     return None
 
 
-def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: bytes) -> AnyClientFrame | AnyServerFrame:
+def make_frame_from_parts(*, command: bytes, headers: dict[str, str], body: bytes) -> AnyCommandFrame:
     frame_type = COMMANDS_TO_FRAMES[command]
     typed_headers = cast("Any", headers)
     if frame_type in FRAMES_WITH_BODY:
@@ -205,7 +205,7 @@ class FrameDecoder:
             return end, None
         return end + 1, self._line(state)
 
-    def _body(self, state: _Body, chunk: bytes, offset: int) -> tuple[int, AnyClientFrame | AnyServerFrame | None]:
+    def _body(self, state: _Body, chunk: bytes, offset: int) -> tuple[int, AnyCommandFrame | None]:
         end = chunk.find(b"\x00", offset) if state.length is None else offset + state.length - len(self._buffer)
         if end < 0 or end >= len(chunk):
             end = len(chunk)
@@ -222,10 +222,11 @@ class FrameDecoder:
         self._state = _CommandLine.WAITING
         return end + 1, frame
 
-    def feed(self, chunk: bytes) -> Iterator[AnyClientFrame | AnyServerFrame]:
+    def feed(self, chunk: bytes) -> Iterator[AnyFrame]:
         offset = 0
         while offset < len(chunk):
             state = self._state
+            frame: AnyFrame | None
             if isinstance(state, _Body):
                 offset, frame = self._body(state, chunk, offset)
             else:

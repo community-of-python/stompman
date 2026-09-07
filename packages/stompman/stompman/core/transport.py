@@ -9,7 +9,7 @@ from typing import Protocol
 from .codec import NEWLINE, FrameDecoder, encode_frame
 from .config import DEFAULT_FRAME_LIMITS, ConnectionSettings, FrameLimits, Server
 from .errors import ConnectionLostError, ProtocolError
-from .frames import AnyClientFrame, AnyServerFrame
+from .frames import AnyClientFrame, AnyFrame, AnyServerFrame
 
 
 class Transport(Protocol):
@@ -40,7 +40,7 @@ class TcpTransport:
         self._writer = writer
         self._chunk_size = chunk_size
         self._parser = FrameDecoder(limits)
-        self._pending: Iterator[AnyClientFrame | AnyServerFrame] = iter(())
+        self._pending: Iterator[AnyFrame] = iter(())
         self.last_received_at = time.monotonic()
 
     async def _send(self, data: bytes) -> None:

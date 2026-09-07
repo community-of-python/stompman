@@ -119,6 +119,42 @@ class LegacyOptions:
     def confirmation(self, timeout: float | None) -> Confirmation:
         return Unconfirmed(self.write_retry_attempts) if timeout is None else Confirmed(timeout)
 
+    def _connection_settings(self) -> ConnectionSettings:
+        defaults = ConnectionSettings()
+        return ConnectionSettings(
+            # The legacy transport enforces the original deadlines, including
+            # expired ones. Native configuration keeps valid positive bounds.
+            timeout=self.connect_timeout if self.connect_timeout > 0 else defaults.timeout,
+            handshake_timeout=self.connection_confirmation_timeout
+            if self.connection_confirmation_timeout > 0
+            else defaults.handshake_timeout,
+            disconnect=Confirmed(self.disconnect_confirmation_timeout)
+            if self.disconnect_confirmation_timeout > 0
+            else Unconfirmed(),
+            protocol_version=self.PROTOCOL_VERSION,
+            read_chunk_size=self.read_max_chunk_size,
+            tls=self.ssl or False,
+            heartbeat=self.heartbeat,
+            heartbeat_tolerance=self.check_server_alive_interval_factor,
+            idle_timeout=self.no_message_restart_interval.total_seconds()
+            if self.no_message_restart_interval is not None
+            else math.inf,
+        )
+
+    def _delivery_limits(self) -> DeliveryLimits:
+        concurrency: int | Unbounded | Paused
+        if self.max_concurrent_handlers is None:
+            concurrency = Unbounded()
+        elif self.max_concurrent_handlers == 0:
+            concurrency = Paused()
+        else:
+            concurrency = self.max_concurrent_handlers
+        return DeliveryLimits(
+            concurrency=concurrency,
+            pending_messages=Unbounded() if self.max_pending_messages is None else self.max_pending_messages,
+            pending_bytes=Unbounded() if self.max_pending_bytes is None else self.max_pending_bytes,
+        )
+
     def to_config(self) -> RuntimeConfig:
         if self.connect_retry_attempts <= 0:
             raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=[])
@@ -128,42 +164,15 @@ class LegacyOptions:
                 issues=[AllServersUnavailable(servers=self.servers, timeout=self.connect_timeout)]
                 * self.connect_retry_attempts,
             )
-        defaults = ConnectionSettings()
         return RuntimeConfig(
             tuple(server_from_legacy(server) for server in self.servers),
-            connection=ConnectionSettings(
-                # The legacy transport enforces the original deadlines, including
-                # expired ones. Native configuration keeps valid positive bounds.
-                timeout=self.connect_timeout if self.connect_timeout > 0 else defaults.timeout,
-                handshake_timeout=self.connection_confirmation_timeout
-                if self.connection_confirmation_timeout > 0
-                else defaults.handshake_timeout,
-                disconnect=Confirmed(self.disconnect_confirmation_timeout)
-                if self.disconnect_confirmation_timeout > 0
-                else Unconfirmed(),
-                protocol_version=self.PROTOCOL_VERSION,
-                read_chunk_size=self.read_max_chunk_size,
-                tls=self.ssl or False,
-                heartbeat=self.heartbeat,
-                heartbeat_tolerance=self.check_server_alive_interval_factor,
-                idle_timeout=self.no_message_restart_interval.total_seconds()
-                if self.no_message_restart_interval is not None
-                else math.inf,
-            ),
+            connection=self._connection_settings(),
             recovery=RecoveryPolicy(
                 attempts=self.connect_retry_attempts,
                 delay=self.connect_retry_interval,
                 keep_trying=self.keep_alive_on_connection_failure,
             ),
-            delivery=DeliveryLimits(
-                concurrency=Unbounded()
-                if self.max_concurrent_handlers is None
-                else Paused()
-                if self.max_concurrent_handlers == 0
-                else self.max_concurrent_handlers,
-                pending_messages=Unbounded() if self.max_pending_messages is None else self.max_pending_messages,
-                pending_bytes=Unbounded() if self.max_pending_bytes is None else self.max_pending_bytes,
-            ),
+            delivery=self._delivery_limits(),
         )
 
     def to_runtime(

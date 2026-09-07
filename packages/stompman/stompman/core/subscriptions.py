@@ -75,6 +75,9 @@ class Installing:
     command: Command
 
 
+_Installed = Active | Installing
+
+
 @dataclass(frozen=True, slots=True)
 class Rejected:
     error: SubscriptionError
@@ -90,7 +93,7 @@ class Subscription:
         self._source = source
         self._spec = source()
         self._owner = owner
-        self._state: Dormant | Active | Installing | Rejected | Removing = Dormant.NEW
+        self._state: Dormant | _Installed | Rejected | Removing = Dormant.NEW
 
     @property
     def spec(self) -> SubscriptionSpec:
@@ -118,23 +121,23 @@ class Subscription:
 
     def receive(self, frame: MessageFrame, session: Session) -> None:
         state = self._state
-        if isinstance(state, (Active, Installing)) and state.session is session:
+        if isinstance(state, _Installed) and state.session is session:
             session.validate_delivery(frame, self.ack)
             state.channel.admit(frame)
 
     def pause(self) -> None:
-        if isinstance(self._state, (Active, Installing)):
+        if isinstance(self._state, _Installed):
             self._state.channel.pause()
 
     def disconnected(self, session: Session) -> None:
         state = self._state
-        if isinstance(state, (Active, Installing)) and state.session is session:
+        if isinstance(state, _Installed) and state.session is session:
             state.channel.close()
             if isinstance(state, Active):
                 self._state = Dormant.WAITING_FOR_SESSION
 
     def _remove(self, state: Dormant | Rejected) -> None:
-        if isinstance(self._state, (Active, Installing)):
+        if isinstance(self._state, _Installed):
             self._state.channel.close()
         self._state = state
         self._owner.remove(self)

@@ -54,7 +54,7 @@ AckHeaders = TypedDict(
     "AckHeaders",
     {
         "receipt": NotRequired[str],
-        "subscription": str,
+        "subscription": NotRequired[str],
         "id": str,
         "transaction": NotRequired[str],
         "content-length": NotRequired[str],
@@ -64,7 +64,7 @@ NackHeaders = TypedDict(
     "NackHeaders",
     {
         "receipt": NotRequired[str],
-        "subscription": str,
+        "subscription": NotRequired[str],
         "id": str,
         "transaction": NotRequired[str],
         "content-length": NotRequired[str],
@@ -122,7 +122,7 @@ MessageHeaders = TypedDict(
 ErrorHeaders = TypedDict(
     "ErrorHeaders",
     {
-        "message": str,
+        "message": NotRequired[str],
         "receipt-id": NotRequired[str],
         "content-length": NotRequired[str],
         "content-type": NotRequired[str],
@@ -258,3 +258,6 @@ AnyClientFrame = (
 )
 AnyRealServerFrame = ConnectedFrame | MessageFrame | ReceiptFrame | ErrorFrame
 AnyServerFrame = AnyRealServerFrame | HeartbeatFrame
+AnyBodyFrame = SendFrame | MessageFrame | ErrorFrame
+AnyCommandFrame = AnyClientFrame | AnyRealServerFrame
+AnyFrame = AnyClientFrame | AnyServerFrame

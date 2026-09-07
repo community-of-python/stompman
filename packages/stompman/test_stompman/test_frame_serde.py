@@ -270,7 +270,7 @@ def test_parse_header_rejects_unescaped_colon_in_value() -> None:
             [
                 ConnectedFrame(headers={"accept-version": "1.0"}),  # type: ignore[typeddict-item]
                 HeartbeatFrame(),
-                ErrorFrame(headers={"header": "1.0"}, body="ç".encode()),  # type: ignore[typeddict-item]
+                ErrorFrame(headers={"header": "1.0"}, body="ç".encode()),  # type: ignore[typeddict-unknown-key]
                 HeartbeatFrame(),
             ],
         ),

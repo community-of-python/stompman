@@ -64,7 +64,7 @@ class Session:
         self._tasks: list[asyncio.Task[None]] = []
         self._close_state: Literal[SessionPhase.OPEN] | Closing = SessionPhase.OPEN
         self._outbound = SessionPhase.OPEN
-        self._last_received = self._last_message = self._last_sent = time.monotonic()
+        self._last_message = self._last_sent = time.monotonic()
 
         self._tasks.append(asyncio.create_task(self._read(receive), name="stomp-reader"))
         if self.heartbeat.want_to_receive_interval_ms or math.isfinite(self._settings.idle_timeout):
@@ -106,9 +106,9 @@ class Session:
     def is_alive(self) -> bool:
         if self.ended.done() or self._outbound is SessionPhase.TERMINAL:
             return False
-        last_received = max(self._last_received, self.transport.last_received_at)
         receive = self.heartbeat.want_to_receive_interval_ms / 1000
-        return not receive or time.monotonic() - last_received < receive * self._settings.heartbeat_tolerance
+        elapsed = time.monotonic() - self.transport.last_received_at
+        return not receive or elapsed < receive * self._settings.heartbeat_tolerance
 
     def validate_delivery(self, frame: MessageFrame, ack: AckMode) -> None:
         self._connection.protocol.delivery(frame, ack)
@@ -124,7 +124,6 @@ class Session:
     async def _read(self, receive: Callable[[AnyServerFrame, "Session"], None]) -> None:
         try:  # ruff: ignore[too-many-statements-in-try-clause]
             async for frame in self._connection.frames:
-                self._last_received = time.monotonic()
                 self._connection.protocol.incoming(frame)
                 if isinstance(frame, ErrorFrame):
                     self._broker_error(frame, receive)
@@ -132,7 +131,7 @@ class Session:
                 if isinstance(frame, ReceiptFrame):
                     self.receipts.receive(frame)
                 if isinstance(frame, MessageFrame):
-                    self._last_message = self._last_received
+                    self._last_message = time.monotonic()
                 receive(frame, self)
                 if self.ended.done():
                     return

@@ -65,7 +65,7 @@ async def test_error_closes_session_and_preserves_command_outcomes(correlation: 
     async with connection() as (peer, session):
         commands = [asyncio.create_task(session.write(SendFrame(headers={"destination": "q"}))) for _ in range(2)]
         sent = [await peer.outgoing.get(), await peer.outgoing.get()]
-        frame = ErrorFrame(headers={})  # type: ignore[typeddict-item]
+        frame = ErrorFrame(headers={})
         if correlation != "absent":
             frame.headers["receipt-id"] = (
                 str(sent[0].headers.get("receipt")) if correlation == "matched" else "unrelated"

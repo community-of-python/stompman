@@ -245,19 +245,18 @@ class ConnectionManager:
         raise FailedAllWriteAttemptsError(retry_attempts=self.write_retry_attempts)
 
     async def observe_transport(self, transport: "LegacyTransport", server: ConnectionParameters) -> "Transport":
-        lifespan = self.lifespan_factory(
-            connection=transport.connection,
-            connection_parameters=server,
-            set_heartbeat_interval=lambda _heartbeat: None,
-        )
+        lifespan = self._lifespan(transport, server)
         return ObservedTransport(transport, transport, lifespan, self)
 
-    async def _enter_lifespan(self, transport: "LegacyTransport", server: ConnectionParameters) -> "Transport":
-        lifespan = self.lifespan_factory(
+    def _lifespan(self, transport: "LegacyTransport", server: ConnectionParameters) -> "AbstractConnectionLifespan":
+        return self.lifespan_factory(
             connection=transport.connection,
             connection_parameters=server,
             set_heartbeat_interval=lambda _heartbeat: None,
         )
+
+    async def _enter_lifespan(self, transport: "LegacyTransport", server: ConnectionParameters) -> "Transport":
+        lifespan = self._lifespan(transport, server)
         result: EstablishedConnectionResult | StompProtocolConnectionIssue | ConnectionLostError
         try:
             result = await lifespan.enter()

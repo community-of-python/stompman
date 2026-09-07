@@ -52,13 +52,12 @@ class Connected:
     since: float
 
 
+_SessionConnection = Restoring | Connected
+
+
 @dataclass(frozen=True, slots=True)
 class Failed:
     error: Exception
-
-
-@dataclass(frozen=True, slots=True)
-class Closed: ...
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -83,10 +82,10 @@ class ConnectionSupervisor:
         self.generation = generation
         self._connector = connector
         self._receive = receive
-        self._state: Disconnected | Restoring | Connected | Failed | Closed = Disconnected(0)
+        self._state: Disconnected | _SessionConnection | Failed = Disconnected(0)
         self._gate = asyncio.Lock()
-        self._stopping = asyncio.Event()
-        self._acquisitions: set[asyncio.Task[Session]] = set()
+        self._closed = False
+        self._acquisition: asyncio.Task[Session] | None = None
         self._resources: dict[tuple[str, str], Restorable] = {}
 
     def is_alive(self) -> bool:
@@ -99,13 +98,18 @@ class ConnectionSupervisor:
             phase = "failed"
         elif isinstance(state, Connected) and not state.session.ended.done():
             phase = "connected"
+        heartbeat, pending_receipts, writing = Heartbeat(0, 0), 0, False
+        if isinstance(state, _SessionConnection):
+            heartbeat = state.session.heartbeat
+            pending_receipts = state.session.receipts.pending_count
+            writing = state.session.writing
         return ConnectionSnapshot(
             state=phase,
             generation=self.generation,
-            heartbeat=state.session.heartbeat if isinstance(state, (Restoring, Connected)) else Heartbeat(0, 0),
+            heartbeat=heartbeat,
             failure=state.error if isinstance(state, Failed) else None,
-            pending_receipts=state.session.receipts.pending_count if isinstance(state, (Restoring, Connected)) else 0,
-            writing=state.session.writing if isinstance(state, (Restoring, Connected)) else False,
+            pending_receipts=pending_receipts,
+            writing=writing,
         )
 
     def attach(self, resource: Restorable) -> None:
@@ -129,40 +133,48 @@ class ConnectionSupervisor:
 
     async def _discard(self) -> None:
         state = self._state
-        if isinstance(state, (Restoring, Connected)):
+        if isinstance(state, _SessionConnection):
             self._state = Disconnected(state.since + self.config.recovery.delay)
             for resource in tuple(self._resources.values()):
                 resource.disconnected(state.session)
             await state.session.close()
 
-    async def _acquire(self) -> Session:
-        if self._stopping.is_set() or isinstance(self._state, Closed):
-            msg = "runtime is not running"
-            raise RuntimeError(msg)
-        if isinstance(self._state, Failed):
-            raise self._state.error
-        if isinstance(self._state, Connected):
-            if not self._state.session.ended.done():
-                return self._state.session
-            failure = self._state.session.ended.result()
+    def _current(self) -> Session | None:
+        state = self._state
+        if isinstance(state, Failed):
+            raise state.error
+        if isinstance(state, Connected):
+            if not state.session.ended.done():
+                return state.session
+            failure = state.session.ended.result()
             if not isinstance(failure, (ConnectionLostError, OSError)):
                 raise failure
+        return None
+
+    async def _acquire(self) -> Session:
+        if self._closed:
+            msg = "runtime is not running"
+            raise RuntimeError(msg)
+        current = self._current()
+        if current is not None:
+            return current
         await self._discard()
-        if self._stopping.is_set():
+        if self._closed:
             msg = "runtime closed during connection acquisition"
             raise RuntimeError(msg)
         task = asyncio.create_task(self._connect_ready(), name="stomp-acquisition")
-        self._acquisitions.add(task)
+        self._acquisition = task
         cancellation = Cancellation.capture()
         try:
             return await task
         except asyncio.CancelledError as error:
-            if self._stopping.is_set() and not cancellation.requested:
+            if self._closed and not cancellation.requested:
                 msg = "runtime closed during connection acquisition"
                 raise RuntimeError(msg) from error
             raise
         finally:
-            self._acquisitions.discard(task)
+            if self._acquisition is task:
+                self._acquisition = None
 
     async def _connect_ready(self) -> Session:
         issues: list[AnyConnectionIssue] = []
@@ -203,7 +215,7 @@ class ConnectionSupervisor:
         """Finish a command on the current session without opening a replacement."""
         async with self._gate:
             state = self._state
-            if self._stopping.is_set() or not isinstance(state, Connected) or state.session.ended.done():
+            if self._closed or not isinstance(state, Connected) or state.session.ended.done():
                 return False
             command = await state.session.submit(frame, confirmation)
         await command.complete()
@@ -262,18 +274,19 @@ class ConnectionSupervisor:
     async def close(self, *, graceful: bool) -> None:
         # Acquisition is owned work: shutdown can cancel it without cancelling
         # an application task that happened to request a reconnect or publication.
-        self._stopping.set()
-        if isinstance(self._state, (Restoring, Connected)) and self._state.session.writing:
+        self._closed = True
+        if isinstance(self._state, _SessionConnection) and self._state.session.writing:
             self._state.session.fail(ConnectionLostError(reason="runtime closed during transport write"))
-        for task in self._acquisitions:
-            task.cancel()
-        await asyncio.gather(*self._acquisitions, return_exceptions=True)
+        acquisition = self._acquisition
+        if acquisition is not None:
+            acquisition.cancel()
+            await asyncio.gather(acquisition, return_exceptions=True)
         async with self._gate:
             try:
-                if isinstance(self._state, (Restoring, Connected)):
+                if isinstance(self._state, _SessionConnection):
                     await self._state.session.close(graceful=graceful)
             finally:
                 for resource in tuple(self._resources.values()):
                     resource.retire()
                 self._resources.clear()
-                self._state = Closed()
+                self._state = Disconnected(0)

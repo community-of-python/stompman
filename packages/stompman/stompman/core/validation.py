@@ -6,13 +6,13 @@ from .errors import ProtocolError
 from .frames import (
     AbortFrame,
     AckFrame,
+    AnyBodyFrame,
     AnyClientFrame,
-    AnyRealServerFrame,
+    AnyCommandFrame,
     BeginFrame,
     CommitFrame,
     ConnectedFrame,
     ConnectFrame,
-    ErrorFrame,
     MessageFrame,
     NackFrame,
     ReceiptFrame,
@@ -22,7 +22,7 @@ from .frames import (
     UnsubscribeFrame,
 )
 
-REQUIRED_HEADERS: Mapping[type[AnyClientFrame | AnyRealServerFrame], tuple[str, ...]] = {
+REQUIRED_HEADERS: Mapping[type[AnyCommandFrame], tuple[str, ...]] = {
     ConnectFrame: ("accept-version", "host"),
     StompFrame: ("accept-version", "host"),
     ConnectedFrame: ("version",),
@@ -37,6 +37,8 @@ REQUIRED_HEADERS: Mapping[type[AnyClientFrame | AnyRealServerFrame], tuple[str, 
     MessageFrame: ("destination", "message-id", "subscription"),
     ReceiptFrame: ("receipt-id",),
 }
+_LITERAL_HEADER_FRAMES = (ConnectFrame, ConnectedFrame)
+_ACK_MODES = frozenset({"auto", "client", "client-individual"})
 
 
 def content_length(headers: Mapping[str, object]) -> int | None:
@@ -58,33 +60,36 @@ def require_header(headers: Mapping[str, object], name: str) -> str:
     return value
 
 
-def validate_frame(frame: AnyClientFrame | AnyRealServerFrame) -> None:
-    for key, value in frame.headers.items():
-        if not isinstance(key, str) or not isinstance(value, str) or not key or "\x00" in key or "\x00" in value:
-            raise ProtocolError(reason="headers require a nonempty UTF-8 name and a value without NUL")
-        try:
-            key.encode("utf-8")
-            value.encode("utf-8")
-        except UnicodeEncodeError as error:
-            raise ProtocolError(reason="header is not valid UTF-8") from error
-        if isinstance(frame, (ConnectFrame, ConnectedFrame)) and (
-            any(char in key for char in "\r\n:") or any(char in value for char in "\r\n")
-        ):
-            raise ProtocolError(reason="CONNECT and CONNECTED headers cannot contain line delimiters")
-    for name in REQUIRED_HEADERS.get(type(frame), ()):
-        require_header(frame.headers, name)
-    if isinstance(frame, SubscribeFrame) and frame.headers.get("ack", "auto") not in {
-        "auto",
-        "client",
-        "client-individual",
-    }:
-        raise ProtocolError(reason="unsupported acknowledgement mode")
+def _validate_header(name: object, value: object, *, literal: bool) -> None:
+    if not isinstance(name, str) or not isinstance(value, str) or not name or "\x00" in name or "\x00" in value:
+        raise ProtocolError(reason="headers require a nonempty UTF-8 name and a value without NUL")
+    try:
+        name.encode()
+        value.encode()
+    except UnicodeEncodeError as error:
+        raise ProtocolError(reason="header is not valid UTF-8") from error
+    if literal and (any(char in name for char in "\r\n:") or any(char in value for char in "\r\n")):
+        raise ProtocolError(reason="CONNECT and CONNECTED headers cannot contain line delimiters")
+
+
+def _validate_body(frame: AnyCommandFrame) -> None:
+    body = frame.body if isinstance(frame, AnyBodyFrame) else b""
     length = content_length(frame.headers)
-    body = frame.body if isinstance(frame, (SendFrame, MessageFrame, ErrorFrame)) else b""
     if length is not None and length != len(body):
         raise ProtocolError(reason="content-length must equal the body octet count")
-    if b"\x00" in body and length is None:
+    if length is None and b"\x00" in body:
         raise ProtocolError(reason="a body containing NUL requires content-length")
+
+
+def validate_frame(frame: AnyCommandFrame) -> None:
+    literal = isinstance(frame, _LITERAL_HEADER_FRAMES)
+    for name, value in frame.headers.items():
+        _validate_header(name, value, literal=literal)
+    for name in REQUIRED_HEADERS.get(type(frame), ()):
+        require_header(frame.headers, name)
+    if isinstance(frame, SubscribeFrame) and frame.headers.get("ack", "auto") not in _ACK_MODES:
+        raise ProtocolError(reason="unsupported acknowledgement mode")
+    _validate_body(frame)
 
 
 def validate_outgoing(frame: AnyClientFrame) -> None:

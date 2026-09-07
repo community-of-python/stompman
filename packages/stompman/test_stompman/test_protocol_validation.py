@@ -66,14 +66,14 @@ def test_session_frames_require_the_correct_command_and_headers(frame: AnyServer
 
 
 def test_recommended_headers_are_optional_and_extensions_are_preserved() -> None:
-    error = ErrorFrame(headers={})  # type: ignore[typeddict-item]
+    error = ErrorFrame(headers={})
     Stomp12.incoming(error)
     Stomp12.incoming(ReceiptFrame(headers={"receipt-id": ""}))
-    assert encode_frame(AckFrame(headers={"id": "opaque-id"})) == b"ACK\nid:opaque-id\n\n\x00"  # type: ignore[typeddict-item]
+    assert encode_frame(AckFrame(headers={"id": "opaque-id"})) == b"ACK\nid:opaque-id\n\n\x00"
     frame = SendFrame(headers={"destination": "q"})
     frame.headers["broker-extension"] = "  literal spaces  "  # type: ignore[typeddict-unknown-key]
     assert b"broker-extension:  literal spaces  \n" in encode_frame(frame)
-    assert encode_frame(AckFrame(headers={"id": ""})) == b"ACK\nid:\n\n\x00"  # type: ignore[typeddict-item]
+    assert encode_frame(AckFrame(headers={"id": ""})) == b"ACK\nid:\n\n\x00"
 
 
 def test_native_sessions_only_advertise_implemented_protocol_versions() -> None:
@@ -90,7 +90,7 @@ def test_native_sessions_only_advertise_implemented_protocol_versions() -> None:
     [
         (None, ConnectionConfirmationTimeout),
         (HeartbeatFrame(), ConnectionConfirmationTimeout),
-        (ErrorFrame(headers={}), HandshakeRejected),  # type: ignore[typeddict-item]
+        (ErrorFrame(headers={}), HandshakeRejected),
         (ConnectedFrame(headers={}), MalformedHandshake),  # type: ignore[typeddict-item]
         (ConnectedFrame(headers={"version": "1.2", "heart-beat": " 1,1"}), MalformedHandshake),
         (ConnectedFrame(headers={"version": "1.2", "heart-beat": "1,-1"}), MalformedHandshake),

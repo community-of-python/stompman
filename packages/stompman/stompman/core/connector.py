@@ -5,7 +5,7 @@ the winner is being selected or the caller is being cancelled.
 """
 
 import asyncio
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ._tasks import await_cleanup
@@ -21,9 +21,15 @@ class Unavailable:
     issues: tuple[AnyConnectionIssue, ...]
 
 
-async def close_connections(connections: Iterable[NegotiatedConnection]) -> None:
-    """Finish every close before propagating a cleanup failure."""
-    outcomes = await asyncio.gather(*(connection.close() for connection in connections), return_exceptions=True)
+async def _finish_attempts(
+    tasks: list[asyncio.Task[NegotiatedConnection | Unavailable]], winner: NegotiatedConnection | None
+) -> None:
+    """Cancel unfinished attempts and close every connection except the winner."""
+    for task in tasks:
+        task.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    losers = (item for item in results if isinstance(item, NegotiatedConnection) and item is not winner)
+    outcomes = await asyncio.gather(*(connection.close() for connection in losers), return_exceptions=True)
     for outcome in outcomes:
         if isinstance(outcome, BaseException):
             raise outcome
@@ -62,15 +68,6 @@ class Connector:
         winner: NegotiatedConnection | None = None
         issues: list[AnyConnectionIssue] = []
 
-        async def cleanup() -> None:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            await close_connections(
-                item for item in results if isinstance(item, NegotiatedConnection) and item is not winner
-            )
-
         try:
             for completed in asyncio.as_completed(tasks):
                 result = await completed
@@ -80,7 +77,7 @@ class Connector:
                 issues.extend(result.issues)
         finally:
             try:
-                await await_cleanup(cleanup())
+                await await_cleanup(_finish_attempts(tasks, winner))
             except BaseException:
                 if winner is not None:
                     await await_cleanup(winner.close())

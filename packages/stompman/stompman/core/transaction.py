@@ -79,11 +79,7 @@ class Transaction:
         self._confirmation = confirmation
         self._commit_confirmation = commit_confirmation
         self._lock = asyncio.Lock()
-        self._replay: Callable[[], tuple[JournalEntry, ...]]
-        if replay_source is None:
-            self._replay = lambda: self._journal
-        else:
-            self._replay = lambda: tuple(JournalEntry.from_frame(frame) for frame in replay_source())
+        self._replay_source = replay_source
 
     @property
     def id(self) -> str:
@@ -104,6 +100,10 @@ class Transaction:
     @property
     def _journal(self) -> tuple[JournalEntry, ...]:
         return () if self._state is TransactionState.NEW else tuple(self._state.journal)
+
+    def _replay(self) -> tuple[JournalEntry, ...]:
+        source = self._replay_source
+        return self._journal if source is None else tuple(JournalEntry.from_frame(frame) for frame in source())
 
     @property
     def key(self) -> tuple[str, str]:
