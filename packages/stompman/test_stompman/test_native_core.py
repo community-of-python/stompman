@@ -279,6 +279,64 @@ async def test_unsubscribe_waits_for_already_requested_settlements(
 
 
 @pytest.mark.anyio
+async def test_recovery_reports_ready_only_after_restoration_finishes(
+    broker: ScriptedBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entering = asyncio.Event()
+    release = asyncio.Event()
+    original_write = broker.connection_class.write_frame
+    deliveries: asyncio.Queue[Delivery] = asyncio.Queue()
+
+    async with broker.runtime() as runtime:
+        first = broker.current
+        subscription = await runtime.subscribe("q", deliveries.put)
+
+        async def write(connection: ScriptedConnection, frame: stompman.AnyClientFrame) -> None:
+            if connection is not first and isinstance(frame, stompman.SubscribeFrame):
+                entering.set()
+                await release.wait()
+            await original_write(connection, frame)
+
+        monkeypatch.setattr(broker.connection_class, "write_frame", write)
+        broker.receipts = False
+        reconnect = asyncio.create_task(runtime.reconnect())
+        try:
+            await entering.wait()
+            assert runtime.status.state == "recovering"
+            assert runtime.status.generation == 1
+            assert not runtime.is_alive()
+            assert runtime.status.writing
+
+            release.set()
+            await wait_until(lambda: subscription.id in broker.current.subscriptions and not runtime.status.writing)
+            assert runtime.status.state == "recovering"
+            assert runtime.status.generation == 1
+            assert not runtime.is_alive()
+            assert runtime.status.pending_receipts == 1
+
+            restored = broker.current.subscriptions[subscription.id]
+            broker.current.incoming.put_nowait(
+                stompman.ReceiptFrame(headers={"receipt-id": restored.headers["receipt"]})
+            )
+            await reconnect
+            ready = runtime.status
+            assert ready.state == "connected"
+            assert ready.generation == 2
+            assert runtime.is_alive()
+            assert ready.pending_receipts == 0
+
+            broker.receipts = True
+            broker.current.deliver(subscription.id, b"restored", ack_id="restored")
+            delivery = await deliveries.get()
+            await delivery.ack()
+        finally:
+            release.set()
+            broker.receipts = True
+            reconnect.cancel()
+            await asyncio.gather(reconnect, return_exceptions=True)
+
+
+@pytest.mark.anyio
 async def test_close_cancels_owned_reconnection_without_leaking_transport(broker: ScriptedBroker) -> None:
     from stompman._compat import LegacyTransportFactory  # ruff: ignore[import-outside-top-level]
     from stompman.core import Runtime  # ruff: ignore[import-outside-top-level]

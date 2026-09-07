@@ -41,6 +41,12 @@ class Disconnected:
 
 
 @dataclass(frozen=True, slots=True)
+class Restoring:
+    session: Session
+    since: float
+
+
+@dataclass(frozen=True, slots=True)
 class Connected:
     session: Session
     since: float
@@ -67,19 +73,19 @@ class ConnectionSupervisor:
         self.generation = generation
         self._factory = factory
         self._receive = receive
-        self._state: Disconnected | Connected | Failed | Closed = Disconnected(0)
+        self._state: Disconnected | Restoring | Connected | Failed | Closed = Disconnected(0)
         self._gate = asyncio.Lock()
         self._stopping = asyncio.Event()
         self._acquisitions: set[asyncio.Task[Session]] = set()
         self._resources: dict[tuple[str, str], Restorable] = {}
 
     @property
-    def state(self) -> Disconnected | Connected | Failed | Closed:
+    def state(self) -> Disconnected | Restoring | Connected | Failed | Closed:
         return self._state
 
     @property
     def heartbeat(self) -> Heartbeat:
-        return self._state.session.heartbeat if isinstance(self._state, Connected) else Heartbeat(0, 0)
+        return self._state.session.heartbeat if isinstance(self._state, (Restoring, Connected)) else Heartbeat(0, 0)
 
     def is_alive(self) -> bool:
         return isinstance(self._state, Connected) and self._state.session.is_alive()
@@ -131,7 +137,7 @@ class ConnectionSupervisor:
 
     async def _discard(self) -> None:
         state = self._state
-        if isinstance(state, Connected):
+        if isinstance(state, (Restoring, Connected)):
             self._state = Disconnected(state.since + self.config.recovery.delay)
             for resource in tuple(self._resources.values()):
                 resource.disconnected(state.session)
@@ -177,10 +183,12 @@ class ConnectionSupervisor:
             if isinstance(result, list):
                 issues.extend(result)
             else:
-                self.generation = result.generation
-                self._state = Connected(result, time.monotonic())
+                restoring = Restoring(result, time.monotonic())
+                self._state = restoring
                 result.start(self._receive)
                 if await self._restore(result):
+                    self.generation = result.generation
+                    self._state = Connected(result, restoring.since)
                     return result
                 issues.append(ConnectionLostOnLifespanEnter())
             if attempt + 1 < self.config.recovery.attempts:
@@ -279,14 +287,14 @@ class ConnectionSupervisor:
         # Acquisition is owned work: shutdown can cancel it without cancelling
         # an application task that happened to request a reconnect or publication.
         self._stopping.set()
-        if isinstance(self._state, Connected) and self._state.session.writing:
+        if isinstance(self._state, (Restoring, Connected)) and self._state.session.writing:
             self._state.session.fail(ConnectionLostError(reason="runtime closed during transport write"))
         for task in self._acquisitions:
             task.cancel()
         await asyncio.gather(*self._acquisitions, return_exceptions=True)
         async with self._gate:
             try:
-                if isinstance(self._state, Connected):
+                if isinstance(self._state, (Restoring, Connected)):
                     await self._state.session.close(graceful=graceful)
             finally:
                 for resource in tuple(self._resources.values()):

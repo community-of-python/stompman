@@ -13,7 +13,7 @@ from .config import DEFAULT_CONFIRMATION, Confirmation, Confirmed, Heartbeat, Ru
 from .delivery import Deliveries, Delivery
 from .errors import SubscriptionError
 from .frames import AckMode, AnyServerFrame, ErrorFrame, MessageFrame, ReceiptFrame, SendFrame
-from .recovery import Connected, ConnectionSupervisor, Failed
+from .recovery import Connected, ConnectionSupervisor, Failed, Restoring
 from .session import Session
 from .subscriptions import Subscription, Subscriptions, SubscriptionSpec, log_subscription_error
 from .transaction import Transaction
@@ -94,8 +94,8 @@ class Runtime:
             deliveries.running_handlers,
             connection.error if isinstance(connection, Failed) else None,
             running.subscriptions.ids,
-            connection.session.receipts.pending_count if isinstance(connection, Connected) else 0,
-            connection.session.writing if isinstance(connection, Connected) else False,
+            connection.session.receipts.pending_count if isinstance(connection, (Restoring, Connected)) else 0,
+            connection.session.writing if isinstance(connection, (Restoring, Connected)) else False,
         )
 
     def _running(self) -> Running:

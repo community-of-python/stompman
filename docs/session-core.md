@@ -132,6 +132,9 @@ whether background recovery keeps trying after exhausting one cycle.
 `RuntimeStatus` exposes generation, health, pending message/byte counts, running
 handlers, subscription IDs, outstanding receipts, and active transport writes.
 Applications need not inspect internal session or subscription dictionaries.
+During restoration, status remains `recovering` and `is_alive()` is false.
+The generation advances only after restoration finishes; receipt and write
+diagnostics still describe the session being restored.
 
 ## Compatibility and FastStream
 
