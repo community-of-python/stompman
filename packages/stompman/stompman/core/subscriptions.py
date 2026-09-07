@@ -339,7 +339,7 @@ class Subscriptions:
         if subscription is not None:
             subscription.receive(frame, session)
 
-    def pause(self) -> None:
+    def stop(self) -> None:
         # Admission stays closed even if recovery replaces a channel while draining.
         self._accepting = False
         for subscription in self._items.values():

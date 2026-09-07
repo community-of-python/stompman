@@ -2,8 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Literal, Self, overload
@@ -51,7 +50,8 @@ class Running:
     connections: ConnectionSupervisor
     subscriptions: Subscriptions
     deliveries: Deliveries
-    workers: AbstractAsyncContextManager[None]
+    _group: asyncio.TaskGroup
+    _workers: tuple[asyncio.Task[None], asyncio.Task[None]]
 
     @classmethod
     async def open(
@@ -72,42 +72,31 @@ class Running:
 
         connections = ConnectionSupervisor(config, connector, receive, generation)
         subscriptions = Subscriptions(connections, deliveries)
-        workers = cls._workers(group, connections, deliveries)
         try:
             await connections.start()
-            await workers.__aenter__()
+            await group.__aenter__()
         except BaseException:
             await await_cleanup(connections.close(graceful=False))
             raise
-        return cls(connections, subscriptions, deliveries, workers)
-
-    @staticmethod
-    @asynccontextmanager
-    async def _workers(
-        group: asyncio.TaskGroup, connections: ConnectionSupervisor, deliveries: Deliveries
-    ) -> AsyncIterator[None]:
-        async with group:
-            workers = (
-                group.create_task(connections.supervise(), name="stomp-recovery"),
-                group.create_task(deliveries.dispatch(), name="stomp-delivery"),
-            )
-            try:
-                yield
-            finally:
-                for worker in workers:
-                    worker.cancel()
+        workers = (
+            group.create_task(connections.supervise(), name="stomp-recovery"),
+            group.create_task(deliveries.dispatch(), name="stomp-delivery"),
+        )
+        return cls(connections, subscriptions, deliveries, group, workers)
 
     async def close(self, *, graceful: bool, cancel_handlers: bool) -> None:
         failed = self.connections.snapshot().failure is not None
-        # Pausing every channel also removes its queued work; only running
-        # handlers remain, and they may still publish and settle while draining.
-        self.subscriptions.pause()
+        # Stop admission and discard queued work. Running handlers may still
+        # publish and settle before their subscriptions are removed.
+        self.subscriptions.stop()
         try:
             await self.deliveries.drain(cancel=cancel_handlers or not graceful or failed)
             await self.subscriptions.close()
         finally:
+            for worker in self._workers:
+                worker.cancel()
             try:
-                await self.workers.__aexit__(None, None, None)
+                await self._group.__aexit__(None, None, None)
             finally:
                 await await_cleanup(self.connections.close(graceful=graceful and not failed))
 

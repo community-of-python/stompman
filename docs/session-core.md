@@ -58,9 +58,9 @@ flowchart TD
 
 Start with `Runtime.start()` and `Runtime.close()` in `core/runtime.py`: they
 transition facade state and delegate the whole running lifetime to `Running`.
-`Running.open()` acquires a connection and starts the workers; `Running.close()`
-stops admission, drains handlers, unsubscribes, exits the worker group, and closes
-the connection. Worker handles stay inside that lifetime.
+`Running.open()` acquires a connection and starts its private worker group;
+`Running.close()` stops admission, drains handlers, unsubscribes, stops those
+workers, and closes the connection.
 
 Follow a publication through `ConnectionSupervisor.write()` in `recovery.py` and
 `Command` in `command.py`. The command owns asynchronous work and exposes just
