@@ -64,6 +64,32 @@ Use `reply_add_content_length` on `subscriber()` when automatic replies need a d
 are available for batch publishing and delayed `StompRoute`/`StompRoutePublisher` registrations. Per-call settings
 override publisher or subscriber reply defaults, which in turn override the broker default.
 
+### Confirming publication
+
+By default `publish()` returns once the frame has been written to the socket, which does not mean the broker
+accepted the message. Pass `receipt_timeout` to wait for the broker's STOMP `RECEIPT` instead. It follows the same precedence as
+`add_content_length`: per-call, then publisher, then broker default.
+
+```python
+broker = faststream_stomp.StompBroker(stompman.Client([server]), receipt_timeout=3.0)
+publisher = broker.publisher("events", receipt_timeout=5.0)
+
+await broker.publish("text message", "events", receipt_timeout=1.0)
+await publisher.publish("another message")
+```
+
+The default is `None` everywhere, which preserves the existing behavior. A failed confirmation raises
+`stompman.SendReceiptError` from `publish()`, with `reason` equal to `rejected`, `timeout`, or `connection_lost`.
+
+`timeout` and `connection_lost` are ambiguous outcomes: the broker may have accepted the message even though its
+receipt was lost. Nothing is replayed automatically: give each application event a stable ID and deduplicate in the
+broker or downstream consumer if you retry. `JMSCorrelationID` alone does not deduplicate anything. And a receipt only
+means the broker took ownership: it does not mean a consumer has processed the message.
+
+`receipt_timeout` is not available for batch publishing, which publishes inside a transaction: a receipt for a
+transactional `SEND` says nothing about whether the `COMMIT` succeeded. A broker or publisher default is ignored there
+rather than silently claiming confirmation.
+
 ### Caveats
 
 - When exception is raised in consumer handler, the message will be nacked (FastStream doesn't do this by default)

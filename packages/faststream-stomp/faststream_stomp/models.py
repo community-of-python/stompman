@@ -56,6 +56,7 @@ class StompPublishCommand(BatchPublishCommand):
         correlation_id: str | None = None,
         headers: dict[str, Any] | None = None,
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> None:
         super().__init__(
             body,
@@ -67,6 +68,7 @@ class StompPublishCommand(BatchPublishCommand):
             headers=headers,
         )
         self.add_content_length = add_content_length
+        self.receipt_timeout = receipt_timeout
 
     @classmethod
     def from_cmd(
@@ -75,10 +77,14 @@ class StompPublishCommand(BatchPublishCommand):
         *,
         batch: bool = False,  # noqa: ARG003
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> Self:
         messages = cmd.batch_bodies
-        if isinstance(cmd, StompPublishCommand) and cmd.add_content_length is not None:
-            add_content_length = cmd.add_content_length
+        if isinstance(cmd, StompPublishCommand):
+            if cmd.add_content_length is not None:
+                add_content_length = cmd.add_content_length
+            if cmd.receipt_timeout is not None:
+                receipt_timeout = cmd.receipt_timeout
         return cls(
             *messages,
             _publish_type=cmd.publish_type,
@@ -87,6 +93,7 @@ class StompPublishCommand(BatchPublishCommand):
             correlation_id=cmd.correlation_id,
             headers=cmd.headers,
             add_content_length=add_content_length,
+            receipt_timeout=receipt_timeout,
         )
 
 
@@ -137,6 +144,7 @@ class StompPublisherSpecificationConfig(_StompBasePublisherConfig, PublisherSpec
 class StompPublisherUsecaseConfig(_StompBasePublisherConfig, PublisherUsecaseConfig):
     _outer_config: BrokerConfigWithStompClient
     add_content_length: bool | None
+    receipt_timeout: float | None
 
     @property
     def full_destination(self) -> str:

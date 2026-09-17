@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from ssl import SSLContext
 from typing import Any, Literal, Self, TypeVar
+from unittest import mock
 
 import pytest
 import stompman
@@ -167,3 +168,61 @@ def enrich_expected_frames(
         stompman.DisconnectFrame(headers={"receipt": "receipt-id-1"}),
         stompman.ReceiptFrame(headers={"receipt-id": "receipt-id-1"}),
     ]
+
+
+Incoming = dict[int, asyncio.Queue[stompman.AnyServerFrame | stompman.ConnectionLostError]]
+Outgoing = asyncio.Queue[tuple[AbstractConnection, stompman.AnyClientFrame]]
+
+
+@pytest.fixture
+def incoming() -> Incoming:
+    return {}
+
+
+@pytest.fixture
+def outgoing() -> Outgoing:
+    return asyncio.Queue()
+
+
+@pytest.fixture
+async def client(
+    monkeypatch: pytest.MonkeyPatch, incoming: Incoming, outgoing: Outgoing
+) -> AsyncGenerator[stompman.Client, None]:
+    async def write_frame(  # ruff: ignore[unused-async]
+        connection: AbstractConnection, frame: stompman.AnyClientFrame
+    ) -> None:
+        queue = incoming.setdefault(id(connection), asyncio.Queue())
+        outgoing.put_nowait((connection, frame))
+        if isinstance(frame, stompman.ConnectFrame):
+            queue.put_nowait(stompman.ConnectedFrame(headers={"version": "1.2", "heart-beat": "1000,1000"}))
+        elif isinstance(frame, stompman.DisconnectFrame):
+            queue.put_nowait(stompman.ReceiptFrame(headers={"receipt-id": frame.headers["receipt"]}))
+
+    async def read_frames(connection: AbstractConnection) -> AsyncGenerator[stompman.AnyServerFrame, None]:
+        queue = incoming.setdefault(id(connection), asyncio.Queue())
+        while True:
+            frame = await queue.get()
+            if isinstance(frame, stompman.ConnectionLostError):
+                raise frame
+            yield frame
+
+    monkeypatch.setattr(BaseMockConnection, "write_frame", write_frame)
+    monkeypatch.setattr(BaseMockConnection, "read_frames", read_frames)
+    async with EnrichedClient(
+        connection_class=BaseMockConnection,
+        connect_retry_interval=0,
+        max_concurrent_handlers=1,
+        on_error_frame=mock.Mock(),
+    ) as instance:
+        try:
+            yield instance
+        finally:
+            for subscription in instance._active_subscriptions.get_all():
+                await subscription.unsubscribe()
+
+
+def remaining_frames(outgoing: Outgoing) -> list[stompman.AnyClientFrame]:
+    frames: list[stompman.AnyClientFrame] = []
+    while not outgoing.empty():
+        frames.append(outgoing.get_nowait()[1])
+    return frames

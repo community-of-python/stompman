@@ -26,6 +26,7 @@ class StompRoutePublisher(ArgsContainer):
         description_: str | None = None,
         include_in_schema: bool = True,
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> None:
         super().__init__(
             destination=destination,
@@ -34,6 +35,7 @@ class StompRoutePublisher(ArgsContainer):
             description_=description_,
             include_in_schema=include_in_schema,
             add_content_length=add_content_length,
+            receipt_timeout=receipt_timeout,
         )
 
 

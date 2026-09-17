@@ -31,10 +31,12 @@ class StompProducer(ProducerProto[StompPublishCommand]):
         client: stompman.Client,
         serializer: SerializerProto | None,
         add_content_length: bool = True,
+        receipt_timeout: float | None = None,
     ) -> None:
         self.client = client
         self.serializer = serializer
         self.add_content_length = add_content_length
+        self.receipt_timeout = receipt_timeout
         self.codec: CodecProto = DefaultCodec()
 
     async def publish(self, cmd: StompPublishCommand) -> None:
@@ -45,6 +47,7 @@ class StompProducer(ProducerProto[StompPublishCommand]):
             content_type=content_type,
             add_content_length=self._resolve_add_content_length(cmd),
             headers=_make_headers_for_publish(cmd),
+            receipt_timeout=self._resolve_receipt_timeout(cmd),
         )
 
     async def request(self, cmd: StompPublishCommand) -> NoReturn:
@@ -65,6 +68,9 @@ class StompProducer(ProducerProto[StompPublishCommand]):
 
     def _resolve_add_content_length(self, cmd: StompPublishCommand) -> bool:
         return self.add_content_length if cmd.add_content_length is None else cmd.add_content_length
+
+    def _resolve_receipt_timeout(self, cmd: StompPublishCommand) -> float | None:
+        return self.receipt_timeout if cmd.receipt_timeout is None else cmd.receipt_timeout
 
 
 def _make_headers_for_publish(cmd: StompPublishCommand) -> dict[str, str]:
@@ -102,7 +108,9 @@ class StompPublisher(PublisherUsecase):
     async def _publish(
         self, cmd: PublishCommand, *, _extra_middlewares: typing.Iterable[PublisherMiddleware[PublishCommand]]
     ) -> None:
-        publish_command = StompPublishCommand.from_cmd(cmd, add_content_length=self.config.add_content_length)
+        publish_command = StompPublishCommand.from_cmd(
+            cmd, add_content_length=self.config.add_content_length, receipt_timeout=self.config.receipt_timeout
+        )
         publish_command.destination = self.config.full_destination
         return typing.cast(
             "None",
@@ -118,6 +126,7 @@ class StompPublisher(PublisherUsecase):
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
             message,
@@ -126,6 +135,7 @@ class StompPublisher(PublisherUsecase):
             correlation_id=correlation_id,
             headers=headers,
             add_content_length=self.config.add_content_length if add_content_length is None else add_content_length,
+            receipt_timeout=self.config.receipt_timeout if receipt_timeout is None else receipt_timeout,
         )
         return typing.cast(
             "None",
@@ -141,6 +151,7 @@ class StompPublisher(PublisherUsecase):
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> Any:  # noqa: ANN401
         publish_command = StompPublishCommand(
             message,
@@ -149,6 +160,7 @@ class StompPublisher(PublisherUsecase):
             correlation_id=correlation_id,
             headers=headers,
             add_content_length=self.config.add_content_length if add_content_length is None else add_content_length,
+            receipt_timeout=self.config.receipt_timeout if receipt_timeout is None else receipt_timeout,
         )
         return await self._basic_request(publish_command, producer=self.config._outer_config.producer)
 

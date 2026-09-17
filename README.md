@@ -24,14 +24,10 @@ async with stompman.Client(
         stompman.ConnectionParameters(host="171.0.0.1", port=61616, login="user1", passcode="passcode1"),
         stompman.ConnectionParameters(host="172.0.0.1", port=61616, login="user2", passcode="passcode2"),
     ],
-
-
     # SSL — can be either `None` (default), `True`, or `ssl.SSLContext'
     ssl=None,
-
     # Error frame handler:
     on_error_frame=lambda error_frame: print(error_frame.body),
-
     # Optional parameters with sensible defaults:
     heartbeat=stompman.Heartbeat(will_send_interval_ms=1000, want_to_receive_interval_ms=1000),
     connect_retry_attempts=3,
@@ -81,6 +77,41 @@ async with client.begin() as transaction:
         await asyncio.sleep(0.1)
 ```
 
+#### Confirming sends
+
+By default `client.send()` returns once the frame has been written to the socket. That says nothing about whether the
+broker accepted it. Pass `receipt_timeout` to wait for the broker's
+[STOMP receipt](https://stomp.github.io/stomp-specification-1.2.html#RECEIPT) instead:
+
+```python
+await client.send(b"hi there!", destination="DLQ", headers={"persistent": "true"}, receipt_timeout=3.0)
+```
+
+The default `receipt_timeout=None` preserves the existing write-only behavior. A timeout must be finite and positive.
+It covers writing `SEND` and waiting for its receipt, after a connection is available. The client generates the
+`receipt` header itself, so passing your own `receipt` header with `receipt_timeout` is an error.
+
+A failure raises `stompman.SendReceiptError`, with `reason` equal to `rejected`, `timeout`, or `connection_lost`.
+Raw broker error frames are available through `error.frame`, but are excluded from the exception's representation.
+
+Only `rejected` is a definitive answer. On `timeout` and `connection_lost` the outcome is **ambiguous**: the frame is
+fully buffered before the socket is drained, so the broker may well have accepted the message even though the
+confirmation was lost. A confirmed send still waits for a connection through `connect_retry_attempts`, but the write
+itself is attempted exactly once: `write_retry_attempts` does not apply, because a connection can fail after the frame
+reached the broker and no connection type can tell the two apart. Nothing is silently replayed on a new connection —
+retrying is your decision. Give each application event a stable ID and deduplicate in the broker or downstream
+consumer; `JMSCorrelationID` alone does not deduplicate anything.
+
+A receipt means the broker took ownership of the message. It does not mean any consumer has received or processed it.
+
+Concurrent confirmed sends never consume each other's receipts, and a receipt is bound to the connection it was issued
+on, so a late receipt from a previous connection cannot confirm a newer send. An `ERROR` without `receipt-id` fails all
+pending confirmations on that connection, the same policy as subscriptions. Broker errors still reach the
+`on_error_frame` callback.
+
+Confirmation is not available for `transaction.send()`: a receipt for a transactional `SEND` says nothing about whether
+the `COMMIT` succeeded.
+
 ### Listening for Messages
 
 Now, let's subscribe to a destination and listen for messages:
@@ -125,7 +156,13 @@ await client.subscribe("DLQ", handle_message_from_dlq, ack="auto", on_suppressed
 You can pass custom headers to `client.subscribe()`:
 
 ```python
-await client.subscribe("DLQ", handle_message_from_dlq, ack="client", headers={"selector": "location = 'Europe'"}, on_suppressed_exception=print)
+await client.subscribe(
+    "DLQ",
+    handle_message_from_dlq,
+    ack="client",
+    headers={"selector": "location = 'Europe'"},
+    on_suppressed_exception=print,
+)
 ```
 
 #### Handling ACK/NACKs yourself
@@ -136,6 +173,7 @@ If you want to send ACK and NACK frames yourself, you can use `client.subscribe_
 async def handle_message_from_dlq(message_frame: stompman.AckableMessageFrame) -> None:
     print(message_frame.body)
     await message_frame.ack()
+
 
 await client.subscribe_with_manual_ack("DLQ", handle_message_from_dlq, ack="client")
 ```

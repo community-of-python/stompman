@@ -102,6 +102,7 @@ class StompBroker(
         graceful_timeout: float | None = 15.0,
         routers: Sequence[Registrator[stompman.MessageFrame]] = (),
         add_content_length: bool = True,
+        receipt_timeout: float | None = None,
         # Logging args
         logger: LoggerProto | None = EMPTY,
         log_level: int = logging.INFO,
@@ -129,6 +130,7 @@ class StompBroker(
                 client=client,
                 serializer=fd_config._serializer,
                 add_content_length=add_content_length,
+                receipt_timeout=receipt_timeout,
             ),
             client=client,
         )
@@ -199,6 +201,7 @@ class StompBroker(
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> None:
         publish_command = StompPublishCommand(
             message,
@@ -207,6 +210,7 @@ class StompBroker(
             correlation_id=correlation_id,
             headers=headers,
             add_content_length=add_content_length,
+            receipt_timeout=receipt_timeout,
         )
         return typing.cast("None", await self._basic_publish(publish_command, producer=self.config.producer))
 
@@ -218,6 +222,7 @@ class StompBroker(
         correlation_id: str | None = None,
         headers: dict[str, str] | None = None,
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> Any:  # noqa: ANN401
         publish_command = StompPublishCommand(
             message,
@@ -226,6 +231,7 @@ class StompBroker(
             correlation_id=correlation_id,
             headers=headers,
             add_content_length=add_content_length,
+            receipt_timeout=receipt_timeout,
         )
         return await self._basic_request(publish_command, producer=self.config.producer)
 

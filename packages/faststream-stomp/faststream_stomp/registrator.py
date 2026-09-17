@@ -74,11 +74,13 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         description_: str | None = None,
         include_in_schema: bool = True,
         add_content_length: bool | None = None,
+        receipt_timeout: float | None = None,
     ) -> StompPublisher:
         usecase_config = StompPublisherUsecaseConfig(
             _outer_config=self.config,  # type: ignore[arg-type]
             destination_without_prefix=destination,
             add_content_length=add_content_length,
+            receipt_timeout=receipt_timeout,
         )
         specification = StompPublisherSpecification(
             _outer_config=self.config,  # type: ignore[arg-type]

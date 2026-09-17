@@ -27,3 +27,9 @@ if typing.TYPE_CHECKING:
         await publisher.publish_batch("first", "second", add_content_length=True)
 
         broker.subscriber("destination", reply_add_content_length=False)
+
+    async def check_receipt_timeout_typing() -> None:
+        await broker.publish("message", "destination", receipt_timeout=1.0)
+
+        publisher = broker.publisher("destination", receipt_timeout=5.0)
+        await publisher.publish("message", receipt_timeout=1.0)

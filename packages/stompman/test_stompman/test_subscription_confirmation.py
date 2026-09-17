@@ -1,64 +1,23 @@
 import asyncio
-from collections.abc import AsyncGenerator, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest import mock
 
 import pytest
 import stompman
 from stompman.connection import AbstractConnection
 
-from test_stompman.conftest import BaseMockConnection, EnrichedClient, noop_message_handler
+from test_stompman.conftest import (
+    BaseMockConnection,
+    Incoming,
+    Outgoing,
+    noop_message_handler,
+    remaining_frames,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
 
 pytestmark = [pytest.mark.anyio, pytest.mark.timeout(10)]
-Incoming = dict[int, asyncio.Queue[stompman.AnyServerFrame | stompman.ConnectionLostError]]
-Outgoing = asyncio.Queue[tuple[AbstractConnection, stompman.AnyClientFrame]]
-
-
-@pytest.fixture
-def incoming() -> Incoming:
-    return {}
-
-
-@pytest.fixture
-def outgoing() -> Outgoing:
-    return asyncio.Queue()
-
-
-@pytest.fixture
-async def client(
-    monkeypatch: pytest.MonkeyPatch, incoming: Incoming, outgoing: Outgoing
-) -> AsyncGenerator[stompman.Client, None]:
-    async def write_frame(  # ruff: ignore[unused-async]
-        connection: AbstractConnection, frame: stompman.AnyClientFrame
-    ) -> None:
-        queue = incoming.setdefault(id(connection), asyncio.Queue())
-        outgoing.put_nowait((connection, frame))
-        if isinstance(frame, stompman.ConnectFrame):
-            queue.put_nowait(stompman.ConnectedFrame(headers={"version": "1.2", "heart-beat": "1000,1000"}))
-        elif isinstance(frame, stompman.DisconnectFrame):
-            queue.put_nowait(stompman.ReceiptFrame(headers={"receipt-id": frame.headers["receipt"]}))
-
-    async def read_frames(connection: AbstractConnection) -> AsyncGenerator[stompman.AnyServerFrame, None]:
-        queue = incoming.setdefault(id(connection), asyncio.Queue())
-        while True:
-            frame = await queue.get()
-            if isinstance(frame, stompman.ConnectionLostError):
-                raise frame
-            yield frame
-
-    monkeypatch.setattr(BaseMockConnection, "write_frame", write_frame)
-    monkeypatch.setattr(BaseMockConnection, "read_frames", read_frames)
-    async with EnrichedClient(
-        connection_class=BaseMockConnection,
-        connect_retry_interval=0,
-        max_concurrent_handlers=1,
-        on_error_frame=mock.Mock(),
-    ) as instance:
-        try:
-            yield instance
-        finally:
-            for subscription in instance._active_subscriptions.get_all():
-                await subscription.unsubscribe()
 
 
 async def next_subscribe(outgoing: Outgoing) -> tuple[AbstractConnection, stompman.SubscribeFrame]:
@@ -71,13 +30,6 @@ async def next_subscribe(outgoing: Outgoing) -> tuple[AbstractConnection, stompm
 
 def receipt(incoming: Incoming, connection: AbstractConnection, frame: stompman.SubscribeFrame) -> None:
     incoming[id(connection)].put_nowait(stompman.ReceiptFrame(headers={"receipt-id": frame.headers["receipt"]}))
-
-
-def remaining_frames(outgoing: Outgoing) -> list[stompman.AnyClientFrame]:
-    frames: list[stompman.AnyClientFrame] = []
-    while not outgoing.empty():
-        frames.append(outgoing.get_nowait()[1])
-    return frames
 
 
 @pytest.mark.parametrize("manual_ack", [True, False])
@@ -103,7 +55,7 @@ async def test_subscribe_waits_for_matching_receipt(
         receipt(incoming, connection, frame)
     subscription = task.result()
     assert subscription.id == frame.headers["id"]
-    assert not client._active_subscriptions.pending_receipts
+    assert not client._receipts.pending
     await subscription.unsubscribe()
 
 
@@ -132,7 +84,7 @@ async def test_rejected_subscription_is_removed_before_callback_and_not_replayed
     with pytest.raises(stompman.SubscriptionError, match="rejected"):
         await task
     assert len(failures) == 1
-    assert not client._active_subscriptions.pending_receipts
+    assert not client._receipts.pending
     incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="peer closed after ERROR"))
     await asyncio.sleep(0)
     await client.send(b"still usable", "test")
@@ -153,7 +105,7 @@ async def test_confirmation_timeout_and_cancellation_cleanup(
         with pytest.raises(stompman.SubscriptionError, match="timeout"):
             await task
     assert not client._active_subscriptions.get_all()
-    assert not client._active_subscriptions.pending_receipts
+    assert not client._receipts.pending
     assert any(isinstance(frame, stompman.UnsubscribeFrame) for frame in remaining_frames(outgoing))
 
 
@@ -166,7 +118,7 @@ async def test_connection_loss_fails_unconfirmed_subscription(
     with pytest.raises(stompman.SubscriptionError, match="connection_lost"):
         await task
     assert not client._active_subscriptions.get_all()
-    assert not client._active_subscriptions.pending_receipts
+    assert not client._receipts.pending
 
 
 @pytest.mark.parametrize("correlated", [True, False])
@@ -217,7 +169,7 @@ async def test_resubscription_failure_notifies_owner_and_cleans_up(
     error = await asyncio.wait_for(failure, timeout=1)
     assert error.reason == ("rejected" if reject else "timeout")
     assert not client._active_subscriptions.get_all()
-    assert not client._active_subscriptions.pending_receipts
+    assert not client._receipts.pending
 
 
 @pytest.mark.parametrize("cancel_send", [True, False])
@@ -263,7 +215,7 @@ async def test_receipts_are_processed_while_later_subscription_replay_is_blocked
             send = tasks.create_task(client.send(b"after replay", "test"))
             await asyncio.sleep(0.2)
             assert not failures
-            assert not client._active_subscriptions.pending_receipts
+            assert not client._receipts.pending
             assert client._active_subscriptions.get_all() == subscriptions
             assert not send.done()
             if cancel_send:
@@ -318,7 +270,7 @@ async def test_failed_replay_after_receipt_notifies_owner(
     await asyncio.wait_for(failed.wait(), timeout=1)
     assert [error.reason for error in failures] == ["connection_lost" if connection_lost else "timeout"]
     assert not client._active_subscriptions.get_all()
-    assert not client._active_subscriptions.pending_receipts
+    assert not client._receipts.pending
     await client.send(b"still usable", "test")
     assert all(not isinstance(frame, stompman.SubscribeFrame) for frame in remaining_frames(outgoing))
 
@@ -456,4 +408,4 @@ async def test_failure_after_receipt_during_write_cleans_up(
         with pytest.raises(stompman.SubscriptionError, match="timeout"):
             await task
     assert not client._active_subscriptions.get_all()
-    assert not client._active_subscriptions.pending_receipts
+    assert not client._receipts.pending

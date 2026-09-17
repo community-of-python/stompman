@@ -5,15 +5,15 @@ version = "0"
 
 [dependency-groups]
 dev = [
-    "anyio==4.14.2",
-    "faker==40.37.0",
-    "hypothesis==6.165.10",
+    "anyio==4.15.1",
+    "faker==40.39.0",
+    "hypothesis==6.168.0",
     "mypy==2.3.1",
     "polyfactory==3.3.0",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-timeout==2.4.0",
-    "ruff==0.16.5",
+    "ruff==0.16.8",
     "uvloop==0.22.1",
 ]
 ws = [
@@ -56,6 +56,8 @@ ignore = [
     "PLC2701",
     "PLC2801",
     "PLR0913",
+    "RUF105",
+    "RUF201",
     "SLF001"
 ]
 extend-per-file-ignores = { "*/test_*/*" = ["S101", "SLF001", "ARG", "PLR6301"] }
