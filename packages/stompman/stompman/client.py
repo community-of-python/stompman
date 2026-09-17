@@ -24,6 +24,8 @@ from stompman.frames import (
     SendFrame,
 )
 from stompman.logger import LOGGER
+from stompman.receipts import PendingReceipts
+from stompman.send import send_with_receipt
 from stompman.subscription import (
     AckableMessageFrame,
     ActiveSubscriptions,
@@ -71,7 +73,8 @@ class Client:
     connection_class: type[AbstractConnection] = Connection
 
     _connection_manager: ConnectionManager = field(init=False)
-    _active_subscriptions: ActiveSubscriptions = field(default_factory=ActiveSubscriptions, init=False)
+    _receipts: PendingReceipts = field(default_factory=PendingReceipts, init=False)
+    _active_subscriptions: ActiveSubscriptions = field(init=False)
     _active_transactions: set[Transaction] = field(default_factory=set, init=False)
     _exit_stack: AsyncExitStack = field(default_factory=AsyncExitStack, init=False)
     _listen_task: asyncio.Task[None] = field(init=False, repr=False)
@@ -79,6 +82,7 @@ class Client:
     _handler_semaphore: asyncio.Semaphore | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
+        self._active_subscriptions = ActiveSubscriptions(receipts=self._receipts)
         self._connection_manager = ConnectionManager(
             servers=self.servers,
             lifespan_factory=partial(
@@ -98,7 +102,7 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             no_message_restart_interval=self.no_message_restart_interval,
             keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
-            on_connection_lost=self._active_subscriptions.connection_lost,
+            on_connection_lost=self._receipts.connection_lost,
             restore_connection=self._restore_connection,
             ssl=self.ssl,
         )
@@ -153,7 +157,7 @@ class Client:
 
                                 task.add_done_callback(_release)
                     case ErrorFrame() | ReceiptFrame():
-                        self._handle_subscription_frame(frame, epoch=epoch)
+                        self._handle_receipt_frame(frame, epoch=epoch)
                     case HeartbeatFrame() | ConnectedFrame():
                         pass
 
@@ -164,10 +168,10 @@ class Client:
         if not semaphore.locked():
             await semaphore.acquire()
             return True
-        if self._active_subscriptions.pending_receipts:
+        if self._receipts.pending:
             return False
         capacity = asyncio.create_task(semaphore.acquire())
-        confirmation = asyncio.create_task(self._active_subscriptions.confirmation_started.wait())
+        confirmation = asyncio.create_task(self._receipts.started.wait())
         reserved = False
         try:
             await asyncio.wait((capacity, confirmation), return_when=asyncio.FIRST_COMPLETED)
@@ -214,11 +218,11 @@ class Client:
         )
         await _run_handler_with_safety_net(handler)
 
-    def _handle_subscription_frame(self, frame: ErrorFrame | ReceiptFrame, *, epoch: int) -> None:
+    def _handle_receipt_frame(self, frame: ErrorFrame | ReceiptFrame, *, epoch: int) -> None:
         if isinstance(frame, ReceiptFrame):
-            self._active_subscriptions.handle_receipt(frame, epoch=epoch)
+            self._receipts.handle_receipt(frame, epoch=epoch)
         else:
-            self._active_subscriptions.handle_error(frame, epoch=epoch)
+            self._receipts.handle_error(frame, epoch=epoch)
             if self.on_error_frame:
                 self.on_error_frame(frame)
 
@@ -230,7 +234,20 @@ class Client:
         content_type: str | None = None,
         add_content_length: bool = True,
         headers: dict[str, str] | None = None,
+        receipt_timeout: float | None = None,
     ) -> None:
+        if receipt_timeout is not None:
+            await send_with_receipt(
+                connection_manager=self._connection_manager,
+                receipts=self._receipts,
+                receipt_timeout=receipt_timeout,
+                body=body,
+                destination=destination,
+                content_type=content_type,
+                add_content_length=add_content_length,
+                headers=headers,
+            )
+            return
         await self._connection_manager.write_frame_reconnecting(
             SendFrame.build(
                 body=body,

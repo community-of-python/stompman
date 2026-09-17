@@ -62,3 +62,12 @@ class SubscriptionError(Error):
     subscription_id: str
     reason: Literal["rejected", "timeout", "connection_lost", "unsubscribed"]
     frame: ErrorFrame | None = field(default=None, repr=False)
+
+
+@dataclass(kw_only=True)
+class SendError(Error):
+    """A receipt-confirmed send was not confirmed by the broker."""
+
+    receipt_id: str
+    reason: Literal["rejected", "timeout", "connection_lost"]
+    frame: ErrorFrame | None = field(default=None, repr=False)

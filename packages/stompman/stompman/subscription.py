@@ -15,30 +15,19 @@ from stompman.frames import (
     ErrorFrame,
     MessageFrame,
     NackFrame,
-    ReceiptFrame,
     SubscribeFrame,
     UnsubscribeFrame,
 )
 from stompman.logger import LOGGER
-
-
-@dataclass(kw_only=True, slots=True, frozen=True)
-class _PendingConfirmation:
-    subscription: "BaseSubscription"
-    connection: AbstractConnection
-    receipt_id: str
-    epoch: int
-    deadline: float
-    result: asyncio.Future[SubscriptionError | None]
+from stompman.receipts import PendingReceipt, PendingReceipts, make_receipt_id, wait_for_result
 
 
 @dataclass(kw_only=True, slots=True, frozen=True)
 class ActiveSubscriptions:
+    receipts: PendingReceipts
     subscriptions: dict[str, "AutoAckSubscription | ManualAckSubscription"] = field(default_factory=dict, init=False)
     event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
-    pending_receipts: dict[str, _PendingConfirmation] = field(default_factory=dict, init=False)
     confirmation_tasks: set[asyncio.Task[None]] = field(default_factory=set, init=False)
-    confirmation_started: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
     def __post_init__(self) -> None:
         self.event.set()
@@ -68,40 +57,8 @@ class ActiveSubscriptions:
     async def wait_until_empty(self) -> bool:
         return await self.event.wait()
 
-    def handle_receipt(self, frame: ReceiptFrame, *, epoch: int) -> None:
-        if (pending := self.pending_receipts.get(frame.headers["receipt-id"])) and pending.epoch == epoch:
-            del self.pending_receipts[pending.receipt_id]
-            if not self.pending_receipts:
-                self.confirmation_started.clear()
-            pending.subscription._pending_confirmation = None
-            if not pending.result.done():
-                pending.result.set_result(None)
-
-    def handle_error(self, frame: ErrorFrame, *, epoch: int) -> None:
-        receipt_id = frame.headers.get("receipt-id")
-        if receipt_id is not None:
-            pending = self.pending_receipts.get(receipt_id)
-            affected = [pending] if pending is not None else []
-        else:
-            # An uncorrelated ERROR cannot safely confirm any in-flight
-            # subscription. Confirmed subscriptions remain eligible for recovery.
-            affected = list(self.pending_receipts.values())
-        for pending in affected:
-            if pending.epoch != epoch:
-                continue
-            pending.subscription._fail_confirmation(
-                pending, SubscriptionError(subscription_id=pending.subscription.id, reason="rejected", frame=frame)
-            )
-
-    def connection_lost(self, connection: AbstractConnection) -> None:
-        for pending in list(self.pending_receipts.values()):
-            if pending.connection is connection:
-                pending.subscription._fail_confirmation(
-                    pending, SubscriptionError(subscription_id=pending.subscription.id, reason="connection_lost")
-                )
-
-    def watch_confirmation(self, pending: _PendingConfirmation) -> None:
-        task = asyncio.create_task(pending.subscription._watch_confirmation(pending))
+    def watch_confirmation(self, subscription: "BaseSubscription", pending: PendingReceipt) -> None:
+        task = asyncio.create_task(subscription._watch_confirmation(pending))
         self.confirmation_tasks.add(task)
         task.add_done_callback(self.confirmation_tasks.discard)
 
@@ -124,7 +81,7 @@ class BaseSubscription:
     _active_subscriptions: ActiveSubscriptions
     receipt_timeout: float | None = None
     on_subscription_error: Callable[[SubscriptionError], Any] | None = None
-    _pending_confirmation: _PendingConfirmation | None = field(default=None, init=False, repr=False)
+    _pending_confirmation: PendingReceipt | None = field(default=None, init=False, repr=False)
 
     async def _subscribe(self) -> None:
         if self.receipt_timeout is not None:
@@ -157,19 +114,18 @@ class BaseSubscription:
 
     async def _send_confirmed_subscription(
         self, connection: AbstractConnection, *, restoring: bool = False
-    ) -> _PendingConfirmation:
+    ) -> PendingReceipt:
         assert self.receipt_timeout is not None  # ruff: ignore[assert] - internal invariant
-        pending = _PendingConfirmation(
-            subscription=self,
+        pending = PendingReceipt(
+            waiter=self,
             connection=connection,
-            receipt_id=_make_confirmation_id(),
+            receipt_id=make_receipt_id(),
             epoch=self._connection_manager._reconnection_count,
             deadline=asyncio.get_running_loop().time() + self.receipt_timeout,
             result=asyncio.get_running_loop().create_future(),
         )
         self._pending_confirmation = pending
-        self._active_subscriptions.pending_receipts[pending.receipt_id] = pending
-        self._active_subscriptions.confirmation_started.set()
+        self._active_subscriptions.receipts.add(pending)
         try:
             async with asyncio.timeout_at(pending.deadline):
                 await connection.write_frame(
@@ -206,25 +162,14 @@ class BaseSubscription:
             raise
         return pending
 
-    async def _await_confirmation(self, pending: _PendingConfirmation) -> None:
+    async def _await_confirmation(self, pending: PendingReceipt) -> None:
         try:
-            if pending.result.done():
-                error = pending.result.result()
-            else:
-                async with asyncio.timeout_at(pending.deadline):
-                    error = await asyncio.shield(pending.result)
+            error = await wait_for_result(pending)
         except TimeoutError as timeout_error:
-            # Prefer a receipt already processed by the reader over a deadline
-            # cancellation delivered before this waiter was rescheduled.
-            if pending.result.done():
-                error = pending.result.result()
-                if error is not None:
-                    raise error from timeout_error
-                return
-            error = SubscriptionError(subscription_id=self.id, reason="timeout")
-            self._fail_confirmation(pending, error)
+            failure = SubscriptionError(subscription_id=self.id, reason="timeout")
+            self._fail_confirmation(pending, failure)
             await self._cleanup_confirmation(pending)
-            raise error from timeout_error
+            raise failure from timeout_error
         except asyncio.CancelledError:
             was_active = self._active_subscriptions.contains_by_id(self.id)
             pending = self._pending_confirmation or pending
@@ -239,15 +184,27 @@ class BaseSubscription:
         if error is not None:
             raise error
 
+    def confirm(self, pending: PendingReceipt) -> None:
+        self._active_subscriptions.receipts.discard(pending.receipt_id)
+        self._pending_confirmation = None
+        if not pending.result.done():
+            pending.result.set_result(None)
+
+    def fail_on_error_frame(self, pending: PendingReceipt, frame: ErrorFrame) -> None:
+        self._fail_confirmation(pending, SubscriptionError(subscription_id=self.id, reason="rejected", frame=frame))
+
+    def fail_on_connection_loss(self, pending: PendingReceipt) -> None:
+        self._fail_confirmation(pending, SubscriptionError(subscription_id=self.id, reason="connection_lost"))
+
     def _fail_confirmation(
         self,
-        pending: _PendingConfirmation,
+        pending: PendingReceipt,
         error: SubscriptionError,
         *,
         notify: bool = True,
         include_confirmed: bool = False,
     ) -> None:
-        if self._active_subscriptions.pending_receipts.pop(pending.receipt_id, None) is None:
+        if not self._active_subscriptions.receipts.discard(pending.receipt_id):
             if not include_confirmed:
                 return
             # A write may fail after its receipt. Notify once, without removing
@@ -259,8 +216,6 @@ class BaseSubscription:
                 or not self._active_subscriptions.contains_by_id(self.id)
             ):
                 return
-        if not self._active_subscriptions.pending_receipts:
-            self._active_subscriptions.confirmation_started.clear()
         self._pending_confirmation = None
         self._active_subscriptions.delete_by_id(self.id)
         if not pending.result.done():
@@ -274,7 +229,7 @@ class BaseSubscription:
                 except Exception:  # ruff: ignore[blind-except] - user callbacks must not terminate the frame reader
                     LOGGER.exception("unhandled exception in subscription error callback")
 
-    async def _cleanup_confirmation(self, pending: _PendingConfirmation) -> None:
+    async def _cleanup_confirmation(self, pending: PendingReceipt) -> None:
         try:
             async with asyncio.timeout(self.receipt_timeout):
                 await pending.connection.write_frame(UnsubscribeFrame(headers={"id": self.id}))
@@ -285,7 +240,7 @@ class BaseSubscription:
                     state, ConnectionLostError(reason=error)
                 )
 
-    async def _watch_confirmation(self, pending: _PendingConfirmation) -> None:
+    async def _watch_confirmation(self, pending: PendingReceipt) -> None:
         # Failure notification and registry cleanup happen before waking us.
         with suppress(SubscriptionError):
             await self._await_confirmation(pending)
@@ -306,7 +261,7 @@ class BaseSubscription:
                 pending = await self._send_confirmed_subscription(connection, restoring=True)
             except SubscriptionError:
                 return
-            self._active_subscriptions.watch_confirmation(pending)
+            self._active_subscriptions.watch_confirmation(self, pending)
 
     async def _nack(self, frame: MessageFrame, *, received_at_reconnection_count: int) -> None:
         if not self._active_subscriptions.contains_by_id(self.id):
@@ -413,10 +368,6 @@ class AckableMessageFrame(MessageFrame):
 
 
 def _make_subscription_id() -> str:
-    return str(uuid4())
-
-
-def _make_confirmation_id() -> str:
     return str(uuid4())
 
 

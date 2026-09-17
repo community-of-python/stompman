@@ -27,6 +27,7 @@ SendHeaders = TypedDict(
         "content-length": NotRequired[str],
         "content-type": NotRequired[str],
         "destination": str,
+        "receipt": NotRequired[str],
         "transaction": NotRequired[str],
     },
 )

@@ -115,7 +115,7 @@ async def test_receipt_rejection_does_not_replay_subscription(port: int) -> None
                 receipt_timeout=3,
             )
         assert not client._active_subscriptions.get_all()
-        assert not client._active_subscriptions.pending_receipts
+        assert not client._receipts.pending
         await force_reconnect(client)
         healthy = await client.subscribe_with_manual_ack(destination, handle_message, ack="auto", receipt_timeout=3)
         try:
@@ -125,6 +125,28 @@ async def test_receipt_rejection_does_not_replay_subscription(port: int) -> None
             assert len(error_frames) == 1
         finally:
             await healthy.unsubscribe()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("port", [9000, 9001], ids=["artemis", "classic"])
+async def test_confirmed_send_is_accepted_by_broker(port: int) -> None:
+    parameters = stompman.ConnectionParameters("127.0.0.1", port, "admin", ":=123")
+    destination = f"confirmed-send-{uuid4()}"
+    payload = str(uuid4()).encode()
+    received: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+
+    async def handle_message(frame: stompman.AckableMessageFrame) -> None:  # ruff: ignore[unused-async]
+        if not received.done():
+            received.set_result(frame.body)
+
+    async with stompman.Client(servers=[parameters], connection_confirmation_timeout=10) as client:
+        subscription = await client.subscribe_with_manual_ack(destination, handle_message, ack="auto")
+        try:
+            await client.send(payload, destination, receipt_timeout=3)
+            assert not client._receipts.pending
+            assert await asyncio.wait_for(received, timeout=3) == payload
+        finally:
+            await subscription.unsubscribe()
 
 
 @pytest.mark.anyio
