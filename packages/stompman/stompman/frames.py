@@ -154,7 +154,7 @@ class SendFrame:
         add_content_length: bool,
         headers: dict[str, str] | None,
     ) -> Self:
-        all_headers: SendHeaders = headers or {}  # type: ignore[assignment]
+        all_headers: SendHeaders = headers.copy() if headers else {}  # type: ignore[assignment, typeddict-item]
         all_headers["destination"] = destination
         if add_content_length:
             all_headers["content-length"] = str(len(body))

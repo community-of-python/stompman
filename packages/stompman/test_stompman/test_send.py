@@ -52,3 +52,25 @@ async def test_send_message(args: dict[str, Any], expected_body: bytes, expected
     assert collected_frames == enrich_expected_frames(
         SendFrame(headers=expected_headers, body=expected_body),
     )
+
+
+async def test_send_message_does_not_mutate_headers() -> None:
+    connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([]))
+    headers = {"expires": "1"}
+
+    async with EnrichedClient(connection_class=connection_class) as client:
+        await client.send(body=b"Some body", destination="Some/queue", headers=headers)
+        await asyncio.sleep(0)
+
+    assert headers == {"expires": "1"}
+
+
+async def test_send_message_in_transaction_does_not_mutate_headers() -> None:
+    connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([]))
+    headers = {"expires": "1"}
+
+    async with EnrichedClient(connection_class=connection_class) as client, client.begin() as transaction:
+        await transaction.send(body=b"Some body", destination="Some/queue", headers=headers)
+        await asyncio.sleep(0)
+
+    assert headers == {"expires": "1"}
