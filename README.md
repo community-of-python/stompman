@@ -24,14 +24,10 @@ async with stompman.Client(
         stompman.ConnectionParameters(host="171.0.0.1", port=61616, login="user1", passcode="passcode1"),
         stompman.ConnectionParameters(host="172.0.0.1", port=61616, login="user2", passcode="passcode2"),
     ],
-
-
     # SSL — can be either `None` (default), `True`, or `ssl.SSLContext'
     ssl=None,
-
     # Error frame handler:
     on_error_frame=lambda error_frame: print(error_frame.body),
-
     # Optional parameters with sensible defaults:
     heartbeat=stompman.Heartbeat(will_send_interval_ms=1000, want_to_receive_interval_ms=1000),
     connect_retry_attempts=3,
@@ -160,7 +156,13 @@ await client.subscribe("DLQ", handle_message_from_dlq, ack="auto", on_suppressed
 You can pass custom headers to `client.subscribe()`:
 
 ```python
-await client.subscribe("DLQ", handle_message_from_dlq, ack="client", headers={"selector": "location = 'Europe'"}, on_suppressed_exception=print)
+await client.subscribe(
+    "DLQ",
+    handle_message_from_dlq,
+    ack="client",
+    headers={"selector": "location = 'Europe'"},
+    on_suppressed_exception=print,
+)
 ```
 
 #### Handling ACK/NACKs yourself
@@ -171,6 +173,7 @@ If you want to send ACK and NACK frames yourself, you can use `client.subscribe_
 async def handle_message_from_dlq(message_frame: stompman.AckableMessageFrame) -> None:
     print(message_frame.body)
     await message_frame.ack()
+
 
 await client.subscribe_with_manual_ack("DLQ", handle_message_from_dlq, ack="client")
 ```
