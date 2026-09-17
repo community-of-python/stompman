@@ -95,8 +95,8 @@ The default `receipt_timeout=None` preserves the existing write-only behavior. A
 It covers writing `SEND` and waiting for its receipt, after a connection is available. The client generates the
 `receipt` header itself, so passing your own `receipt` header with `receipt_timeout` is an error.
 
-A failure raises `stompman.SendError`, with `reason` equal to `rejected`, `timeout`, or `connection_lost`. Raw broker
-error frames are available through `error.frame`, but are excluded from the exception's representation.
+A failure raises `stompman.SendReceiptError`, with `reason` equal to `rejected`, `timeout`, or `connection_lost`.
+Raw broker error frames are available through `error.frame`, but are excluded from the exception's representation.
 
 Only `rejected` is a definitive answer. On `timeout` and `connection_lost` the outcome is **ambiguous**: the frame is
 fully buffered before the socket is drained, so the broker may well have accepted the message even though the

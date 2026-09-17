@@ -80,7 +80,7 @@ async def test_correlated_error_rejects_send(client: stompman.Client, incoming: 
     error_frame = stompman.ErrorFrame(headers={"message": "rejected", "receipt-id": frame.headers["receipt"]})
     incoming[id(connection)].put_nowait(error_frame)
 
-    with pytest.raises(stompman.SendError) as exc_info:
+    with pytest.raises(stompman.SendReceiptError) as exc_info:
         await task
 
     assert exc_info.value.reason == "rejected"
@@ -99,7 +99,7 @@ async def test_uncorrelated_error_rejects_pending_send(
     connection, _ = await next_send(outgoing)
     incoming[id(connection)].put_nowait(stompman.ErrorFrame(headers={"message": "broker is unhappy"}))
 
-    with pytest.raises(stompman.SendError, match="rejected"):
+    with pytest.raises(stompman.SendReceiptError, match="rejected"):
         await task
 
     assert not client._receipts.pending
@@ -109,7 +109,7 @@ async def test_timeout_raises_and_removes_pending_state(client: stompman.Client,
     task = asyncio.create_task(client.send(b"hi", "destination", receipt_timeout=0.05))
     await next_send(outgoing)
 
-    with pytest.raises(stompman.SendError, match="timeout"):
+    with pytest.raises(stompman.SendReceiptError, match="timeout"):
         await task
 
     assert not client._receipts.pending
@@ -122,7 +122,7 @@ async def test_connection_loss_raises_and_removes_pending_state(
     connection, _ = await next_send(outgoing)
     incoming[id(connection)].put_nowait(stompman.ConnectionLostError(reason="connection lost before receipt"))
 
-    with pytest.raises(stompman.SendError, match="connection_lost"):
+    with pytest.raises(stompman.SendReceiptError, match="connection_lost"):
         await task
 
     assert not client._receipts.pending
@@ -174,7 +174,7 @@ async def test_timeout_while_writing_raises_and_removes_pending_state(
 
     monkeypatch.setattr(BaseMockConnection, "write_frame", slow_write)
 
-    with pytest.raises(stompman.SendError, match="timeout"):
+    with pytest.raises(stompman.SendReceiptError, match="timeout"):
         await client.send(b"hi", "destination", receipt_timeout=0.05)
 
     assert not client._receipts.pending
@@ -192,7 +192,7 @@ async def test_connection_loss_while_writing_raises_and_removes_pending_state(
 
     monkeypatch.setattr(BaseMockConnection, "write_frame", failing_write)
 
-    with pytest.raises(stompman.SendError, match="connection_lost"):
+    with pytest.raises(stompman.SendReceiptError, match="connection_lost"):
         await client.send(b"hi", "destination", receipt_timeout=1)
 
     assert not client._receipts.pending
@@ -261,7 +261,7 @@ async def test_receipt_from_previous_connection_does_not_confirm_new_send(
     lost = asyncio.create_task(client.send(b"first", "destination", receipt_timeout=1))
     old_connection, old_frame = await next_send(outgoing)
     incoming[id(old_connection)].put_nowait(stompman.ConnectionLostError(reason="peer closed"))
-    with pytest.raises(stompman.SendError, match="connection_lost"):
+    with pytest.raises(stompman.SendReceiptError, match="connection_lost"):
         await lost
 
     task = asyncio.create_task(client.send(b"second", "destination", receipt_timeout=1))

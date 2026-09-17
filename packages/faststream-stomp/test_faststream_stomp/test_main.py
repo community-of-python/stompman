@@ -321,21 +321,21 @@ class TestReceiptTimeout:
         self, fake_connection_params: stompman.ConnectionParameters, faker: faker.Faker
     ) -> None:
         client, client_mock = make_mock_client(fake_connection_params)
-        client_mock.send.side_effect = stompman.SendError(receipt_id=faker.pystr(), reason="timeout")
+        client_mock.send.side_effect = stompman.SendReceiptError(receipt_id=faker.pystr(), reason="timeout")
         broker = faststream_stomp.StompBroker(client)
 
-        with pytest.raises(stompman.SendError, match="timeout"):
+        with pytest.raises(stompman.SendReceiptError, match="timeout"):
             await broker.publish(faker.pystr(), faker.pystr(), receipt_timeout=1.0)
 
     async def test_error_propagates_from_publisher(
         self, fake_connection_params: stompman.ConnectionParameters, faker: faker.Faker
     ) -> None:
         client, client_mock = make_mock_client(fake_connection_params)
-        client_mock.send.side_effect = stompman.SendError(receipt_id=faker.pystr(), reason="rejected")
+        client_mock.send.side_effect = stompman.SendReceiptError(receipt_id=faker.pystr(), reason="rejected")
         broker = faststream_stomp.StompBroker(client)
         publisher = broker.publisher(faker.pystr(), receipt_timeout=1.0)
 
-        with pytest.raises(stompman.SendError, match="rejected"):
+        with pytest.raises(stompman.SendReceiptError, match="rejected"):
             await publisher.publish(faker.pystr())
 
     async def test_testing_broker_does_not_wait_for_receipts(

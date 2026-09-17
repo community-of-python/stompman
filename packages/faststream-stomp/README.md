@@ -79,7 +79,7 @@ await publisher.publish("another message")
 ```
 
 The default is `None` everywhere, which preserves the existing behavior. A failed confirmation raises
-`stompman.SendError` from `publish()`, with `reason` equal to `rejected`, `timeout`, or `connection_lost`.
+`stompman.SendReceiptError` from `publish()`, with `reason` equal to `rejected`, `timeout`, or `connection_lost`.
 
 `timeout` and `connection_lost` are ambiguous outcomes: the broker may have accepted the message even though its
 receipt was lost. Nothing is replayed automatically: give each application event a stable ID and deduplicate in the

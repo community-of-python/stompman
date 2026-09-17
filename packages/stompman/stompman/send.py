@@ -3,7 +3,7 @@ import math
 from dataclasses import dataclass
 
 from stompman.connection_manager import ConnectionManager
-from stompman.errors import ConnectionLostError, SendError
+from stompman.errors import ConnectionLostError, SendReceiptError
 from stompman.frames import ErrorFrame, SendFrame
 from stompman.receipts import PendingReceipt, PendingReceipts, ReceiptFailureReason, make_receipt_id, wait_for_result
 
@@ -25,11 +25,11 @@ class _SendConfirmation:
 
     def fail(
         self, pending: PendingReceipt, reason: ReceiptFailureReason, *, frame: ErrorFrame | None = None
-    ) -> SendError:
+    ) -> SendReceiptError:
         self.receipts.discard(pending.receipt_id)
-        if pending.result.done() and isinstance(existing := pending.result.result(), SendError):
+        if pending.result.done() and isinstance(existing := pending.result.result(), SendReceiptError):
             return existing
-        error = SendError(receipt_id=pending.receipt_id, reason=reason, frame=frame)
+        error = SendReceiptError(receipt_id=pending.receipt_id, reason=reason, frame=frame)
         if not pending.result.done():
             pending.result.set_result(error)
         return error

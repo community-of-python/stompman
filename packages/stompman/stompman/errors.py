@@ -65,7 +65,7 @@ class SubscriptionError(Error):
 
 
 @dataclass(kw_only=True)
-class SendError(Error):
+class SendReceiptError(Error):
     """A receipt-confirmed send was not confirmed by the broker."""
 
     receipt_id: str
