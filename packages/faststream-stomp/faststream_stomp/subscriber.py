@@ -1,4 +1,3 @@
-import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, NoReturn
 
@@ -21,12 +20,13 @@ from faststream_stomp.models import (
 
 class StompSubscriberSpecification(SubscriberSpecification[BrokerConfig, StompSubscriberSpecificationConfig]):
     @property
-    def name(self) -> str:
-        return f"{self._outer_config.prefix}{self.config.destination_without_prefix}:{self.call_name}"
+    def channel_labels(self) -> list[str]:
+        return [f"{self._outer_config.prefix}{self.config.destination_without_prefix}"]
 
     def get_schema(self) -> dict[str, SubscriberSpec]:
         return {
             self.name: SubscriberSpec(
+                address=self.channel_labels[0],
                 description=self.description,
                 operation=Operation(
                     message=Message(title=f"{self.name}:Message", payload=resolve_payloads(self.get_payloads())),
@@ -86,10 +86,8 @@ class StompSubscriber(SubscriberUsecase[stompman.MessageFrame]):
     async def get_one(self, *, timeout: float = 5) -> NoReturn:
         raise NotImplementedError
 
-    async def __aiter__(self) -> AsyncIterator[StreamMessage[stompman.MessageFrame]]:  # type: ignore[override, misc]
+    def __aiter__(self) -> AsyncIterator[StreamMessage[stompman.MessageFrame]]:
         raise NotImplementedError
-        yield  # pragma: no cover
-        await asyncio.sleep(0)  # pragma: no cover
 
     def _make_response_publisher(self, message: StreamMessage[stompman.MessageFrame]) -> Sequence[FakePublisher]:
         return (

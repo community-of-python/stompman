@@ -23,13 +23,9 @@ if TYPE_CHECKING:
     from stompman.frames import MessageHeaders
 
 
-class TestStompBroker(TestBroker[StompBroker]):
-    async def __aenter__(self) -> StompBroker:
-        return typing.cast("StompBroker", await super().__aenter__())
-
-    @staticmethod
-    def create_publisher_fake_subscriber(
-        broker: StompBroker, publisher: StompPublisher
+class TestStompBroker(TestBroker[StompBroker, StompBroker], broker=StompBroker):
+    def create_publisher_fake_subscriber(  # noqa: PLR6301
+        self, broker: StompBroker, publisher: StompPublisher
     ) -> tuple[StompSubscriber, bool]:
         subscriber: StompSubscriber | None = None
         for handler in broker._subscribers:

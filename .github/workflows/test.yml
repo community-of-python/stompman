@@ -32,6 +32,19 @@ jobs:
           cache-dependency-glob: "**/pyproject.toml"
       - run: just install lint
 
+  # The only job that installs the declared floors; every other one locks with --upgrade.
+  test-lowest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: extractions/setup-just@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: "**/pyproject.toml"
+      - run: uv python install 3.11
+      - run: uv python pin 3.11
+      - run: just test-lowest -vv
+
   test:
     runs-on: ubuntu-latest
     strategy:
