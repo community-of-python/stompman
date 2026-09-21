@@ -1,3 +1,5 @@
+integration_ignores := "--ignore=packages/stompman/test_stompman/test_integration.py --ignore=packages/faststream-stomp/test_faststream_stomp/test_integration.py"
+
 default: install lint check-types test
 
 install:
@@ -12,9 +14,13 @@ check-types:
     uv run mypy .
 
 test-fast *args:
-    uv run pytest \
-        --ignore=packages/stompman/test_stompman/test_integration.py \
-        --ignore=packages/faststream-stomp/test_faststream_stomp/test_integration.py {{args}}
+    uv run pytest {{integration_ignores}} {{args}}
+
+# Resolve the declared dependency floors instead of the newest releases `install` locks to.
+test-lowest *args:
+    uv lock --upgrade --resolution lowest-direct
+    uv sync --all-extras --all-packages --frozen
+    uv run --no-sync pytest {{integration_ignores}} --no-cov {{args}}
 
 test *args:
     #!/bin/bash

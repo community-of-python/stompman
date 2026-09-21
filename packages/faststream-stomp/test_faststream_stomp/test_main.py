@@ -10,6 +10,7 @@ import pydantic
 import pytest
 import stompman
 from faststream import FastStream, PublishCommand, PublishType
+from faststream._internal.testing.broker import find_test_broker
 from faststream.message import gen_cor_id
 from faststream_stomp.broker import _handle_listen_task_done
 from faststream_stomp.opentelemetry import StompTelemetryMiddleware
@@ -353,13 +354,48 @@ class TestReceiptTimeout:
 
 
 def test_asyncapi_schema(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
-    @broker.publisher(faker.pystr())
+    prefix_segment = faker.pystr()
+    prefix = f"/queue/{prefix_segment}/"
+    router = StompRouter(prefix=prefix)
+    broker.include_router(router)
+
+    @router.publisher(published_destination := faker.pystr())
     def _publisher() -> None: ...
 
-    @broker.subscriber(faker.pystr())
+    @router.subscriber(subscribed_destination := faker.pystr())
     def _subscriber() -> None: ...
 
-    FastStream(broker).schema.to_specification()
+    channels = FastStream(broker).schema.to_specification().to_jsonable()["channels"]
+
+    # The channel key escapes the slashes a STOMP destination is built from; the address keeps them.
+    assert channels == {
+        f".queue.{prefix_segment}.{subscribed_destination}:Subscriber": {
+            "address": prefix + subscribed_destination,
+            "messages": mock.ANY,
+            "servers": mock.ANY,
+        },
+        f".queue.{prefix_segment}.{published_destination}:Publisher": {
+            "address": prefix + published_destination,
+            "messages": mock.ANY,
+            "servers": mock.ANY,
+        },
+    }
+
+
+def test_asyncapi_schema_titles_name_the_channels(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:
+    @broker.publisher(faker.pystr(), title_=(publisher_title := faker.pystr()))
+    def _publisher() -> None: ...
+
+    @broker.subscriber(faker.pystr(), title=(subscriber_title := faker.pystr()))
+    def _subscriber() -> None: ...
+
+    channels = FastStream(broker).schema.to_specification().to_jsonable()["channels"]
+
+    assert set(channels) == {subscriber_title, publisher_title}
+
+
+def test_test_broker_is_registered_for_stomp_broker(broker: faststream_stomp.StompBroker) -> None:
+    assert find_test_broker(broker) is faststream_stomp.TestStompBroker
 
 
 async def test_opentelemetry_publish(faker: faker.Faker, broker: faststream_stomp.StompBroker) -> None:

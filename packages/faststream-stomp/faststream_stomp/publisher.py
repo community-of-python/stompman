@@ -82,12 +82,17 @@ def _make_headers_for_publish(cmd: StompPublishCommand) -> dict[str, str]:
 
 class StompPublisherSpecification(PublisherSpecification[BrokerConfig, StompPublisherSpecificationConfig]):
     @property
+    def address(self) -> str:
+        return f"{self._outer_config.prefix}{self.config.destination_without_prefix}"
+
+    @property
     def name(self) -> str:
-        return f"{self._outer_config.prefix}{self.config.destination_without_prefix}:Publisher"
+        return self.config.title_ or f"{self.address}:Publisher"
 
     def get_schema(self) -> dict[str, PublisherSpec]:
         return {
             self.name: PublisherSpec(
+                address=self.address,
                 description=self.config.description_,
                 operation=Operation(
                     message=Message(

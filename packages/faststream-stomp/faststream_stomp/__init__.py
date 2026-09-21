@@ -16,11 +16,3 @@ __all__ = [
     "StompSubscriber",
     "TestStompBroker",
 ]
-
-
-try:  # noqa: RUF067
-    from faststream_stomp._test_broker_registry import patch_test_broker_registry
-
-    patch_test_broker_registry()
-except Exception:  # noqa: BLE001, S110
-    pass

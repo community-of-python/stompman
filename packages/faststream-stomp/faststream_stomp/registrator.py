@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Sequence
 from typing import Any
 
 import stompman
@@ -29,7 +29,7 @@ class StompRegistrator(Registrator[stompman.MessageFrame, BrokerConfigWithStompC
         headers: dict[str, str] | None = None,
         reply_add_content_length: bool | None = None,
         # other args
-        dependencies: Iterable[Dependant] = (),
+        dependencies: Sequence[Dependant] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
         title: str | None = None,

@@ -97,7 +97,7 @@ class StompBroker(
         *,
         decoder: CustomCallable | None = None,
         parser: CustomCallable | None = None,
-        dependencies: Iterable[Dependant] = (),
+        dependencies: Sequence[Dependant] = (),
         middlewares: Sequence[type[BaseMiddleware] | BrokerMiddleware[stompman.MessageFrame, StompPublishCommand]] = (),
         graceful_timeout: float | None = 15.0,
         routers: Sequence[Registrator[stompman.MessageFrame]] = (),

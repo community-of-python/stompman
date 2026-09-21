@@ -55,7 +55,7 @@ class StompRoute(SubscriberRoute):
         reply_add_content_length: bool | None = None,
         # other args
         publishers: Iterable[StompRoutePublisher] = (),
-        dependencies: Iterable[Dependant] = (),
+        dependencies: Sequence[Dependant] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
         title: str | None = None,
@@ -86,7 +86,7 @@ class StompRouter(StompRegistrator, BrokerRouter[stompman.MessageFrame, BrokerCo
         prefix: str = "",
         handlers: Iterable[StompRoute] = (),
         *,
-        dependencies: Iterable[Dependant] = (),
+        dependencies: Sequence[Dependant] = (),
         middlewares: Sequence[BrokerMiddleware[stompman.MessageFrame]] = (),
         parser: CustomCallable | None = None,
         decoder: CustomCallable | None = None,
