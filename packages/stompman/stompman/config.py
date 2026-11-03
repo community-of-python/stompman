@@ -17,6 +17,35 @@ class Heartbeat:
         return cls(int(first), int(second))
 
 
+def _agreed_interval_ms(*, sender_can_send_ms: int, receiver_wants_ms: int) -> int:
+    if sender_can_send_ms == 0 or receiver_wants_ms == 0:
+        return 0
+    return max(sender_can_send_ms, receiver_wants_ms)
+
+
+@dataclass(frozen=True, slots=True)
+class AgreedHeartbeat:
+    """The heart-beating a session settled on, one interval per direction; 0 means none.
+
+    STOMP 1.2: from CONNECT's ``heart-beat:<cx>,<cy>`` and CONNECTED's ``heart-beat:<sx>,<sy>``, the client
+    sends heart-beats every MAX(cx, sy) ms, and none when either is 0; the server every MAX(sx, cy) ms, the same way.
+    """
+
+    send_interval_ms: int
+    receive_interval_ms: int
+
+    @classmethod
+    def negotiate(cls, *, client: Heartbeat, server: Heartbeat) -> Self:
+        return cls(
+            send_interval_ms=_agreed_interval_ms(
+                sender_can_send_ms=client.will_send_interval_ms, receiver_wants_ms=server.want_to_receive_interval_ms
+            ),
+            receive_interval_ms=_agreed_interval_ms(
+                sender_can_send_ms=server.will_send_interval_ms, receiver_wants_ms=client.want_to_receive_interval_ms
+            ),
+        )
+
+
 class MultiHostHostLike(TypedDict):
     username: str | None
     password: str | None

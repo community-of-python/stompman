@@ -4,7 +4,7 @@ import faker
 import pytest
 import stompman
 from polyfactory.factories.typed_dict_factory import TypedDictFactory
-from stompman.config import MultiHostHostLike
+from stompman.config import AgreedHeartbeat, Heartbeat, MultiHostHostLike
 
 
 class StrictMultiHostHostLike(TypedDict):
@@ -106,3 +106,29 @@ class TestConnectionParametersFromPydanticMultiHostHosts:
 
         with pytest.raises(ValueError, match="all username-password pairs or only one pair must be set"):
             stompman.ConnectionParameters.from_pydantic_multihost_hosts(hosts)
+
+
+@pytest.mark.parametrize(
+    ("client", "server", "expected"),
+    [
+        # STOMP 1.2, Heart-beating: every MAX(cx, sy) ms from the client, MAX(sx, cy) ms from the server...
+        (
+            Heartbeat(1000, 5000),
+            Heartbeat(2000, 3000),
+            AgreedHeartbeat(send_interval_ms=3000, receive_interval_ms=5000),
+        ),
+        (
+            Heartbeat(4000, 1000),
+            Heartbeat(2000, 3000),
+            AgreedHeartbeat(send_interval_ms=4000, receive_interval_ms=2000),
+        ),
+        # ...and none in a direction where the sender cannot send or the receiver does not want them.
+        (Heartbeat(0, 1000), Heartbeat(1000, 1000), AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=1000)),
+        (Heartbeat(1000, 1000), Heartbeat(1000, 0), AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=1000)),
+        (Heartbeat(1000, 0), Heartbeat(1000, 1000), AgreedHeartbeat(send_interval_ms=1000, receive_interval_ms=0)),
+        (Heartbeat(1000, 1000), Heartbeat(0, 1000), AgreedHeartbeat(send_interval_ms=1000, receive_interval_ms=0)),
+        (Heartbeat(1000, 1000), Heartbeat(0, 0), AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=0)),
+    ],
+)
+def test_agreed_heartbeat_negotiate(client: Heartbeat, server: Heartbeat, expected: AgreedHeartbeat) -> None:
+    assert AgreedHeartbeat.negotiate(client=client, server=server) == expected

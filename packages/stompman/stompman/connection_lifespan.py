@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
-from stompman.config import ConnectionParameters, Heartbeat
+from stompman.config import AgreedHeartbeat, ConnectionParameters, Heartbeat
 from stompman.connection import AbstractConnection
 from stompman.errors import ConnectionConfirmationTimeout, StompProtocolConnectionIssue, UnsupportedProtocolVersion
 from stompman.frames import (
@@ -20,7 +20,7 @@ from stompman.subscription import ActiveSubscriptions, unsubscribe_from_all_acti
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class EstablishedConnectionResult:
-    server_heartbeat: Heartbeat
+    heartbeat: AgreedHeartbeat
 
 
 class AbstractConnectionLifespan(Protocol):
@@ -39,7 +39,7 @@ class ConnectionLifespan(AbstractConnectionLifespan):
     connection_confirmation_timeout: int
     disconnect_confirmation_timeout: int
     active_subscriptions: ActiveSubscriptions
-    set_heartbeat_interval: Callable[[Heartbeat], Any]
+    set_heartbeat_interval: Callable[[AgreedHeartbeat], Any]
 
     async def enter(self) -> EstablishedConnectionResult | StompProtocolConnectionIssue:
         connect_headers = cast(
@@ -76,9 +76,11 @@ class ConnectionLifespan(AbstractConnectionLifespan):
                 given_version=connected_frame.headers["version"], supported_version=self.protocol_version
             )
 
-        server_heartbeat = Heartbeat.from_header(connected_frame.headers["heart-beat"])
-        self.set_heartbeat_interval(server_heartbeat)
-        return EstablishedConnectionResult(server_heartbeat=server_heartbeat)
+        # STOMP 1.2: a missing heart-beat header MUST be treated the same way as "heart-beat:0,0".
+        server_heartbeat = Heartbeat.from_header(connected_frame.headers.get("heart-beat", "0,0"))
+        heartbeat = AgreedHeartbeat.negotiate(client=self.client_heartbeat, server=server_heartbeat)
+        self.set_heartbeat_interval(heartbeat)
+        return EstablishedConnectionResult(heartbeat=heartbeat)
 
     async def _take_receipt_frame(self) -> None:
         async for frame in self.connection.read_frames():
@@ -103,5 +105,5 @@ class ConnectionLifespanFactory(Protocol):
         *,
         connection: AbstractConnection,
         connection_parameters: ConnectionParameters,
-        set_heartbeat_interval: Callable[[Heartbeat], Any],
+        set_heartbeat_interval: Callable[[AgreedHeartbeat], Any],
     ) -> AbstractConnectionLifespan: ...

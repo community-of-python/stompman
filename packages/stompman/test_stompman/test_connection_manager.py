@@ -18,9 +18,9 @@ from stompman import (
     ErrorFrame,
     FailedAllConnectAttemptsError,
     FailedAllWriteAttemptsError,
-    Heartbeat,
     MessageFrame,
 )
+from stompman.config import AgreedHeartbeat
 from stompman.connection_lifespan import EstablishedConnectionResult
 from stompman.connection_manager import ActiveConnectionState
 
@@ -192,8 +192,8 @@ async def test_get_active_connection_state_fails_to_connect() -> None:
 
 
 async def test_get_active_connection_state_ok_concurrent() -> None:
-    server_heartbeat = build_dataclass(Heartbeat)
-    enter = mock.AsyncMock(return_value=EstablishedConnectionResult(server_heartbeat=server_heartbeat))
+    heartbeat = build_dataclass(AgreedHeartbeat)
+    enter = mock.AsyncMock(return_value=EstablishedConnectionResult(heartbeat=heartbeat))
     lifespan_factory = mock.Mock(return_value=mock.Mock(enter=enter))
     manager = EnrichedConnectionManager(lifespan_factory=lifespan_factory, connection_class=BaseMockConnection)
 
@@ -212,7 +212,7 @@ async def test_get_active_connection_state_ok_concurrent() -> None:
         == ActiveConnectionState(
             connection=BaseMockConnection(),
             lifespan=lifespan_factory.return_value,
-            server_heartbeat=server_heartbeat,
+            heartbeat=heartbeat,
             connected_at=first_state.connected_at,
         )
     )
@@ -335,13 +335,13 @@ async def test_stale_connection_failure_does_not_clear_new_connection() -> None:
     first_state = ActiveConnectionState(
         connection=first_connection,
         lifespan=mock.Mock(),
-        server_heartbeat=build_dataclass(Heartbeat),
+        heartbeat=build_dataclass(AgreedHeartbeat),
         connected_at=time.time(),
     )
     second_state = ActiveConnectionState(
         connection=second_connection,
         lifespan=mock.Mock(),
-        server_heartbeat=build_dataclass(Heartbeat),
+        heartbeat=build_dataclass(AgreedHeartbeat),
         connected_at=time.time(),
     )
     manager = EnrichedConnectionManager(connection_class=BaseMockConnection)
@@ -361,7 +361,7 @@ async def test_short_lived_connection_obeys_retry_spacing(
     state = ActiveConnectionState(
         connection=BaseMockConnection(),
         lifespan=mock.Mock(),
-        server_heartbeat=build_dataclass(Heartbeat),
+        heartbeat=build_dataclass(AgreedHeartbeat),
         connected_at=time.time(),
     )
     manager._active_connection_state = state

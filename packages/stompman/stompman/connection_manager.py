@@ -7,7 +7,7 @@ from ssl import SSLContext
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Self
 
-from stompman.config import ConnectionParameters, Heartbeat
+from stompman.config import AgreedHeartbeat, ConnectionParameters
 from stompman.connection import AbstractConnection
 from stompman.errors import (
     AllServersUnavailable,
@@ -30,12 +30,14 @@ ConnectionRestoration = Callable[[], Awaitable[None]]
 class ActiveConnectionState:
     connection: AbstractConnection
     lifespan: "AbstractConnectionLifespan"
-    server_heartbeat: Heartbeat
+    heartbeat: AgreedHeartbeat
     connected_at: float
     restoration_task: asyncio.Task[None] | None = field(default=None, repr=False, compare=False)
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
-        threshold_seconds = self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor
+        if self.heartbeat.receive_interval_ms == 0:
+            return True  # No heart-beats are expected, so silence says nothing.
+        threshold_seconds = self.heartbeat.receive_interval_ms / 1000 * check_server_alive_interval_factor
         now = time.time()
         if (last_read_time := self.connection.last_read_time) is None:
             return (now - self.connected_at) < threshold_seconds
@@ -114,11 +116,12 @@ class ConnectionManager:
                 self._active_connection_state = None
             await connection_state.connection.close()
 
-    def _restart_background_tasks(self, server_heartbeat: Heartbeat) -> None:
+    def _restart_background_tasks(self, heartbeat: AgreedHeartbeat) -> None:
         self._send_heartbeat_task.cancel()
-        self._send_heartbeat_task = self._task_group.create_task(
-            self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
-        )
+        if heartbeat.send_interval_ms > 0:
+            self._send_heartbeat_task = self._task_group.create_task(
+                self._send_heartbeats_forever(heartbeat.send_interval_ms)
+            )
 
     def _restart_no_message_monitor(self) -> None:
         if self._monitor_no_message_task is not None:
@@ -206,7 +209,7 @@ class ConnectionManager:
                 return ActiveConnectionState(
                     connection=connection,
                     lifespan=lifespan,
-                    server_heartbeat=connection_result.server_heartbeat,
+                    heartbeat=connection_result.heartbeat,
                     connected_at=time.time(),
                     restoration_task=(
                         self._task_group.create_task(self._restore_connection(connection, restoration))
