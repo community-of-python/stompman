@@ -66,6 +66,7 @@ class Client:
     no_message_restart_interval: timedelta | None = timedelta(hours=1)
     """Force reconnect if no messages received within this interval. None to disable."""
     keep_alive_on_connection_failure: bool = False
+    check_server_heartbeat: bool = False
     """Keep background connection recovery alive after a retry cycle is exhausted."""
     max_concurrent_handlers: int | None = 100
     """Cap on concurrently-running message handlers. Set to None to disable the cap."""
@@ -82,6 +83,10 @@ class Client:
     _handler_semaphore: asyncio.Semaphore | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if self.check_server_heartbeat and self.check_server_alive_interval_factor < 1:
+            # STOMP 1.2 lets a receiver consider the connection dead only after a window of at least the interval.
+            msg = "check_server_alive_interval_factor must be at least 1 when check_server_heartbeat is set"
+            raise ValueError(msg)
         self._active_subscriptions = ActiveSubscriptions(receipts=self._receipts)
         self._connection_manager = ConnectionManager(
             servers=self.servers,
@@ -102,6 +107,7 @@ class Client:
             check_server_alive_interval_factor=self.check_server_alive_interval_factor,
             no_message_restart_interval=self.no_message_restart_interval,
             keep_alive_on_connection_failure=self.keep_alive_on_connection_failure,
+            check_server_heartbeat=self.check_server_heartbeat,
             on_connection_lost=self._receipts.connection_lost,
             restore_connection=self._restore_connection,
             ssl=self.ssl,

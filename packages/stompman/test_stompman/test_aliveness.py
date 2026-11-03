@@ -96,3 +96,9 @@ async def test_is_alive_when_no_server_heartbeats_are_agreed(monkeypatch: pytest
 
     monkeypatch.setattr(time, "time", lambda: state.connected_at + 3600.0)
     assert client.is_alive() is True
+
+
+def test_server_heartbeat_check_needs_a_window_of_at_least_the_interval() -> None:
+    # STOMP 1.2: the receiver may consider the connection dead only "inside a time window of at least <n> milliseconds".
+    with pytest.raises(ValueError, match="check_server_alive_interval_factor"):
+        EnrichedClient(check_server_heartbeat=True, check_server_alive_interval_factor=0)

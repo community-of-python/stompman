@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import time
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
+from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from ssl import SSLContext
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from unittest import mock
 
 import pytest
@@ -21,7 +23,12 @@ from stompman import (
     MessageFrame,
 )
 from stompman.config import AgreedHeartbeat
-from stompman.connection_lifespan import EstablishedConnectionResult
+from stompman.connection import AbstractConnection
+from stompman.connection_lifespan import (
+    AbstractConnectionLifespan,
+    ConnectionLifespanFactory,
+    EstablishedConnectionResult,
+)
 from stompman.connection_manager import ActiveConnectionState
 
 from test_stompman.conftest import (
@@ -664,3 +671,78 @@ async def test_maybe_write_frame_logs_dropped_unsubscribe_at_info(
         wrote = await manager.maybe_write_frame(stompman.UnsubscribeFrame(headers={"id": "s"}))
     assert wrote is False
     assert any(r.levelno == logging.INFO and "dropping unsubscribeframe" in r.message.lower() for r in caplog.records)
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _AgreeingLifespan(AbstractConnectionLifespan):
+    """A lifespan reporting `heartbeat` as agreed, as `ConnectionLifespan.enter` does."""
+
+    connection: AbstractConnection
+    connection_parameters: stompman.ConnectionParameters
+    set_heartbeat_interval: Callable[[AgreedHeartbeat], Any]
+    heartbeat: AgreedHeartbeat
+
+    async def enter(self) -> EstablishedConnectionResult:
+        self.set_heartbeat_interval(self.heartbeat)
+        return EstablishedConnectionResult(heartbeat=self.heartbeat)
+
+    async def exit(self) -> None: ...
+
+
+def _agreeing(receive_interval_ms: int) -> ConnectionLifespanFactory:
+    return partial(
+        _AgreeingLifespan, heartbeat=AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=receive_interval_ms)
+    )
+
+
+async def test_server_heartbeat_check_reconnects_after_silence(monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen_time = [time.time()]
+    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+
+    async with EnrichedConnectionManager(
+        connection_class=BaseMockConnection, lifespan_factory=_agreeing(10), check_server_heartbeat=True
+    ) as manager:
+        # Nothing read for longer than 3 agreed intervals (30 ms).
+        frozen_time[0] += 1
+        for _ in range(10):
+            await asyncio.sleep(0.01)
+        assert manager._reconnection_count >= 1
+
+
+async def test_server_heartbeat_check_keeps_a_connection_that_receives_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    frozen_time = [time.time()]
+    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+
+    async with EnrichedConnectionManager(
+        connection_class=BaseMockConnection, lifespan_factory=_agreeing(10), check_server_heartbeat=True
+    ) as manager:
+        state = manager._active_connection_state
+        assert state is not None
+        for _ in range(10):
+            # STOMP 1.2: any new data received is an indication that the remote end is alive.
+            frozen_time[0] += 0.01
+            state.connection.last_read_time = frozen_time[0]
+            await asyncio.sleep(0.01)
+        assert manager._reconnection_count == 0
+
+
+@pytest.mark.parametrize(
+    ("check_server_heartbeat", "receive_interval_ms"),
+    [(False, 10), (True, 0)],
+)
+async def test_server_heartbeat_check_inactive(
+    monkeypatch: pytest.MonkeyPatch, *, check_server_heartbeat: bool, receive_interval_ms: int
+) -> None:
+    frozen_time = [time.time()]
+    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+
+    async with EnrichedConnectionManager(
+        connection_class=BaseMockConnection,
+        lifespan_factory=_agreeing(receive_interval_ms),
+        check_server_heartbeat=check_server_heartbeat,
+    ) as manager:
+        assert manager._monitor_server_heartbeat_task is None
+        frozen_time[0] += 99999
+        for _ in range(5):
+            await asyncio.sleep(0.01)
+        assert manager._reconnection_count == 0
