@@ -243,7 +243,7 @@ stompman takes care of cleaning up resources automatically. When you leave the c
 
 - stompman supports Python 3.11 and newer.
 - It implements [STOMP 1.2](https://stomp.github.io/stomp-specification-1.2.html) — the latest version of the protocol.
-- Heartbeats are required, and sent automatically in background (defaults to 1 second).
+- Heartbeats are negotiated with the server as STOMP 1.2 specifies, and sent automatically in background at the agreed interval (1 second by default); none are sent when the server does not want them.
 
 Also, I want to pointed out that:
 
