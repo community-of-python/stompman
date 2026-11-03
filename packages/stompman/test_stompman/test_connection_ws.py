@@ -1,7 +1,7 @@
 import asyncio
 import socket
 from collections.abc import Awaitable
-from typing import Any
+from typing import Any, Literal
 from unittest import mock
 
 import pytest
@@ -100,6 +100,23 @@ async def test_connection_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
         mock.call(NEWLINE, text=True),
         mock.call(b"COMMIT\ntransaction:transaction\n\n\x00", text=True),
     ]
+
+
+@pytest.mark.parametrize(
+    ("ssl", "expected_uri"),
+    [(None, "ws://localhost:12345/socket"), (True, "wss://localhost:12345/socket")],
+)
+async def test_connection_uri_scheme_follows_ssl(
+    monkeypatch: pytest.MonkeyPatch, ssl: Literal[True] | None, expected_uri: str
+) -> None:
+    connect_mock = mock.AsyncMock(return_value=mock.Mock())
+    monkeypatch.setattr("websockets.connect", connect_mock)
+
+    await WebSocketConnection.connect(
+        host="localhost", port=12345, ws_uri_path="/socket", timeout=2, read_max_chunk_size=1024, ssl=ssl
+    )
+
+    connect_mock.assert_called_once_with(uri=expected_uri, ssl=ssl, max_size=1024)
 
 
 async def test_connection_close_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
