@@ -4,7 +4,7 @@ import faker
 import pytest
 import stompman
 from polyfactory.factories.typed_dict_factory import TypedDictFactory
-from stompman.config import AgreedHeartbeat, Heartbeat, MultiHostHostLike
+from stompman.config import Heartbeat, MultiHostHostLike
 
 
 class StrictMultiHostHostLike(TypedDict):
@@ -115,20 +115,36 @@ class TestConnectionParametersFromPydanticMultiHostHosts:
         (
             Heartbeat(1000, 5000),
             Heartbeat(2000, 3000),
-            AgreedHeartbeat(send_interval_ms=3000, receive_interval_ms=5000),
+            Heartbeat(want_to_receive_interval_ms=3000, will_send_interval_ms=5000),
         ),
         (
             Heartbeat(4000, 1000),
             Heartbeat(2000, 3000),
-            AgreedHeartbeat(send_interval_ms=4000, receive_interval_ms=2000),
+            Heartbeat(want_to_receive_interval_ms=4000, will_send_interval_ms=2000),
         ),
         # ...and none in a direction where the sender cannot send or the receiver does not want them.
-        (Heartbeat(0, 1000), Heartbeat(1000, 1000), AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=1000)),
-        (Heartbeat(1000, 1000), Heartbeat(1000, 0), AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=1000)),
-        (Heartbeat(1000, 0), Heartbeat(1000, 1000), AgreedHeartbeat(send_interval_ms=1000, receive_interval_ms=0)),
-        (Heartbeat(1000, 1000), Heartbeat(0, 1000), AgreedHeartbeat(send_interval_ms=1000, receive_interval_ms=0)),
-        (Heartbeat(1000, 1000), Heartbeat(0, 0), AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=0)),
+        (
+            Heartbeat(0, 1000),
+            Heartbeat(1000, 1000),
+            Heartbeat(want_to_receive_interval_ms=0, will_send_interval_ms=1000),
+        ),
+        (
+            Heartbeat(1000, 1000),
+            Heartbeat(1000, 0),
+            Heartbeat(want_to_receive_interval_ms=0, will_send_interval_ms=1000),
+        ),
+        (
+            Heartbeat(1000, 0),
+            Heartbeat(1000, 1000),
+            Heartbeat(want_to_receive_interval_ms=1000, will_send_interval_ms=0),
+        ),
+        (
+            Heartbeat(1000, 1000),
+            Heartbeat(0, 1000),
+            Heartbeat(want_to_receive_interval_ms=1000, will_send_interval_ms=0),
+        ),
+        (Heartbeat(1000, 1000), Heartbeat(0, 0), Heartbeat(want_to_receive_interval_ms=0, will_send_interval_ms=0)),
     ],
 )
-def test_agreed_heartbeat_negotiate(client: Heartbeat, server: Heartbeat, expected: AgreedHeartbeat) -> None:
-    assert AgreedHeartbeat.negotiate(client=client, server=server) == expected
+def test_heartbeat_negotiate(client: Heartbeat, server: Heartbeat, expected: Heartbeat) -> None:
+    assert server.negotiate(client) == expected
