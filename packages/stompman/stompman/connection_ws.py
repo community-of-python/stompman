@@ -32,7 +32,9 @@ class WebSocketConnection(AbstractConnection):
     ) -> Self | None:
         try:
             path = f"{ws_uri_path.strip('/')}" if ws_uri_path else ""
-            uri = f"ws://{host}:{port}/{path}"
+            # RFC 6455: TLS is the wss scheme. websockets refuses ssl on a ws:// URI.
+            scheme = "ws" if ssl is None else "wss"
+            uri = f"{scheme}://{host}:{port}/{path}"
             websocket = await asyncio.wait_for(
                 websockets.connect(uri=uri, ssl=ssl, max_size=read_max_chunk_size), timeout=timeout
             )
