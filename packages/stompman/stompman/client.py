@@ -66,8 +66,9 @@ class Client:
     no_message_restart_interval: timedelta | None = timedelta(hours=1)
     """Force reconnect if no messages received within this interval. None to disable."""
     keep_alive_on_connection_failure: bool = False
-    check_server_heartbeat: bool = False
     """Keep background connection recovery alive after a retry cycle is exhausted."""
+    check_server_heartbeat: bool = False
+    """Reconnect when negotiated server heartbeats stop. Off by default."""
     max_concurrent_handlers: int | None = 100
     """Cap on concurrently-running message handlers. Set to None to disable the cap."""
 

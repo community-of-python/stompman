@@ -675,43 +675,54 @@ async def test_maybe_write_frame_logs_dropped_unsubscribe_at_info(
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class _AgreeingLifespan(AbstractConnectionLifespan):
-    """A lifespan reporting `heartbeat` as agreed, as `ConnectionLifespan.enter` does."""
+    """A lifespan reporting negotiated server intervals, as `ConnectionLifespan.enter` does."""
 
     connection: AbstractConnection
     connection_parameters: stompman.ConnectionParameters
-    set_heartbeat_interval: Callable[[AgreedHeartbeat], Any]
-    heartbeat: AgreedHeartbeat
+    set_heartbeat_interval: Callable[[Heartbeat], Any]
+    server_heartbeat: Heartbeat
 
     async def enter(self) -> EstablishedConnectionResult:
-        self.set_heartbeat_interval(self.heartbeat)
-        return EstablishedConnectionResult(heartbeat=self.heartbeat)
+        self.set_heartbeat_interval(self.server_heartbeat)
+        return EstablishedConnectionResult(server_heartbeat=self.server_heartbeat)
 
     async def exit(self) -> None: ...
 
 
 def _agreeing(receive_interval_ms: int) -> ConnectionLifespanFactory:
     return partial(
-        _AgreeingLifespan, heartbeat=AgreedHeartbeat(send_interval_ms=0, receive_interval_ms=receive_interval_ms)
+        _AgreeingLifespan,
+        server_heartbeat=Heartbeat(will_send_interval_ms=receive_interval_ms, want_to_receive_interval_ms=0),
     )
 
 
 async def test_server_heartbeat_check_reconnects_after_silence(monkeypatch: pytest.MonkeyPatch) -> None:
     frozen_time = [time.time()]
-    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: frozen_time[0])
 
     async with EnrichedConnectionManager(
         connection_class=BaseMockConnection, lifespan_factory=_agreeing(10), check_server_heartbeat=True
     ) as manager:
+        first_state = manager._active_connection_state
+        first_monitor = manager._monitor_server_heartbeat_task
+        assert first_state is not None
+        assert first_monitor is not None
         # Nothing read for longer than 3 agreed intervals (30 ms).
         frozen_time[0] += 1
         for _ in range(10):
-            await asyncio.sleep(0.01)
-        assert manager._reconnection_count >= 1
+            await asyncio.sleep(0)
+        assert manager._reconnection_count == 1
+        assert manager._active_connection_state is None
+        # The next read/write uses the existing recovery path and starts a new monitor.
+        second_state = await manager._get_active_connection_state()
+        assert second_state is not first_state
+        assert manager._monitor_server_heartbeat_task is not first_monitor
+        assert second_state.is_alive(manager.check_server_alive_interval_factor)
 
 
 async def test_server_heartbeat_check_keeps_a_connection_that_receives_data(monkeypatch: pytest.MonkeyPatch) -> None:
     frozen_time = [time.time()]
-    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: frozen_time[0])
 
     async with EnrichedConnectionManager(
         connection_class=BaseMockConnection, lifespan_factory=_agreeing(10), check_server_heartbeat=True
@@ -722,7 +733,7 @@ async def test_server_heartbeat_check_keeps_a_connection_that_receives_data(monk
             # STOMP 1.2: any new data received is an indication that the remote end is alive.
             frozen_time[0] += 0.01
             state.connection.last_read_time = frozen_time[0]
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
         assert manager._reconnection_count == 0
 
 
@@ -734,7 +745,7 @@ async def test_server_heartbeat_check_inactive(
     monkeypatch: pytest.MonkeyPatch, *, check_server_heartbeat: bool, receive_interval_ms: int
 ) -> None:
     frozen_time = [time.time()]
-    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: frozen_time[0])
 
     async with EnrichedConnectionManager(
         connection_class=BaseMockConnection,
@@ -744,5 +755,5 @@ async def test_server_heartbeat_check_inactive(
         assert manager._monitor_server_heartbeat_task is None
         frozen_time[0] += 99999
         for _ in range(5):
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
         assert manager._reconnection_count == 0

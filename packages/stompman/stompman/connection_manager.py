@@ -132,9 +132,9 @@ class ConnectionManager:
         if self._monitor_server_heartbeat_task is not None:
             self._monitor_server_heartbeat_task.cancel()
             self._monitor_server_heartbeat_task = None
-        if self.check_server_heartbeat and heartbeat.receive_interval_ms > 0:
+        if self.check_server_heartbeat and server_heartbeat.will_send_interval_ms > 0:
             self._monitor_server_heartbeat_task = self._task_group.create_task(
-                self._monitor_server_heartbeat(heartbeat.receive_interval_ms / 1000)
+                self._monitor_server_heartbeat(server_heartbeat.will_send_interval_ms / 1000)
             )
 
     def _restart_no_message_monitor(self) -> None:
@@ -163,7 +163,7 @@ class ConnectionManager:
         # receive any new data, it MAY consider the connection as dead"; is_alive is that window, made tolerant by
         # check_server_alive_interval_factor. The next connection's lifespan starts a new monitor.
         while True:
-            await asyncio.sleep(receive_interval_seconds)
+            await _sleep(receive_interval_seconds)
             connection_state = self._active_connection_state
             if connection_state is not None and not connection_state.is_alive(self.check_server_alive_interval_factor):
                 await self._discard_failed_connection_state(
