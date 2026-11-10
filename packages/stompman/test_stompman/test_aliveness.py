@@ -36,11 +36,11 @@ async def test_is_alive_false_after_grace_when_last_read_time_is_none(
     state.connection.last_read_time = None  # simulate a connection that has not yet read
 
     # within grace window → True
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 1.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 1.0)
     assert client.is_alive() is True
 
     # past grace window (heartbeat 1000ms * factor 3 = 3s) → False
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 10.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 10.0)
     assert client.is_alive() is False
 
 

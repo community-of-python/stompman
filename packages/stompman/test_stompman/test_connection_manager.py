@@ -66,7 +66,7 @@ async def test_connect_attempts_ok(ok_on_attempt: int, monkeypatch: pytest.Monke
             )
 
     sleep_mock = mock.AsyncMock()
-    monkeypatch.setattr("asyncio.sleep", sleep_mock)
+    monkeypatch.setattr("stompman.connection_manager._sleep", sleep_mock)
     manager = EnrichedConnectionManager(connection_class=MockConnection)
     active_connection_state = await manager._get_active_connection_state()
     assert isinstance(active_connection_state, ActiveConnectionState)
@@ -373,7 +373,7 @@ async def test_short_lived_connection_obeys_retry_spacing(
     else:
         assert 0 < delay <= manager.connect_retry_interval
     sleep = mock.AsyncMock()
-    monkeypatch.setattr("asyncio.sleep", sleep)
+    monkeypatch.setattr("stompman.connection_manager._sleep", sleep)
     # Fail connecting so that no heartbeat or lifespan tasks are introduced.
     monkeypatch.setattr(BaseMockConnection, "connect", mock.AsyncMock(return_value=None))
     with pytest.raises(FailedAllConnectAttemptsError):
@@ -592,7 +592,7 @@ async def test_maybe_write_frame_ok() -> None:
 
 async def test_no_message_restart_triggers_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
     frozen_time = [time.time()]
-    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: frozen_time[0])
 
     async with EnrichedConnectionManager(
         connection_class=BaseMockConnection, no_message_restart_interval=timedelta(seconds=10)
@@ -608,7 +608,7 @@ async def test_no_message_restart_triggers_reconnect(monkeypatch: pytest.MonkeyP
 
 async def test_no_message_restart_does_not_trigger_when_messages_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     frozen_time = [time.time()]
-    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: frozen_time[0])
 
     async with EnrichedConnectionManager(
         connection_class=BaseMockConnection, no_message_restart_interval=timedelta(seconds=10)
@@ -623,7 +623,7 @@ async def test_no_message_restart_does_not_trigger_when_messages_flow(monkeypatc
 
 async def test_no_message_restart_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     frozen_time = [time.time()]
-    monkeypatch.setattr("time.time", lambda: frozen_time[0])
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: frozen_time[0])
 
     async with EnrichedConnectionManager(
         connection_class=BaseMockConnection, no_message_restart_interval=None
