@@ -1,7 +1,7 @@
 import copy
 import typing
 import uuid
-from collections.abc import Generator, Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 from unittest import mock
@@ -41,7 +41,7 @@ class TestStompBroker(TestBroker[StompBroker, StompBroker], broker=StompBroker):
         return subscriber, is_real
 
     @contextmanager
-    def _patch_producer(self, broker: StompBroker) -> Iterator[None]:  # noqa: PLR6301
+    def _patch_producer(self, broker: StompBroker) -> Generator[None, None, None]:  # noqa: PLR6301
         with change_producer(broker.config.broker_config, FakeStompProducer(broker)):
             yield
 
