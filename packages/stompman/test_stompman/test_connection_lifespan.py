@@ -175,7 +175,7 @@ async def test_client_heartbeats_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
     sleep_calls: list[float] = []
     real_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", mock_sleep)
+    monkeypatch.setattr("stompman.connection_manager._sleep", mock_sleep)
 
     connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([]))
     connection_class.write_heartbeat = (write_heartbeat_mock := mock.Mock())  # type: ignore[method-assign]
@@ -205,7 +205,7 @@ async def test_client_sends_no_heartbeats_the_server_does_not_want(
 
     sleep_calls: list[float] = []
     real_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", mock_sleep)
+    monkeypatch.setattr("stompman.connection_manager._sleep", mock_sleep)
 
     connection_class, _ = create_spying_connection(
         [connected_frame],

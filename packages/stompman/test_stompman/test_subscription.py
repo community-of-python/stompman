@@ -349,7 +349,7 @@ async def test_client_listen_manual_ack_nack_ok(monkeypatch: pytest.MonkeyPatch,
 
 
 async def test_client_listen_raises_on_aexit(monkeypatch: pytest.MonkeyPatch, faker: faker.Faker) -> None:
-    monkeypatch.setattr("asyncio.sleep", partial(asyncio.sleep, 0))
+    monkeypatch.setattr("stompman.connection_manager._sleep", partial(asyncio.sleep, 0))
 
     connection_class, _ = create_spying_connection(*get_read_frames_with_lifespan([]))
     connection_class.connect = mock.AsyncMock(side_effect=[connection_class(), None, None, None])  # type: ignore[method-assign]

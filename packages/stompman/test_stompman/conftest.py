@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 import stompman
 from polyfactory.factories.dataclass_factory import DataclassFactory
-from stompman.config import AgreedHeartbeat
+from stompman.config import Heartbeat
 from stompman.connection import AbstractConnection
 from stompman.connection_lifespan import AbstractConnectionLifespan, EstablishedConnectionResult
 from stompman.connection_manager import ConnectionManager
@@ -18,7 +18,7 @@ from stompman.connection_manager import ConnectionManager
 @pytest.fixture
 def mock_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     original_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", lambda _: original_sleep(0))
+    monkeypatch.setattr("stompman.connection_manager._sleep", lambda _: original_sleep(0))
 
 
 async def noop_message_handler(frame: stompman.MessageFrame) -> None: ...
@@ -71,10 +71,10 @@ class EnrichedClient(stompman.Client):
 class NoopLifespan(AbstractConnectionLifespan):
     connection: AbstractConnection
     connection_parameters: stompman.ConnectionParameters
-    set_heartbeat_interval: Callable[[AgreedHeartbeat], Any]
+    set_heartbeat_interval: Callable[[Heartbeat], Any]
 
     async def enter(self) -> EstablishedConnectionResult | stompman.StompProtocolConnectionIssue:
-        return EstablishedConnectionResult(heartbeat=AgreedHeartbeat(send_interval_ms=1000, receive_interval_ms=1000))
+        return EstablishedConnectionResult(server_heartbeat=stompman.Heartbeat(1000, 1000))
 
     async def exit(self) -> None: ...
 

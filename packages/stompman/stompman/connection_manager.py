@@ -1,13 +1,15 @@
 import asyncio
 import time
+from asyncio import sleep as _sleep
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from ssl import SSLContext
+from time import time as _time
 from types import TracebackType
 from typing import TYPE_CHECKING, Literal, Self
 
-from stompman.config import AgreedHeartbeat, ConnectionParameters
+from stompman.config import ConnectionParameters, Heartbeat
 from stompman.connection import AbstractConnection
 from stompman.errors import (
     AllServersUnavailable,
@@ -30,15 +32,15 @@ ConnectionRestoration = Callable[[], Awaitable[None]]
 class ActiveConnectionState:
     connection: AbstractConnection
     lifespan: "AbstractConnectionLifespan"
-    heartbeat: AgreedHeartbeat
+    server_heartbeat: Heartbeat
     connected_at: float
     restoration_task: asyncio.Task[None] | None = field(default=None, repr=False, compare=False)
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
-        if self.heartbeat.receive_interval_ms == 0:
+        if self.server_heartbeat.will_send_interval_ms == 0:
             return True  # No heart-beats are expected, so silence says nothing.
-        threshold_seconds = self.heartbeat.receive_interval_ms / 1000 * check_server_alive_interval_factor
-        now = time.time()
+        threshold_seconds = self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor
+        now = _time()
         if (last_read_time := self.connection.last_read_time) is None:
             return (now - self.connected_at) < threshold_seconds
         return (now - last_read_time) < threshold_seconds
@@ -78,13 +80,13 @@ class ConnectionManager:
     _monitor_no_message_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _monitor_server_heartbeat_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _reconnection_count: int = field(default=0, init=False)
-    _last_message_received_time: float = field(init=False, default_factory=time.time)
+    _last_message_received_time: float = field(init=False, default_factory=_time)
     _connected_at_monotonic: float = field(init=False, default=0)
     _reconnect_not_before: float = field(init=False, default=0)
 
     async def __aenter__(self) -> Self:
         await self._task_group.__aenter__()
-        self._send_heartbeat_task = self._task_group.create_task(asyncio.sleep(0))
+        self._send_heartbeat_task = self._task_group.create_task(_sleep(0))
         self._active_connection_state = await self._get_restored_connection_state(is_initial_call=True)
         return self
 
@@ -121,11 +123,11 @@ class ConnectionManager:
                 self._active_connection_state = None
             await connection_state.connection.close()
 
-    def _restart_background_tasks(self, heartbeat: AgreedHeartbeat) -> None:
+    def _restart_background_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
-        if heartbeat.send_interval_ms > 0:
+        if server_heartbeat.want_to_receive_interval_ms > 0:
             self._send_heartbeat_task = self._task_group.create_task(
-                self._send_heartbeats_forever(heartbeat.send_interval_ms)
+                self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
             )
         if self._monitor_server_heartbeat_task is not None:
             self._monitor_server_heartbeat_task.cancel()
@@ -152,9 +154,9 @@ class ConnectionManager:
                 if not self.keep_alive_on_connection_failure:
                     raise
                 LOGGER.warning("background heartbeat recovery exhausted; keeping client alive. error: %r", error)
-                await asyncio.sleep(self.connect_retry_interval)
+                await _sleep(self.connect_retry_interval)
             else:
-                await asyncio.sleep(send_heartbeat_interval_seconds)
+                await _sleep(send_heartbeat_interval_seconds)
 
     async def _monitor_server_heartbeat(self, receive_interval_seconds: float) -> None:
         # STOMP 1.2, Heart-beating: "if, inside a time window of at least <n> milliseconds, the receiver did not
@@ -172,9 +174,9 @@ class ConnectionManager:
     async def _monitor_no_message_timeout(self, interval: timedelta) -> None:
         interval_seconds = interval.total_seconds()
         while True:
-            elapsed = time.time() - self._last_message_received_time
+            elapsed = _time() - self._last_message_received_time
             if (remaining := interval_seconds - elapsed) > 0:
-                await asyncio.sleep(remaining)
+                await _sleep(remaining)
             else:
                 if connection_state := self._active_connection_state:
                     LOGGER.warning(
@@ -185,7 +187,7 @@ class ConnectionManager:
                         connection_state,
                         ConnectionLostError(reason="no messages received within timeout"),
                     )
-                await asyncio.sleep(interval_seconds)
+                await _sleep(interval_seconds)
 
     async def _create_connection_to_one_server(
         self, server: ConnectionParameters
@@ -234,8 +236,8 @@ class ConnectionManager:
                 return ActiveConnectionState(
                     connection=connection,
                     lifespan=lifespan,
-                    heartbeat=connection_result.heartbeat,
-                    connected_at=time.time(),
+                    server_heartbeat=connection_result.server_heartbeat,
+                    connected_at=_time(),
                     restoration_task=(
                         self._task_group.create_task(self._restore_connection(connection, restoration))
                         if restoration is not None
@@ -284,7 +286,7 @@ class ConnectionManager:
                 return self._active_connection_state
 
             if (delay := self._reconnect_not_before - time.monotonic()) > 0:
-                await asyncio.sleep(delay)
+                await _sleep(delay)
 
             for attempt in range(self.connect_retry_attempts):
                 connection_result = await self._connect_to_any_server()
@@ -292,7 +294,7 @@ class ConnectionManager:
                 if isinstance(connection_result, ActiveConnectionState):
                     self._active_connection_state = connection_result
                     self._connected_at_monotonic = time.monotonic()
-                    self._last_message_received_time = time.time()
+                    self._last_message_received_time = _time()
                     self._restart_no_message_monitor()
                     if not is_initial_call:
                         LOGGER.warning(
@@ -302,7 +304,7 @@ class ConnectionManager:
                     return connection_result
 
                 connection_issues.append(connection_result)
-                await asyncio.sleep(self.connect_retry_interval * (attempt + 1))
+                await _sleep(self.connect_retry_interval * (attempt + 1))
 
         raise FailedAllConnectAttemptsError(retry_attempts=self.connect_retry_attempts, issues=connection_issues)
 
@@ -359,7 +361,7 @@ class ConnectionManager:
                 if not self.keep_alive_on_connection_failure:
                     raise
                 LOGGER.warning("background read recovery exhausted; keeping client alive. error: %r", error)
-                await asyncio.sleep(self.connect_retry_interval)
+                await _sleep(self.connect_retry_interval)
                 continue
             epoch = self._reconnection_count
             try:

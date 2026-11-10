@@ -36,11 +36,11 @@ async def test_is_alive_false_after_grace_when_last_read_time_is_none(
     state.connection.last_read_time = None  # simulate a connection that has not yet read
 
     # within grace window → True
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 1.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 1.0)
     assert client.is_alive() is True
 
     # past grace window (heartbeat 1000ms * factor 3 = 3s) → False
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 10.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 10.0)
     assert client.is_alive() is False
 
 
@@ -77,9 +77,9 @@ async def test_is_alive_waits_on_the_agreed_interval(monkeypatch: pytest.MonkeyP
     assert state is not None
     state.connection.last_read_time = state.connected_at
 
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 10.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 10.0)
     assert client.is_alive() is True
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 16.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 16.0)
     assert client.is_alive() is False
 
 
@@ -94,7 +94,7 @@ async def test_is_alive_when_no_server_heartbeats_are_agreed(monkeypatch: pytest
     assert state is not None
     state.connection.last_read_time = state.connected_at
 
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 3600.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 3600.0)
     assert client.is_alive() is True
 
 
