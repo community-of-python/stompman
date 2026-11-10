@@ -69,6 +69,7 @@ class ConnectionManager:
     check_server_alive_interval_factor: int
     no_message_restart_interval: timedelta | None
     keep_alive_on_connection_failure: bool = False
+    check_server_heartbeat: bool = False
     on_connection_lost: Callable[[AbstractConnection], None] | None = None
     restore_connection: Callable[[AbstractConnection], ConnectionRestoration | None] | None = None
 
@@ -77,6 +78,7 @@ class ConnectionManager:
     _task_group: asyncio.TaskGroup = field(init=False, default_factory=asyncio.TaskGroup)
     _send_heartbeat_task: asyncio.Task[None] = field(init=False, repr=False)
     _monitor_no_message_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+    _monitor_server_heartbeat_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _reconnection_count: int = field(default=0, init=False)
     _last_message_received_time: float = field(init=False, default_factory=_time)
     _connected_at_monotonic: float = field(init=False, default=0)
@@ -96,6 +98,9 @@ class ConnectionManager:
         if self._monitor_no_message_task is not None:
             self._monitor_no_message_task.cancel()
             tasks.append(self._monitor_no_message_task)
+        if self._monitor_server_heartbeat_task is not None:
+            self._monitor_server_heartbeat_task.cancel()
+            tasks.append(self._monitor_server_heartbeat_task)
         if (state := self._active_connection_state) is not None and state.restoration_task is not None:
             state.restoration_task.cancel()
             tasks.append(state.restoration_task)
@@ -124,6 +129,13 @@ class ConnectionManager:
             self._send_heartbeat_task = self._task_group.create_task(
                 self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
             )
+        if self._monitor_server_heartbeat_task is not None:
+            self._monitor_server_heartbeat_task.cancel()
+            self._monitor_server_heartbeat_task = None
+        if self.check_server_heartbeat and server_heartbeat.will_send_interval_ms > 0:
+            self._monitor_server_heartbeat_task = self._task_group.create_task(
+                self._monitor_server_heartbeat(server_heartbeat.will_send_interval_ms / 1000)
+            )
 
     def _restart_no_message_monitor(self) -> None:
         if self._monitor_no_message_task is not None:
@@ -145,6 +157,19 @@ class ConnectionManager:
                 await _sleep(self.connect_retry_interval)
             else:
                 await _sleep(send_heartbeat_interval_seconds)
+
+    async def _monitor_server_heartbeat(self, receive_interval_seconds: float) -> None:
+        # STOMP 1.2, Heart-beating: "if, inside a time window of at least <n> milliseconds, the receiver did not
+        # receive any new data, it MAY consider the connection as dead"; is_alive is that window, made tolerant by
+        # check_server_alive_interval_factor. The next connection's lifespan starts a new monitor.
+        while True:
+            await _sleep(receive_interval_seconds)
+            connection_state = self._active_connection_state
+            if connection_state is not None and not connection_state.is_alive(self.check_server_alive_interval_factor):
+                await self._discard_failed_connection_state(
+                    connection_state, ConnectionLostError(reason="no server heart-beat within timeout")
+                )
+                return
 
     async def _monitor_no_message_timeout(self, interval: timedelta) -> None:
         interval_seconds = interval.total_seconds()

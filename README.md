@@ -39,6 +39,7 @@ async with stompman.Client(
     check_server_alive_interval_factor=3,
     no_message_restart_interval=datetime.timedelta(hours=1),  # None to disable
     keep_alive_on_connection_failure=False,
+    check_server_heartbeat=False,
 ) as client:
     ...
 ```
@@ -236,6 +237,7 @@ stompman takes care of cleaning up resources automatically. When you leave the c
 - Set `keep_alive_on_connection_failure=True` to keep background heartbeat and read recovery running after a retry cycle is exhausted. The default remains `False`, and errors from `Client.send()` still follow `connect_retry_attempts` and `write_retry_attempts`.
 - Connections that succeed and immediately fail are spaced by `connect_retry_interval` as well, preventing a tight reconnect loop.
 - If no messages are received for `no_message_restart_interval` (defaults to 1 hour), stompman will force a reconnect. Set to `None` to disable.
+- Set `check_server_heartbeat=True` to reconnect when the server's heart-beats stop: when no data arrives for `check_server_alive_interval_factor` times the heart-beat interval agreed with the server (as STOMP 1.2 allows). Off by default, and inactive when no server heart-beats are agreed.
 - To implement health checks, use `stompman.Client.is_alive()` — it will return `True` if everything is OK and `False` if server is not responding.
 - `stompman` will write log warnings when connection is lost, after successful reconnection or invalid state during ack/nack.
 
