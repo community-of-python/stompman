@@ -16,6 +16,25 @@ class Heartbeat:
         first, second = header.split(",", maxsplit=1)
         return cls(int(first), int(second))
 
+    def negotiate(self, peer: "Heartbeat") -> Self:
+        """Return agreed intervals from this side's perspective, following STOMP 1.2."""
+        return type(self)(
+            will_send_interval_ms=_agreed_interval_ms(
+                sender_can_send_ms=self.will_send_interval_ms,
+                receiver_wants_ms=peer.want_to_receive_interval_ms,
+            ),
+            want_to_receive_interval_ms=_agreed_interval_ms(
+                sender_can_send_ms=peer.will_send_interval_ms,
+                receiver_wants_ms=self.want_to_receive_interval_ms,
+            ),
+        )
+
+
+def _agreed_interval_ms(*, sender_can_send_ms: int, receiver_wants_ms: int) -> int:
+    if sender_can_send_ms == 0 or receiver_wants_ms == 0:
+        return 0
+    return max(sender_can_send_ms, receiver_wants_ms)
+
 
 class MultiHostHostLike(TypedDict):
     username: str | None

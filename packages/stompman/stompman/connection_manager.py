@@ -37,6 +37,8 @@ class ActiveConnectionState:
     restoration_task: asyncio.Task[None] | None = field(default=None, repr=False, compare=False)
 
     def is_alive(self, check_server_alive_interval_factor: int) -> bool:
+        if self.server_heartbeat.will_send_interval_ms == 0:
+            return True  # No heart-beats are expected, so silence says nothing.
         threshold_seconds = self.server_heartbeat.will_send_interval_ms / 1000 * check_server_alive_interval_factor
         now = _time()
         if (last_read_time := self.connection.last_read_time) is None:
@@ -118,9 +120,10 @@ class ConnectionManager:
 
     def _restart_background_tasks(self, server_heartbeat: Heartbeat) -> None:
         self._send_heartbeat_task.cancel()
-        self._send_heartbeat_task = self._task_group.create_task(
-            self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
-        )
+        if server_heartbeat.want_to_receive_interval_ms > 0:
+            self._send_heartbeat_task = self._task_group.create_task(
+                self._send_heartbeats_forever(server_heartbeat.want_to_receive_interval_ms)
+            )
 
     def _restart_no_message_monitor(self) -> None:
         if self._monitor_no_message_task is not None:

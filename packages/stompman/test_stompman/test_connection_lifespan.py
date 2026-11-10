@@ -187,6 +187,41 @@ async def test_client_heartbeats_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     assert write_heartbeat_mock.mock_calls == [mock.call(), mock.call(), mock.call(), mock.call()]
 
 
+@pytest.mark.parametrize(
+    "connected_frame",
+    [
+        # The server does not want heart-beats.
+        ConnectedFrame(headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1000,0"}),
+        # STOMP 1.2: a missing heart-beat header MUST be treated the same way as "heart-beat:0,0".
+        ConnectedFrame(headers={"version": Client.PROTOCOL_VERSION}),
+    ],
+)
+async def test_client_sends_no_heartbeats_the_server_does_not_want(
+    monkeypatch: pytest.MonkeyPatch, connected_frame: ConnectedFrame
+) -> None:
+    async def mock_sleep(delay: float) -> None:
+        await real_sleep(0)
+        sleep_calls.append(delay)
+
+    sleep_calls: list[float] = []
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr("stompman.connection_manager._sleep", mock_sleep)
+
+    connection_class, _ = create_spying_connection(
+        [connected_frame],
+        [],
+        [ReceiptFrame(headers={"receipt-id": "receipt-id-1"})],
+    )
+    connection_class.write_heartbeat = (write_heartbeat_mock := mock.Mock())  # type: ignore[method-assign]
+
+    async with EnrichedClient(connection_class=connection_class):
+        for _ in range(3):
+            await real_sleep(0)
+
+    assert write_heartbeat_mock.mock_calls == []
+    assert 0 not in sleep_calls[1:], "nothing may loop on a zero interval"
+
+
 async def test_client_recovers_after_heartbeat_failure_when_keep_alive_enabled() -> None:  # ruff: ignore[complex-structure]
     expected_connection_count = 2
     heartbeat_failed = asyncio.Event()

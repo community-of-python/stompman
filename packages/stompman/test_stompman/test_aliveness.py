@@ -2,7 +2,7 @@ import asyncio
 import time
 
 import pytest
-from stompman import Client, ConnectedFrame, ReceiptFrame
+from stompman import Client, ConnectedFrame, Heartbeat, ReceiptFrame
 
 from test_stompman.conftest import EnrichedClient, build_dataclass, create_spying_connection
 
@@ -62,3 +62,37 @@ async def test_is_alive_false_when_listen_task_dead(
     await fake_task
     monkeypatch.setattr(client, "_listen_task", fake_task)  # done, no exception
     assert client.is_alive() is False, "listener done means not alive"
+
+
+async def test_is_alive_waits_on_the_agreed_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    # STOMP 1.2: the server sends every MAX(sx, cy) ms. With sx=1000 and cy=5000, 10 s of silence is within
+    # three heart-beat intervals, and 16 s is not.
+    connection_class, _ = create_spying_connection(
+        [ConnectedFrame(headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "1000,1000"})],
+        [],
+        [build_dataclass(ReceiptFrame)],
+    )
+    client = await EnrichedClient(connection_class=connection_class, heartbeat=Heartbeat(1000, 5000)).__aenter__()
+    state = client._connection_manager._active_connection_state
+    assert state is not None
+    state.connection.last_read_time = state.connected_at
+
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 10.0)
+    assert client.is_alive() is True
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 16.0)
+    assert client.is_alive() is False
+
+
+async def test_is_alive_when_no_server_heartbeats_are_agreed(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection_class, _ = create_spying_connection(
+        [ConnectedFrame(headers={"version": Client.PROTOCOL_VERSION, "heart-beat": "0,0"})],
+        [],
+        [build_dataclass(ReceiptFrame)],
+    )
+    client = await EnrichedClient(connection_class=connection_class).__aenter__()
+    state = client._connection_manager._active_connection_state
+    assert state is not None
+    state.connection.last_read_time = state.connected_at
+
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 3600.0)
+    assert client.is_alive() is True

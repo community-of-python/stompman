@@ -76,7 +76,9 @@ class ConnectionLifespan(AbstractConnectionLifespan):
                 given_version=connected_frame.headers["version"], supported_version=self.protocol_version
             )
 
-        server_heartbeat = Heartbeat.from_header(connected_frame.headers["heart-beat"])
+        # STOMP 1.2: a missing heart-beat header MUST be treated the same way as "heart-beat:0,0".
+        server_heartbeat = Heartbeat.from_header(connected_frame.headers.get("heart-beat", "0,0"))
+        server_heartbeat = server_heartbeat.negotiate(self.client_heartbeat)
         self.set_heartbeat_interval(server_heartbeat)
         return EstablishedConnectionResult(server_heartbeat=server_heartbeat)
 
