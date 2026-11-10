@@ -18,7 +18,7 @@ from stompman.connection_manager import ConnectionManager
 @pytest.fixture
 def mock_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     original_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", lambda _: original_sleep(0))
+    monkeypatch.setattr("stompman.connection_manager._sleep", lambda _: original_sleep(0))
 
 
 async def noop_message_handler(frame: stompman.MessageFrame) -> None: ...
