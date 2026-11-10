@@ -77,9 +77,9 @@ async def test_is_alive_waits_on_the_agreed_interval(monkeypatch: pytest.MonkeyP
     assert state is not None
     state.connection.last_read_time = state.connected_at
 
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 10.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 10.0)
     assert client.is_alive() is True
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 16.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 16.0)
     assert client.is_alive() is False
 
 
@@ -94,5 +94,5 @@ async def test_is_alive_when_no_server_heartbeats_are_agreed(monkeypatch: pytest
     assert state is not None
     state.connection.last_read_time = state.connected_at
 
-    monkeypatch.setattr(time, "time", lambda: state.connected_at + 3600.0)
+    monkeypatch.setattr("stompman.connection_manager._time", lambda: state.connected_at + 3600.0)
     assert client.is_alive() is True

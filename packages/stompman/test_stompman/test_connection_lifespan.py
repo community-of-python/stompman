@@ -205,7 +205,7 @@ async def test_client_sends_no_heartbeats_the_server_does_not_want(
 
     sleep_calls: list[float] = []
     real_sleep = asyncio.sleep
-    monkeypatch.setattr("asyncio.sleep", mock_sleep)
+    monkeypatch.setattr("stompman.connection_manager._sleep", mock_sleep)
 
     connection_class, _ = create_spying_connection(
         [connected_frame],
