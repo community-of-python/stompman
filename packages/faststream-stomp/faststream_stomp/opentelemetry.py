@@ -19,12 +19,15 @@ class StompTelemetrySettingsProvider(TelemetrySettingsProvider[stompman.MessageF
     messaging_system = "stomp"
 
     def get_consume_attrs_from_message(self, msg: StreamMessage[stompman.MessageFrame]) -> dict[str, Any]:
+        destination = msg.raw_message.headers["destination"]
         return {
+            # The SDK drops older attributes first when it reaches the span limit.
+            messaging_attributes.MESSAGING_DESTINATION_NAME: destination,
             messaging_attributes.MESSAGING_SYSTEM: self.messaging_system,
             messaging_attributes.MESSAGING_MESSAGE_ID: msg.message_id,
             messaging_attributes.MESSAGING_MESSAGE_CONVERSATION_ID: msg.correlation_id,
             SpanAttributes.MESSAGING_MESSAGE_PAYLOAD_SIZE_BYTES: len(msg.body),
-            MESSAGING_DESTINATION_PUBLISH_NAME: msg.raw_message.headers["destination"],
+            MESSAGING_DESTINATION_PUBLISH_NAME: destination,
         }
 
     def get_consume_destination_name(self, msg: StreamMessage[stompman.MessageFrame]) -> str:  # noqa: PLR6301
